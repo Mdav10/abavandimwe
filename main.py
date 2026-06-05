@@ -2,7 +2,6 @@
 """
 ABAVANDIMWE - Complete Secure Messaging System
 Author: Mugisha Pc
-Includes HTTP server + WebSocket server
 """
 
 import asyncio
@@ -465,6 +464,7 @@ HTML_PAGE = '''<!DOCTYPE html>
     </div>
     <script>
         let ws, username, group, password, groupSalt, typingTimeout;
+        
         async function encrypt(text, pwd, salt) {
             const encoder = new TextEncoder();
             const keyMaterial = await crypto.subtle.importKey('raw', encoder.encode(pwd), 'PBKDF2', false, ['deriveKey']);
@@ -475,6 +475,7 @@ HTML_PAGE = '''<!DOCTYPE html>
             combined.set(iv,0); combined.set(new Uint8Array(encrypted), iv.length);
             return btoa(String.fromCharCode.apply(null, combined));
         }
+        
         async function decrypt(encrypted, pwd, salt) {
             const combined = Uint8Array.from(atob(encrypted), c=>c.charCodeAt(0));
             const iv = combined.slice(0,12), ciphertext = combined.slice(12);
@@ -484,34 +485,72 @@ HTML_PAGE = '''<!DOCTYPE html>
             const decrypted = await crypto.subtle.decrypt({name:'AES-GCM', iv}, key, ciphertext);
             return new TextDecoder().decode(decrypted);
         }
+        
         function toggleSidebar() { document.getElementById('sidebar').classList.toggle('open'); }
+        
         function connect() {
             username = document.getElementById('username').value.trim();
             group = document.getElementById('group').value.trim();
             password = document.getElementById('password').value;
-            if(!username||!group||!password){alert('All fields required');return;}
-            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-            const wsUrl = `${protocol}//${window.location.hostname}:8080`;
+            
+            if(!username||!group||!password){
+                alert('All fields required');
+                return;
+            }
+            
+            // Use the same host as the page, but port 8080 for WebSocket
+            const wsUrl = `wss://${window.location.hostname}:8080`;
+            console.log('Connecting to:', wsUrl);
+            
             ws = new WebSocket(wsUrl);
-            ws.onopen = ()=> ws.send(JSON.stringify({type:'join', username, group, password}));
-            ws.onmessage = async (e)=>{
+            
+            ws.onopen = function() {
+                console.log('WebSocket connected');
+                ws.send(JSON.stringify({type:'join', username, group, password}));
+            };
+            
+            ws.onmessage = async function(e) {
                 const data = JSON.parse(e.data);
+                console.log('Received:', data.type);
+                
                 if(data.type==='ready'){
                     groupSalt = data.salt;
                     document.getElementById('loginScreen').style.display='none';
                     document.getElementById('chatContainer').classList.add('active');
                     document.getElementById('groupName').innerHTML = `# ${data.group}`;
                 } else if(data.type==='message'){
-                    try{ const decrypted = await decrypt(data.ciphertext, password, data.salt); addMessage(data.sender, decrypted, data.sender===username); }
-                    catch(e){ addMessage(data.sender, '🔒 ENCRYPTED', data.sender===username); }
+                    try{ 
+                        const decrypted = await decrypt(data.ciphertext, password, data.salt); 
+                        addMessage(data.sender, decrypted, data.sender===username); 
+                    } catch(e){ 
+                        addMessage(data.sender, '🔒 ENCRYPTED', data.sender===username); 
+                    }
                 } else if(data.type==='history'){
-                    try{ const decrypted = await decrypt(data.ciphertext, password, data.salt); addMessage(data.sender, decrypted, data.sender===username, true); }
-                    catch(e){ addMessage(data.sender, '🔒 ENCRYPTED', data.sender===username, true); }
-                } else if(data.type==='users'){ updateUsers(data.users); }
-                else if(data.type==='typing'){ document.getElementById('typingIndicator').innerHTML = `✏️ ${data.user} is typing...`; }
-                else if(data.type==='stop_typing'){ document.getElementById('typingIndicator').innerHTML = ''; }
+                    try{ 
+                        const decrypted = await decrypt(data.ciphertext, password, data.salt); 
+                        addMessage(data.sender, decrypted, data.sender===username, true); 
+                    } catch(e){ 
+                        addMessage(data.sender, '🔒 ENCRYPTED', data.sender===username, true); 
+                    }
+                } else if(data.type==='users'){ 
+                    updateUsers(data.users); 
+                } else if(data.type==='typing'){ 
+                    document.getElementById('typingIndicator').innerHTML = `✏️ ${data.user} is typing...`; 
+                } else if(data.type==='stop_typing'){ 
+                    document.getElementById('typingIndicator').innerHTML = ''; 
+                }
+            };
+            
+            ws.onerror = function(error) {
+                console.error('WebSocket error:', error);
+                alert('Connection failed. Make sure server is running.');
+            };
+            
+            ws.onclose = function() {
+                console.log('WebSocket closed');
             };
         }
+        
         function addMessage(sender, text, isSent){
             const messagesDiv = document.getElementById('messages');
             if(messagesDiv.children.length===1 && messagesDiv.children[0].innerText.includes('connecting')) messagesDiv.innerHTML='';
@@ -522,21 +561,26 @@ HTML_PAGE = '''<!DOCTYPE html>
             messagesDiv.appendChild(messageDiv);
             messagesDiv.scrollTop = messagesDiv.scrollHeight;
         }
+        
         function updateUsers(users){
             document.getElementById('onlineCount').innerHTML = `${users.length} online`;
             const usersDiv = document.getElementById('usersList');
             if(users.length===0){ usersDiv.innerHTML = '<div class="user-item">> no users online</div>'; return; }
             usersDiv.innerHTML = users.map(u => `<div class="user-item"><div style="width:6px;height:6px;border-radius:50%;background:#00ff41;display:inline-block;margin-right:8px;"></div>${escapeHtml(u)}</div>`).join('');
         }
+        
         function escapeHtml(text){ const div=document.createElement('div'); div.textContent=text; return div.innerHTML; }
-        document.getElementById('messageInput')?.addEventListener('input',()=>{
-            if(ws?.readyState===WebSocket.OPEN){
+        
+        document.getElementById('messageInput')?.addEventListener('input',function(){
+            if(ws && ws.readyState===WebSocket.OPEN){
                 ws.send(JSON.stringify({type:'typing'}));
                 clearTimeout(typingTimeout);
-                typingTimeout = setTimeout(()=> ws.send(JSON.stringify({type:'stop_typing'})), 1000);
+                typingTimeout = setTimeout(function(){ ws.send(JSON.stringify({type:'stop_typing'})); }, 1000);
             }
         });
-        document.getElementById('messageInput')?.addEventListener('keypress',(e)=>{ if(e.key==='Enter') sendMessage(); });
+        
+        document.getElementById('messageInput')?.addEventListener('keypress',function(e){ if(e.key==='Enter') sendMessage(); });
+        
         async function sendMessage(){
             const input = document.getElementById('messageInput'), text = input.value.trim();
             if(!text||!ws||ws.readyState!==WebSocket.OPEN) return;
@@ -574,8 +618,6 @@ def run_http_server(port=8081):
 # ============================================
 
 PORT = int(os.getenv('PORT', 8080))
-HTTP_PORT = PORT
-WS_PORT = 8080
 
 print("""
 ╔═══════════════════════════════════════════════════════════════════╗
@@ -590,23 +632,24 @@ print("""
 ║              SECURE MESSAGING SYSTEM                              ║
 ║           Messages Auto-Delete After 24 Hours                     ║
 ║                    Author: Mugisha Pc                             ║
-║                    Version: 8.0.0                                 ║
+║                    Version: 9.0.0                                 ║
 ║                                                                   ║
 ╚═══════════════════════════════════════════════════════════════════╝
 """)
 
-print(f"[INFO] ABAVANDIMWE v8.0 starting")
-print(f"[INFO] WebSocket port: {WS_PORT}")
-print(f"[INFO] HTTP port: {HTTP_PORT}")
+print(f"[INFO] ABAVANDIMWE v9.0 starting")
+print(f"[INFO] Port: {PORT}")
+print(f"[INFO] WebSocket and HTTP both on port {PORT}")
+print(f"[INFO] Open https://abavandimwe.onrender.com in your browser")
 
-# Start HTTP server in thread
-http_thread = threading.Thread(target=run_http_server, args=(HTTP_PORT,), daemon=True)
+# Start HTTP server with same port
+http_thread = threading.Thread(target=run_http_server, args=(PORT,), daemon=True)
 http_thread.start()
 
-# Start WebSocket server
+# Start WebSocket server on same port
 async def main():
     await db.connect()
     ws_server = WebSocketServer()
-    await ws_server.run('0.0.0.0', WS_PORT)
+    await ws_server.run('0.0.0.0', PORT)
 
 asyncio.run(main())
