@@ -1,5 +1,5 @@
 """
-ABAVANDIMWE Cryptography Engine
+ABAVANDIMWE - Cryptography Engine
 Author: Mugisha Pc
 """
 
@@ -7,7 +7,7 @@ import secrets
 import base64
 import hashlib
 
-class CryptoEngine:
+class Crypto:
     @staticmethod
     def generate_salt() -> str:
         return base64.b64encode(secrets.token_bytes(32)).decode()
@@ -18,7 +18,7 @@ class CryptoEngine:
     
     @staticmethod
     def encrypt(plaintext: str, password: str, salt: str) -> str:
-        key = CryptoEngine._derive_key(password, salt)
+        key = Crypto._derive_key(password, salt)
         plaintext_bytes = plaintext.encode()
         ciphertext = bytearray()
         for i in range(len(plaintext_bytes)):
@@ -29,7 +29,7 @@ class CryptoEngine:
     
     @staticmethod
     def decrypt(encrypted: str, password: str, salt: str) -> str:
-        key = CryptoEngine._derive_key(password, salt)
+        key = Crypto._derive_key(password, salt)
         data = base64.b64decode(encrypted)
         ciphertext = data[8:]
         plaintext_bytes = bytearray()
@@ -37,4 +37,4 @@ class CryptoEngine:
             plaintext_bytes.append(ciphertext[i] ^ key[i % len(key)])
         return plaintext_bytes.decode()
 
-crypto = CryptoEngine()
+crypto = Crypto()

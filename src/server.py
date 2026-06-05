@@ -10,10 +10,10 @@ from typing import Dict, Set
 from datetime import datetime
 from loguru import logger
 
-from crypto_engine import crypto
-from database_manager import db
+from crypto import crypto
+from database import db
 
-class WebSocketHandler:
+class WebSocketServer:
     def __init__(self):
         self.connections: Dict[str, Dict[str, websockets.WebSocketServerProtocol]] = {}
         self.typing: Set[str] = set()
@@ -115,4 +115,4 @@ class WebSocketHandler:
             logger.info(f"🚀 Server on ws://{host}:{port}")
             await asyncio.Future()
 
-handler = WebSocketHandler()
+server = WebSocketServer()
