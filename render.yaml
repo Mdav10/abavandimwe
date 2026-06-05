@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: abavandimwe
+    runtime: python
+    repo: https://github.com/YOUR_USERNAME/abavandimwe
+    plan: free
+    region: ohio
+    buildCommand: |
+      pip install --upgrade pip
+      pip install -r requirements.txt
+    startCommand: python main.py
+    envVars:
+      - key: DATABASE_URL
+        value: postgresql://neondb_owner:npg_Cb7XtKr0BIoN@ep-holy-scene-apw8vqig.c-7.us-east-1.aws.neon.tech/neondb?sslmode=require
+      - key: PORT
+        value: 8080
+    autoDeploy: true

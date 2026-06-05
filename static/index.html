@@ -1,0 +1,605 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ABAVANDIMWE - Secure Messaging</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        :root {
+            --primary: #667eea;
+            --primary-dark: #5a67d8;
+            --secondary: #764ba2;
+            --dark: #1a1a2e;
+            --darker: #0f0f1a;
+            --light: #f5f5f5;
+            --gray: #e2e8f0;
+            --success: #48bb78;
+            --error: #f56565;
+        }
+
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, var(--dark) 0%, var(--darker) 100%);
+            height: 100vh;
+            overflow: hidden;
+        }
+
+        /* Login Screen */
+        .login-container {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            z-index: 1000;
+            transition: all 0.5s ease;
+        }
+
+        .login-card {
+            background: rgba(255, 255, 255, 0.98);
+            border-radius: 32px;
+            padding: 48px;
+            width: 100%;
+            max-width: 480px;
+            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+            animation: slideUp 0.6s ease;
+        }
+
+        @keyframes slideUp {
+            from {
+                opacity: 0;
+                transform: translateY(30px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .logo {
+            text-align: center;
+            margin-bottom: 32px;
+        }
+
+        .logo h1 {
+            font-size: 42px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            margin-bottom: 8px;
+            letter-spacing: -1px;
+        }
+
+        .logo p {
+            color: #718096;
+            font-size: 14px;
+        }
+
+        .input-group {
+            margin-bottom: 20px;
+        }
+
+        .input-group label {
+            display: block;
+            margin-bottom: 8px;
+            color: #2d3748;
+            font-weight: 600;
+            font-size: 14px;
+        }
+
+        .input-group input {
+            width: 100%;
+            padding: 14px 16px;
+            border: 2px solid #e2e8f0;
+            border-radius: 12px;
+            font-size: 14px;
+            transition: all 0.3s;
+            background: white;
+        }
+
+        .input-group input:focus {
+            outline: none;
+            border-color: #667eea;
+            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+        }
+
+        .btn-primary {
+            width: 100%;
+            padding: 14px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            border-radius: 12px;
+            font-size: 16px;
+            font-weight: 700;
+            cursor: pointer;
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 25px -5px rgba(102, 126, 234, 0.4);
+        }
+
+        .features {
+            margin-top: 32px;
+            display: flex;
+            justify-content: space-around;
+            gap: 16px;
+        }
+
+        .feature {
+            text-align: center;
+            flex: 1;
+            padding: 12px;
+            background: #f7fafc;
+            border-radius: 12px;
+        }
+
+        .feature span {
+            font-size: 24px;
+            display: block;
+            margin-bottom: 4px;
+        }
+
+        .feature small {
+            font-size: 11px;
+            color: #718096;
+        }
+
+        /* Chat Container */
+        .chat-container {
+            display: none;
+            width: 100vw;
+            height: 100vh;
+            background: var(--dark);
+        }
+
+        .chat-container.active {
+            display: flex;
+        }
+
+        /* Sidebar */
+        .sidebar {
+            width: 300px;
+            background: rgba(26, 26, 46, 0.95);
+            backdrop-filter: blur(10px);
+            border-right: 1px solid rgba(255, 255, 255, 0.1);
+            display: flex;
+            flex-direction: column;
+        }
+
+        .sidebar-header {
+            padding: 24px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .sidebar-header h3 {
+            color: white;
+            font-size: 18px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .online-users {
+            flex: 1;
+            padding: 16px;
+            overflow-y: auto;
+        }
+
+        .user-item {
+            padding: 12px 16px;
+            margin-bottom: 8px;
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 12px;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            transition: all 0.2s;
+        }
+
+        .user-item:hover {
+            background: rgba(255, 255, 255, 0.1);
+            transform: translateX(4px);
+        }
+
+        .user-status {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: #48bb78;
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+
+        .user-name {
+            color: white;
+            font-size: 14px;
+        }
+
+        /* Main Chat */
+        .main-chat {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .chat-header {
+            padding: 24px 32px;
+            background: rgba(26, 26, 46, 0.95);
+            backdrop-filter: blur(10px);
+            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .chat-header h2 {
+            color: white;
+            font-size: 20px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .messages {
+            flex: 1;
+            padding: 24px 32px;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+        }
+
+        .message {
+            display: flex;
+            flex-direction: column;
+            max-width: 70%;
+            animation: fadeIn 0.3s ease;
+        }
+
+        @keyframes fadeIn {
+            from {
+                opacity: 0;
+                transform: translateY(10px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .message.sent {
+            align-self: flex-end;
+        }
+
+        .message.received {
+            align-self: flex-start;
+        }
+
+        .message-bubble {
+            padding: 12px 18px;
+            border-radius: 20px;
+            position: relative;
+        }
+
+        .message.sent .message-bubble {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border-bottom-right-radius: 4px;
+        }
+
+        .message.received .message-bubble {
+            background: rgba(255, 255, 255, 0.1);
+            color: white;
+            border-bottom-left-radius: 4px;
+        }
+
+        .message-sender {
+            font-size: 11px;
+            margin-bottom: 4px;
+            color: #a0aec0;
+        }
+
+        .message-time {
+            font-size: 10px;
+            margin-top: 4px;
+            opacity: 0.6;
+        }
+
+        .typing-indicator {
+            padding: 12px 32px;
+            color: #a0aec0;
+            font-style: italic;
+            font-size: 13px;
+        }
+
+        .input-area {
+            padding: 20px 32px;
+            background: rgba(26, 26, 46, 0.95);
+            backdrop-filter: blur(10px);
+            border-top: 1px solid rgba(255, 255, 255, 0.1);
+            display: flex;
+            gap: 12px;
+        }
+
+        .input-area input {
+            flex: 1;
+            padding: 14px 18px;
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 12px;
+            color: white;
+            font-size: 14px;
+        }
+
+        .input-area input:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        .input-area input::placeholder {
+            color: #718096;
+        }
+
+        .input-area button {
+            padding: 14px 28px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            border-radius: 12px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .input-area button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px -5px rgba(102, 126, 234, 0.4);
+        }
+
+        .hidden {
+            display: none !important;
+        }
+
+        /* Scrollbar */
+        ::-webkit-scrollbar {
+            width: 6px;
+        }
+
+        ::-webkit-scrollbar-track {
+            background: rgba(255, 255, 255, 0.05);
+        }
+
+        ::-webkit-scrollbar-thumb {
+            background: rgba(255, 255, 255, 0.2);
+            border-radius: 3px;
+        }
+    </style>
+</head>
+<body>
+    <div id="loginScreen" class="login-container">
+        <div class="login-card">
+            <div class="logo">
+                <h1>🔐 ABAVANDIMWE</h1>
+                <p>Next Generation Secure Messaging</p>
+            </div>
+            <div class="input-group">
+                <label>Username</label>
+                <input type="text" id="username" placeholder="Enter username">
+            </div>
+            <div class="input-group">
+                <label>Group Name</label>
+                <input type="text" id="group" placeholder="Enter group name">
+            </div>
+            <div class="input-group">
+                <label>Group Password</label>
+                <input type="password" id="password" placeholder="Enter password">
+            </div>
+            <button class="btn-primary" onclick="connect()">Join Secure Chat →</button>
+            <div class="features">
+                <div class="feature">
+                    <span>🔒</span>
+                    <small>AES-256-GCM</small>
+                </div>
+                <div class="feature">
+                    <span>⏰</span>
+                    <small>Auto-Delete 24h</small>
+                </div>
+                <div class="feature">
+                    <span>🚀</span>
+                    <small>Real-time</small>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div id="chatContainer" class="chat-container">
+        <div class="sidebar">
+            <div class="sidebar-header">
+                <h3>📱 Online Users</h3>
+            </div>
+            <div class="online-users" id="usersList">
+                <div style="color: #718096; text-align: center;">Connecting...</div>
+            </div>
+        </div>
+        <div class="main-chat">
+            <div class="chat-header">
+                <h2>💬 <span id="groupName">Loading...</span></h2>
+            </div>
+            <div class="messages" id="messages">
+                <div style="color: #718096; text-align: center;">Connecting to secure server...</div>
+            </div>
+            <div class="typing-indicator" id="typingIndicator"></div>
+            <div class="input-area">
+                <input type="text" id="messageInput" placeholder="Type your encrypted message...">
+                <button onclick="sendMessage()">Send 🔒</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let ws, username, group, password, groupSalt;
+        let typingTimeout;
+
+        async function encrypt(text, pwd, salt) {
+            const encoder = new TextEncoder();
+            const keyMaterial = await crypto.subtle.importKey('raw', encoder.encode(pwd), 'PBKDF2', false, ['deriveKey']);
+            const key = await crypto.subtle.deriveKey({
+                name: 'PBKDF2', salt: encoder.encode(salt), iterations: 100000, hash: 'SHA-256'
+            }, keyMaterial, { name: 'AES-GCM', length: 256 }, false, ['encrypt']);
+            const iv = crypto.getRandomValues(new Uint8Array(12));
+            const encrypted = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, encoder.encode(text));
+            const combined = new Uint8Array(iv.length + encrypted.byteLength);
+            combined.set(iv, 0);
+            combined.set(new Uint8Array(encrypted), iv.length);
+            return btoa(String.fromCharCode.apply(null, combined));
+        }
+
+        async function decrypt(encrypted, pwd, salt) {
+            const combined = Uint8Array.from(atob(encrypted), c => c.charCodeAt(0));
+            const iv = combined.slice(0, 12);
+            const ciphertext = combined.slice(12);
+            const encoder = new TextEncoder();
+            const keyMaterial = await crypto.subtle.importKey('raw', encoder.encode(pwd), 'PBKDF2', false, ['deriveKey']);
+            const key = await crypto.subtle.deriveKey({
+                name: 'PBKDF2', salt: encoder.encode(salt), iterations: 100000, hash: 'SHA-256'
+            }, keyMaterial, { name: 'AES-GCM', length: 256 }, false, ['decrypt']);
+            const decrypted = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, ciphertext);
+            return new TextDecoder().decode(decrypted);
+        }
+
+        function connect() {
+            username = document.getElementById('username').value.trim();
+            group = document.getElementById('group').value.trim();
+            password = document.getElementById('password').value;
+
+            if (!username || !group || !password) {
+                alert('Please fill all fields');
+                return;
+            }
+
+            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            const wsUrl = `${protocol}//${window.location.hostname}:8080`;
+            
+            ws = new WebSocket(wsUrl);
+
+            ws.onopen = () => {
+                ws.send(JSON.stringify({ type: 'join', username, group, password }));
+            };
+
+            ws.onmessage = async (e) => {
+                const data = JSON.parse(e.data);
+                
+                if (data.type === 'ready') {
+                    groupSalt = data.salt;
+                    document.getElementById('loginScreen').style.display = 'none';
+                    document.getElementById('chatContainer').classList.add('active');
+                    document.getElementById('groupName').innerText = `#${data.group}`;
+                } else if (data.type === 'message') {
+                    try {
+                        const decrypted = await decrypt(data.ciphertext, password, data.salt);
+                        addMessage(data.sender, decrypted, data.sender === username);
+                    } catch(e) {
+                        addMessage(data.sender, '🔒 Encrypted', data.sender === username);
+                    }
+                } else if (data.type === 'history') {
+                    try {
+                        const decrypted = await decrypt(data.ciphertext, password, data.salt);
+                        addMessage(data.sender, decrypted, data.sender === username, true);
+                    } catch(e) {
+                        addMessage(data.sender, '🔒 Encrypted', data.sender === username, true);
+                    }
+                } else if (data.type === 'users') {
+                    updateUsers(data.users);
+                } else if (data.type === 'typing') {
+                    document.getElementById('typingIndicator').innerHTML = `✏️ ${data.user} is typing...`;
+                } else if (data.type === 'stop_typing') {
+                    document.getElementById('typingIndicator').innerHTML = '';
+                }
+            };
+        }
+
+        function addMessage(sender, text, isSent, isHistory = false) {
+            const messagesDiv = document.getElementById('messages');
+            if (messagesDiv.children.length === 1 && messagesDiv.children[0].innerText.includes('Connecting')) {
+                messagesDiv.innerHTML = '';
+            }
+            
+            const messageDiv = document.createElement('div');
+            messageDiv.className = `message ${isSent ? 'sent' : 'received'}`;
+            const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+            messageDiv.innerHTML = `
+                <div class="message-sender">${isSent ? 'You' : escapeHtml(sender)}</div>
+                <div class="message-bubble">
+                    ${escapeHtml(text)}
+                    <div class="message-time">${time}</div>
+                </div>
+            `;
+            messagesDiv.appendChild(messageDiv);
+            messagesDiv.scrollTop = messagesDiv.scrollHeight;
+        }
+
+        function updateUsers(users) {
+            const usersDiv = document.getElementById('usersList');
+            if (users.length === 0) {
+                usersDiv.innerHTML = '<div style="color: #718096; text-align: center;">No users online</div>';
+                return;
+            }
+            usersDiv.innerHTML = users.map(u => `
+                <div class="user-item">
+                    <div class="user-status"></div>
+                    <div class="user-name">${escapeHtml(u)}</div>
+                </div>
+            `).join('');
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        document.getElementById('messageInput')?.addEventListener('input', () => {
+            if (ws?.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({ type: 'typing' }));
+                clearTimeout(typingTimeout);
+                typingTimeout = setTimeout(() => {
+                    ws.send(JSON.stringify({ type: 'stop_typing' }));
+                }, 1000);
+            }
+        });
+
+        document.getElementById('messageInput')?.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') sendMessage();
+        });
+
+        async function sendMessage() {
+            const input = document.getElementById('messageInput');
+            const text = input.value.trim();
+            if (!text || !ws || ws.readyState !== WebSocket.OPEN) return;
+            
+            try {
+                const ciphertext = await encrypt(text, password, groupSalt);
+                ws.send(JSON.stringify({ type: 'message', ciphertext, salt: groupSalt }));
+                input.value = '';
+            } catch(e) {
+                console.error('Encryption error:', e);
+            }
+        }
+    </script>
+</body>
+</html>
