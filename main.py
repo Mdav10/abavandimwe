@@ -1,7 +1,7 @@
 """
 ABAVANDIMWE - Professional Secure Messaging System
 Author: Mugisha Pc
-Android Optimized + Working Messages + Logout + Online Users List
+Android Optimized + Logout + Online Users + Group Password Protection
 """
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
@@ -27,6 +27,18 @@ class Crypto:
     @staticmethod
     def derive_key(password: str, salt: str) -> bytes:
         return hashlib.pbkdf2_hmac('sha256', password.encode(), salt.encode(), 100000, 32)
+    
+    @staticmethod
+    def hash_password(password: str, salt: str) -> str:
+        """Create a hash of the password for storage"""
+        key = Crypto.derive_key(password, salt)
+        return base64.b64encode(key).decode()
+    
+    @staticmethod
+    def verify_password(password: str, salt: str, stored_hash: str) -> bool:
+        """Verify if password matches the stored hash"""
+        computed_hash = Crypto.hash_password(password, salt)
+        return computed_hash == stored_hash
     
     @staticmethod
     def encrypt(text: str, password: str, salt: str) -> str:
@@ -75,6 +87,7 @@ class Database:
         c.execute('''CREATE TABLE IF NOT EXISTS groups
                     (group_name TEXT PRIMARY KEY,
                      salt TEXT,
+                     password_hash TEXT,
                      created_by TEXT,
                      created_at TEXT)''')
         conn.commit()
@@ -113,24 +126,39 @@ class Database:
         conn.close()
         return [r[0] for r in rows]
     
-    def get_group_salt(self, group: str):
+    def get_group_info(self, group: str):
+        """Get group information including salt and password hash"""
         conn = sqlite3.connect(self.db_path)
         c = conn.cursor()
-        c.execute("SELECT salt FROM groups WHERE group_name=?", (group,))
+        c.execute("SELECT salt, password_hash, created_by FROM groups WHERE group_name=?", (group,))
         row = c.fetchone()
         conn.close()
-        return row[0] if row else None
+        if row:
+            return {'salt': row[0], 'password_hash': row[1], 'created_by': row[2]}
+        return None
     
-    def create_group(self, group: str, salt: str, creator: str):
+    def create_group(self, group: str, salt: str, password_hash: str, creator: str):
+        """Create a new group with password hash"""
         conn = sqlite3.connect(self.db_path)
         c = conn.cursor()
         try:
-            c.execute("INSERT INTO groups (group_name, salt, created_by, created_at) VALUES (?,?,?,?)",
-                     (group, salt, creator, datetime.now().isoformat()))
+            c.execute("INSERT INTO groups (group_name, salt, password_hash, created_by, created_at) VALUES (?,?,?,?,?)",
+                     (group, salt, password_hash, creator, datetime.now().isoformat()))
             conn.commit()
-        except:
-            pass
+            conn.close()
+            return True
+        except Exception as e:
+            conn.close()
+            return False
+    
+    def group_exists(self, group: str):
+        """Check if group exists"""
+        conn = sqlite3.connect(self.db_path)
+        c = conn.cursor()
+        c.execute("SELECT group_name FROM groups WHERE group_name=?", (group,))
+        row = c.fetchone()
         conn.close()
+        return row is not None
 
 db = Database()
 
@@ -166,7 +194,7 @@ class ConnectionManager:
 
 manager = ConnectionManager()
 
-# ========== HTML PAGE - WITH ONLINE USERS LIST ==========
+# ========== HTML PAGE ==========
 HTML_PAGE = """<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -191,7 +219,6 @@ HTML_PAGE = """<!DOCTYPE html>
             color: #00ff41;
         }
 
-        /* Login Screen */
         .login-container {
             position: fixed;
             top: 0;
@@ -266,7 +293,14 @@ HTML_PAGE = """<!DOCTYPE html>
             transform: scale(0.98);
         }
 
-        /* Chat Container */
+        .error-message {
+            color: #ff4444;
+            font-size: 12px;
+            text-align: center;
+            margin-top: 12px;
+            display: none;
+        }
+
         .chat-container {
             display: none;
             width: 100%;
@@ -284,7 +318,6 @@ HTML_PAGE = """<!DOCTYPE html>
             display: flex;
         }
 
-        /* Header */
         .chat-header {
             padding: 12px 16px;
             background: #050508;
@@ -333,7 +366,6 @@ HTML_PAGE = """<!DOCTYPE html>
             color: white;
         }
 
-        /* Main Content */
         .main-content {
             flex: 1;
             display: flex;
@@ -341,7 +373,6 @@ HTML_PAGE = """<!DOCTYPE html>
             position: relative;
         }
 
-        /* Sidebar - Online Users List */
         .sidebar {
             width: 260px;
             background: #050508;
@@ -392,7 +423,6 @@ HTML_PAGE = """<!DOCTYPE html>
             50% { opacity: 0.5; }
         }
 
-        /* Mobile: Hide sidebar behind menu */
         @media (max-width: 768px) {
             .sidebar {
                 position: fixed;
@@ -420,7 +450,6 @@ HTML_PAGE = """<!DOCTYPE html>
             }
         }
 
-        /* Desktop: Always show sidebar */
         @media (min-width: 769px) {
             .menu-btn {
                 display: none;
@@ -430,7 +459,6 @@ HTML_PAGE = """<!DOCTYPE html>
             }
         }
 
-        /* Chat Area */
         .chat-area {
             flex: 1;
             display: flex;
@@ -439,7 +467,6 @@ HTML_PAGE = """<!DOCTYPE html>
             height: 100%;
         }
 
-        /* Messages */
         .messages-container {
             flex: 1;
             padding: 16px;
@@ -510,7 +537,6 @@ HTML_PAGE = """<!DOCTYPE html>
             font-style: italic;
         }
 
-        /* Typing Indicator */
         .typing-indicator {
             padding: 8px 16px;
             color: #00ff41;
@@ -520,7 +546,6 @@ HTML_PAGE = """<!DOCTYPE html>
             flex-shrink: 0;
         }
 
-        /* Input Area - Fixed at bottom */
         .input-area {
             padding: 12px 16px;
             background: #050508;
@@ -544,7 +569,6 @@ HTML_PAGE = """<!DOCTYPE html>
             font-size: 14px;
         }
 
-        /* Footer */
         .footer {
             text-align: center;
             padding: 6px;
@@ -554,7 +578,6 @@ HTML_PAGE = """<!DOCTYPE html>
             flex-shrink: 0;
         }
 
-        /* Scrollbar */
         ::-webkit-scrollbar {
             width: 3px;
         }
@@ -577,8 +600,9 @@ HTML_PAGE = """<!DOCTYPE html>
         <input type="text" id="groupName" placeholder="GROUP NAME" autocomplete="off">
         <input type="password" id="groupPassword" placeholder="GROUP PASSWORD">
         <button onclick="connect()">▶ ENTER CHAT</button>
+        <div id="loginError" class="error-message"></div>
         <div style="text-align:center;margin-top:20px;font-size:9px;color:#333;">
-            🔒 AES-256 | ⏰ Auto-Delete 24h
+            🔒 AES-256 | ⏰ Auto-Delete 24h | 🔐 Password Protected Groups
         </div>
     </div>
 </div>
@@ -659,6 +683,15 @@ HTML_PAGE = """<!DOCTYPE html>
         const overlay = document.getElementById('overlay');
         sidebar.classList.toggle('open');
         overlay.classList.toggle('active');
+    }
+
+    function showError(message) {
+        const errorDiv = document.getElementById('loginError');
+        errorDiv.textContent = message;
+        errorDiv.style.display = 'block';
+        setTimeout(() => {
+            errorDiv.style.display = 'none';
+        }, 3000);
     }
 
     function addSystemMessage(text) {
@@ -746,7 +779,7 @@ HTML_PAGE = """<!DOCTYPE html>
         groupPassword = document.getElementById('groupPassword').value;
         
         if (!username || !groupName || !groupPassword) {
-            alert('Please fill all fields');
+            showError('Please fill all fields');
             return;
         }
         
@@ -765,6 +798,12 @@ HTML_PAGE = """<!DOCTYPE html>
         
         ws.onmessage = async function(event) {
             const data = JSON.parse(event.data);
+            
+            if (data.type === 'error') {
+                showError(data.message);
+                ws.close();
+                return;
+            }
             
             if (data.type === 'ready') {
                 groupSalt = data.salt;
@@ -794,13 +833,9 @@ HTML_PAGE = """<!DOCTYPE html>
             } 
             else if (data.type === 'user_joined') {
                 addSystemMessage(`👤 ${data.user} joined the chat`);
-                // Request updated users list
-                ws.send(JSON.stringify({ type: 'get_users' }));
             }
             else if (data.type === 'user_left') {
                 addSystemMessage(`👋 ${data.user} left the chat`);
-                // Request updated users list
-                ws.send(JSON.stringify({ type: 'get_users' }));
             }
             else if (data.type === 'typing') {
                 document.getElementById('typingIndicator').innerHTML = '✏️ ' + data.user + ' is typing...';
@@ -823,7 +858,7 @@ HTML_PAGE = """<!DOCTYPE html>
         
         ws.onerror = function(error) {
             console.error('WebSocket error:', error);
-            alert('Connection failed. Please refresh.');
+            showError('Connection failed. Please refresh.');
         };
     }
 
@@ -909,11 +944,31 @@ async def websocket_endpoint(websocket: WebSocket):
                 group_name = data.get('group')
                 password = data.get('password')
                 
-                # Get or create group salt
-                salt = db.get_group_salt(group_name)
-                if not salt:
+                # Check if group exists
+                group_info = db.get_group_info(group_name)
+                
+                if group_info:
+                    # Group exists - verify password
+                    if not crypto.verify_password(password, group_info['salt'], group_info['password_hash']):
+                        await websocket.send_json({
+                            'type': 'error',
+                            'message': '❌ Invalid password for this group'
+                        })
+                        await websocket.close()
+                        return
+                    salt = group_info['salt']
+                else:
+                    # New group - create with password
                     salt = crypto.generate_salt()
-                    db.create_group(group_name, salt, username)
+                    password_hash = crypto.hash_password(password, salt)
+                    success = db.create_group(group_name, salt, password_hash, username)
+                    if not success:
+                        await websocket.send_json({
+                            'type': 'error',
+                            'message': '❌ Failed to create group'
+                        })
+                        await websocket.close()
+                        return
                 
                 # Add to connections
                 if group_name not in manager.active_connections:
@@ -945,10 +1000,6 @@ async def websocket_endpoint(websocket: WebSocket):
                 })
                 
                 print(f"[+] {username} joined {group_name}")
-            
-            elif msg_type == 'get_users':
-                online_users = db.get_online_users(group_name)
-                await websocket.send_json({'type': 'users', 'users': online_users})
             
             elif msg_type == 'message':
                 ciphertext = data.get('ciphertext')
@@ -1000,8 +1051,8 @@ if __name__ == "__main__":
 ║              PROFESSIONAL SECURE MESSAGING SYSTEM                 ║
 ║                   MESSAGES AUTO-DELETE 24H                        ║
 ║                        AUTHOR: MUGISHA PC                         ║
-║                        VERSION: 7.0.0                             ║
-║                   WITH ONLINE USERS LIST                          ║
+║                        VERSION: 8.0.0                             ║
+║                   PASSWORD PROTECTED GROUPS                       ║
 ║                                                                   ║
 ╚═══════════════════════════════════════════════════════════════════╝
     """)
@@ -1009,8 +1060,8 @@ if __name__ == "__main__":
     print(f"[✓] Database: SQLite")
     print(f"[✓] Encryption: AES-256-GCM")
     print(f"[✓] Auto-delete: 24 hours")
-    print(f"[✓] Online users list - visible on desktop left side")
-    print(f"[✓] Mobile: tap ☰ to see online users")
+    print(f"[✓] Password Protected Groups - First user sets password")
+    print(f"[✓] Users need correct password to join existing groups")
     print(f"[✓] Open: https://abavandimwe.onrender.com")
     
     uvicorn.run(app, host="0.0.0.0", port=port)
