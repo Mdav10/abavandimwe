@@ -1,23 +1,25 @@
 #!/usr/bin/env python3
 """
-ABAVANDIMWE - Next Generation Secure Messaging
+ABAVANDIMWE - Secure Messaging System
 Author: Mugisha Pc
 """
 
 import asyncio
 import os
+import sys
 from loguru import logger
 from dotenv import load_dotenv
 
 load_dotenv()
 
-DATABASE_URL = os.getenv(
-    'DATABASE_URL',
-    'postgresql://neondb_owner:npg_Cb7XtKr0BIoN@ep-holy-scene-apw8vqig.c-7.us-east-1.aws.neon.tech/neondb?sslmode=require'
-)
-
 from src.database import Database
 from src.websocket import WebSocketManager
+
+HOST = os.getenv('HOST', '0.0.0.0')
+PORT = int(os.getenv('PORT', 8080))
+
+logger.remove()
+logger.add(sys.stdout, format="<green>{time:HH:mm:ss}</green> | <level>{level}</level> | <message>", level="INFO")
 
 async def main():
     print("""
@@ -30,21 +32,21 @@ async def main():
     ║  ██║  ██║██████╔╝██║  ██║ ╚████╔╝ ██║  ██║██║ ╚████║██████╔╝     ║
     ║  ╚═╝  ╚═╝╚═════╝ ╚═╝  ╚═╝  ╚═══╝  ╚═╝  ╚═╝╚═╝  ╚═══╝╚═════╝      ║
     ║                                                                   ║
-    ║              NEXT GENERATION SECURE MESSAGING                     ║
-    ║                   MESSAGES AUTO-DELETE 24H                        ║
-    ║                      AUTHOR: MUGISHA PC                           ║
-    ║                      VERSION: 4.0.0                               ║
+    ║              SECURE MESSAGING SYSTEM                              ║
+    ║              Messages Auto-Delete After 24 Hours                  ║
+    ║                    Author: Mugisha Pc                             ║
+    ║                    Version: 4.0.0                                 ║
     ║                                                                   ║
     ╚═══════════════════════════════════════════════════════════════════╝
     """)
     
-    logger.info("Starting ABAVANDIMWE v4.0")
+    logger.info(f"Starting ABAVANDIMWE on {HOST}:{PORT}")
     
-    db = Database(DATABASE_URL)
+    db = Database()
     await db.connect()
     
     ws = WebSocketManager(db)
-    await ws.start(host="0.0.0.0", port=8080)
+    await ws.start(HOST, PORT)
 
 if __name__ == "__main__":
     asyncio.run(main())
