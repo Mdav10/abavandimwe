@@ -1,7 +1,7 @@
 """
 ABAVANDIMWE - Professional Secure Messaging System
 Author: Mugisha Pc
-FULLY WORKING - Mobile Optimized
+Android Optimized + Working Messages
 """
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
@@ -88,7 +88,6 @@ class Database:
                  (ciphertext, group, sender, salt, datetime.now().isoformat()))
         conn.commit()
         conn.close()
-        print(f"[DB] Message saved from {sender} in {group}")
     
     def get_messages(self, group: str):
         conn = sqlite3.connect(self.db_path)
@@ -129,9 +128,8 @@ class Database:
             c.execute("INSERT INTO groups (group_name, salt, created_by, created_at) VALUES (?,?,?,?)",
                      (group, salt, creator, datetime.now().isoformat()))
             conn.commit()
-            print(f"[DB] Group created: {group}")
-        except Exception as e:
-            print(f"[DB] Group exists: {group}")
+        except:
+            pass
         conn.close()
 
 db = Database()
@@ -147,7 +145,6 @@ class ConnectionManager:
             self.active_connections[group] = {}
         self.active_connections[group][username] = websocket
         db.set_user_status(username, 'online', group)
-        print(f"[WS] {username} connected to {group}")
     
     def disconnect(self, group: str, username: str):
         if group in self.active_connections:
@@ -156,7 +153,6 @@ class ConnectionManager:
             if not self.active_connections[group]:
                 del self.active_connections[group]
         db.set_user_status(username, 'offline', group)
-        print(f"[WS] {username} disconnected from {group}")
     
     async def broadcast(self, group: str, message: dict, exclude: str = None):
         if group not in self.active_connections:
@@ -170,12 +166,13 @@ class ConnectionManager:
 
 manager = ConnectionManager()
 
-# ========== HTML PAGE ==========
+# ========== HTML PAGE - ANDROID OPTIMIZED ==========
 HTML_PAGE = """<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes, viewport-fit=cover">
+    <meta name="theme-color" content="#0a0a0f">
     <title>ABAVANDIMWE | Secure Chat</title>
     <style>
         * {
@@ -186,13 +183,15 @@ HTML_PAGE = """<!DOCTYPE html>
         }
 
         body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', monospace;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', monospace;
             background: #0a0a0f;
             height: 100vh;
+            height: -webkit-fill-available;
             overflow: hidden;
             color: #00ff41;
         }
 
+        /* Login Screen */
         .login-container {
             position: fixed;
             top: 0;
@@ -258,25 +257,34 @@ HTML_PAGE = """<!DOCTYPE html>
             font-size: 16px;
             font-weight: bold;
             cursor: pointer;
+            transition: all 0.2s;
         }
 
         button:active {
             background: #00ff41;
             color: #000;
+            transform: scale(0.98);
         }
 
+        /* Chat Container */
         .chat-container {
             display: none;
             width: 100%;
             height: 100%;
             flex-direction: column;
             background: #0a0a0f;
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
         }
 
         .chat-container.active {
             display: flex;
         }
 
+        /* Header */
         .chat-header {
             padding: 12px 16px;
             background: #050508;
@@ -284,6 +292,7 @@ HTML_PAGE = """<!DOCTYPE html>
             display: flex;
             justify-content: space-between;
             align-items: center;
+            flex-shrink: 0;
         }
 
         .chat-header h2 {
@@ -310,12 +319,15 @@ HTML_PAGE = """<!DOCTYPE html>
             font-size: 14px;
         }
 
+        /* Main Content */
         .main-content {
             flex: 1;
             display: flex;
             overflow: hidden;
+            position: relative;
         }
 
+        /* Sidebar */
         .sidebar {
             position: fixed;
             left: -280px;
@@ -368,13 +380,16 @@ HTML_PAGE = """<!DOCTYPE html>
             display: block;
         }
 
+        /* Chat Area */
         .chat-area {
             flex: 1;
             display: flex;
             flex-direction: column;
             width: 100%;
+            height: 100%;
         }
 
+        /* Messages */
         .messages-container {
             flex: 1;
             padding: 16px;
@@ -388,6 +403,12 @@ HTML_PAGE = """<!DOCTYPE html>
             max-width: 85%;
             display: flex;
             flex-direction: column;
+            animation: fadeIn 0.2s ease;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
         }
 
         .message.sent {
@@ -403,6 +424,7 @@ HTML_PAGE = """<!DOCTYPE html>
             border-radius: 18px;
             font-size: 14px;
             word-wrap: break-word;
+            max-width: 100%;
         }
 
         .message.sent .message-bubble {
@@ -424,20 +446,30 @@ HTML_PAGE = """<!DOCTYPE html>
             padding-left: 4px;
         }
 
+        .message-time {
+            font-size: 9px;
+            margin-top: 4px;
+            opacity: 0.5;
+        }
+
+        /* Typing Indicator */
         .typing-indicator {
             padding: 8px 16px;
             color: #00ff41;
             font-style: italic;
             font-size: 11px;
             min-height: 36px;
+            flex-shrink: 0;
         }
 
+        /* Input Area - Fixed at bottom */
         .input-area {
             padding: 12px 16px;
             background: #050508;
             border-top: 1px solid #00ff41;
             display: flex;
             gap: 10px;
+            flex-shrink: 0;
         }
 
         .input-area input {
@@ -454,14 +486,17 @@ HTML_PAGE = """<!DOCTYPE html>
             font-size: 14px;
         }
 
+        /* Footer */
         .footer {
             text-align: center;
             padding: 6px;
             font-size: 8px;
             color: #333;
             border-top: 1px solid #00ff41;
+            flex-shrink: 0;
         }
 
+        /* Scrollbar */
         ::-webkit-scrollbar {
             width: 3px;
         }
@@ -503,7 +538,9 @@ HTML_PAGE = """<!DOCTYPE html>
         </div>
         <div class="overlay" id="overlay" onclick="toggleSidebar()"></div>
         <div class="chat-area">
-            <div class="messages-container" id="messages"></div>
+            <div class="messages-container" id="messages">
+                <div style="text-align:center;color:#666;">Connecting to secure server...</div>
+            </div>
             <div class="typing-indicator" id="typingIndicator"></div>
             <div class="input-area">
                 <input type="text" id="messageInput" placeholder="Type message..." autocomplete="off">
@@ -564,16 +601,23 @@ HTML_PAGE = """<!DOCTYPE html>
 
     function addMessage(sender, text, isSent) {
         const messagesDiv = document.getElementById('messages');
-        if (messagesDiv.children.length === 0 || (messagesDiv.children.length === 1 && messagesDiv.children[0].innerText.includes('connecting'))) {
+        
+        // Clear connecting message
+        if (messagesDiv.children.length === 1 && messagesDiv.children[0].innerText.includes('Connecting')) {
             messagesDiv.innerHTML = '';
         }
+        
         const messageDiv = document.createElement('div');
         messageDiv.className = `message ${isSent ? 'sent' : 'received'}`;
-        const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        const now = new Date();
+        const time = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        
         messageDiv.innerHTML = `
-            <div class="message-sender">${isSent ? 'YOU' : sender} • ${time}</div>
+            <div class="message-sender">${isSent ? 'YOU' : escapeHtml(sender)}</div>
             <div class="message-bubble">${escapeHtml(text)}</div>
+            <div class="message-time">${time}</div>
         `;
+        
         messagesDiv.appendChild(messageDiv);
         messagesDiv.scrollTop = messagesDiv.scrollHeight;
     }
@@ -595,12 +639,10 @@ HTML_PAGE = """<!DOCTYPE html>
         }
         
         const wsUrl = `wss://${window.location.host}/ws`;
-        console.log('Connecting to:', wsUrl);
         
         ws = new WebSocket(wsUrl);
         
         ws.onopen = function() {
-            console.log('WebSocket connected');
             ws.send(JSON.stringify({ 
                 type: 'join', 
                 username: username, 
@@ -610,7 +652,6 @@ HTML_PAGE = """<!DOCTYPE html>
         };
         
         ws.onmessage = async function(event) {
-            console.log('Message received:', event.data);
             const data = JSON.parse(event.data);
             
             if (data.type === 'ready') {
@@ -618,15 +659,13 @@ HTML_PAGE = """<!DOCTYPE html>
                 document.getElementById('loginScreen').style.display = 'none';
                 document.getElementById('chatScreen').classList.add('active');
                 document.getElementById('groupTitle').innerHTML = '# ' + data.group;
-                console.log('Ready! Group salt:', groupSalt);
             } 
             else if (data.type === 'message') {
                 try {
                     const decrypted = await decryptMessage(data.ciphertext, groupPassword, data.salt);
                     addMessage(data.sender, decrypted, data.sender === username);
                 } catch(e) {
-                    console.error('Decrypt error:', e);
-                    addMessage(data.sender, '🔒 [Encrypted]', data.sender === username);
+                    addMessage(data.sender, '🔒 Encrypted', data.sender === username);
                 }
             } 
             else if (data.type === 'history') {
@@ -634,8 +673,7 @@ HTML_PAGE = """<!DOCTYPE html>
                     const decrypted = await decryptMessage(data.ciphertext, groupPassword, data.salt);
                     addMessage(data.sender, decrypted, data.sender === username);
                 } catch(e) {
-                    console.error('Decrypt history error:', e);
-                    addMessage(data.sender, '🔒 [Encrypted]', data.sender === username);
+                    addMessage(data.sender, '🔒 Encrypted', data.sender === username);
                 }
             } 
             else if (data.type === 'users') {
@@ -649,6 +687,11 @@ HTML_PAGE = """<!DOCTYPE html>
             } 
             else if (data.type === 'typing') {
                 document.getElementById('typingIndicator').innerHTML = '✏️ ' + data.user + ' is typing...';
+                setTimeout(() => {
+                    if (document.getElementById('typingIndicator').innerHTML.includes(data.user)) {
+                        document.getElementById('typingIndicator').innerHTML = '';
+                    }
+                }, 2000);
             } 
             else if (data.type === 'stop_typing') {
                 document.getElementById('typingIndicator').innerHTML = '';
@@ -657,11 +700,7 @@ HTML_PAGE = """<!DOCTYPE html>
         
         ws.onerror = function(error) {
             console.error('WebSocket error:', error);
-            alert('Connection failed. Please refresh and try again.');
-        };
-        
-        ws.onclose = function() {
-            console.log('WebSocket closed');
+            alert('Connection failed. Please refresh.');
         };
     }
 
@@ -692,20 +731,13 @@ HTML_PAGE = """<!DOCTYPE html>
         const input = document.getElementById('messageInput');
         const text = input.value.trim();
         
-        if (!text) {
-            console.log('Empty message');
-            return;
-        }
-        
+        if (!text) return;
         if (!ws || ws.readyState !== WebSocket.OPEN) {
-            console.log('WebSocket not connected');
-            alert('Not connected to server');
+            alert('Not connected');
             return;
         }
-        
         if (!groupSalt) {
-            console.log('No group salt');
-            alert('Not ready yet');
+            alert('Still connecting...');
             return;
         }
         
@@ -716,11 +748,13 @@ HTML_PAGE = """<!DOCTYPE html>
                 ciphertext: ciphertext, 
                 salt: groupSalt 
             }));
+            
+            // Display own message immediately
+            addMessage(username, text, true);
             input.value = '';
-            console.log('Message sent');
         } catch(e) {
             console.error('Send error:', e);
-            alert('Failed to send message');
+            alert('Failed to send');
         }
     }
 </script>
@@ -753,8 +787,6 @@ async def websocket_endpoint(websocket: WebSocket):
                 group_name = data.get('group')
                 password = data.get('password')
                 
-                print(f"[WS] Join request: {username} -> {group_name}")
-                
                 # Get or create group salt
                 salt = db.get_group_salt(group_name)
                 if not salt:
@@ -768,9 +800,7 @@ async def websocket_endpoint(websocket: WebSocket):
                 db.set_user_status(username, 'online', group_name)
                 
                 # Send message history
-                messages = db.get_messages(group_name)
-                print(f"[WS] Sending {len(messages)} history messages to {username}")
-                for msg in messages:
+                for msg in db.get_messages(group_name):
                     await websocket.send_json({
                         'type': 'history',
                         'ciphertext': msg['ciphertext'],
@@ -789,13 +819,11 @@ async def websocket_endpoint(websocket: WebSocket):
                     'group': group_name
                 })
                 
-                print(f"[WS] {username} joined {group_name}")
+                print(f"[+] {username} joined {group_name}")
             
             elif msg_type == 'message':
                 ciphertext = data.get('ciphertext')
                 salt = data.get('salt')
-                
-                print(f"[WS] Message from {username} in {group_name}")
                 
                 # Save to database
                 db.save_message(ciphertext, group_name, username, salt)
@@ -815,9 +843,7 @@ async def websocket_endpoint(websocket: WebSocket):
                 await manager.broadcast(group_name, {'type': 'stop_typing', 'user': username}, exclude=username)
     
     except WebSocketDisconnect:
-        print(f"[WS] Disconnect: {username}")
-    except Exception as e:
-        print(f"[WS] Error: {e}")
+        pass
     finally:
         if username and group_name:
             if group_name in manager.active_connections:
@@ -825,7 +851,7 @@ async def websocket_endpoint(websocket: WebSocket):
             db.set_user_status(username, 'offline', group_name)
             online_users = db.get_online_users(group_name)
             await manager.broadcast(group_name, {'type': 'users', 'users': online_users})
-            print(f"[WS] {username} left {group_name}")
+            print(f"[-] {username} left {group_name}")
 
 # ========== MAIN ==========
 if __name__ == "__main__":
@@ -844,16 +870,17 @@ if __name__ == "__main__":
 ║              PROFESSIONAL SECURE MESSAGING SYSTEM                 ║
 ║                   MESSAGES AUTO-DELETE 24H                        ║
 ║                        AUTHOR: MUGISHA PC                         ║
-║                        VERSION: 4.0.0                             ║
+║                        VERSION: 5.0.0                             ║
+║                      ANDROID OPTIMIZED                            ║
 ║                      FULLY WORKING                                ║
 ║                                                                   ║
 ╚═══════════════════════════════════════════════════════════════════╝
     """)
     print(f"[✓] Server starting on port {port}")
-    print(f"[✓] Database: SQLite (abavandimwe.db)")
+    print(f"[✓] Database: SQLite")
     print(f"[✓] Encryption: AES-256-GCM")
     print(f"[✓] Auto-delete: 24 hours")
-    print(f"[✓] WebSocket endpoint: /ws")
+    print(f"[✓] Android optimized CSS")
     print(f"[✓] Open: https://abavandimwe.onrender.com")
     
     uvicorn.run(app, host="0.0.0.0", port=port)
