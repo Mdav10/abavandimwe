@@ -1,7 +1,7 @@
 """
 ABAVANDIMWE - Professional Secure Messaging System
 Author: Mugisha Pc
-Android Optimized + Working Messages + Logout
+Android Optimized + Working Messages + Logout + Online Users List
 """
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
@@ -166,7 +166,7 @@ class ConnectionManager:
 
 manager = ConnectionManager()
 
-# ========== HTML PAGE - WITH LOGOUT ==========
+# ========== HTML PAGE - WITH ONLINE USERS LIST ==========
 HTML_PAGE = """<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -297,10 +297,13 @@ HTML_PAGE = """<!DOCTYPE html>
         }
 
         .chat-header h2 {
-            font-size: 16px;
+            font-size: 14px;
             font-weight: normal;
             flex: 1;
             text-align: center;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
         }
 
         .online-badge {
@@ -308,6 +311,7 @@ HTML_PAGE = """<!DOCTYPE html>
             padding: 4px 10px;
             border: 1px solid #00ff41;
             border-radius: 20px;
+            flex-shrink: 0;
         }
 
         .menu-btn, .logout-btn {
@@ -320,6 +324,7 @@ HTML_PAGE = """<!DOCTYPE html>
             width: auto;
             margin: 0;
             font-size: 12px;
+            flex-shrink: 0;
         }
 
         .logout-btn:hover, .logout-btn:active {
@@ -336,28 +341,26 @@ HTML_PAGE = """<!DOCTYPE html>
             position: relative;
         }
 
-        /* Sidebar */
+        /* Sidebar - Online Users List */
         .sidebar {
-            position: fixed;
-            left: -280px;
-            top: 0;
-            bottom: 0;
-            width: 280px;
+            width: 260px;
             background: #050508;
             border-right: 1px solid #00ff41;
-            z-index: 20;
-            transition: left 0.3s ease;
             display: flex;
             flex-direction: column;
-        }
-
-        .sidebar.open {
-            left: 0;
+            flex-shrink: 0;
         }
 
         .sidebar-header {
             padding: 16px;
             border-bottom: 1px solid #00ff41;
+        }
+
+        .sidebar-header h3 {
+            font-size: 14px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
         }
 
         .users-list {
@@ -372,21 +375,59 @@ HTML_PAGE = """<!DOCTYPE html>
             border: 1px solid #00ff41;
             border-radius: 10px;
             font-size: 13px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
         }
 
-        .overlay {
-            position: fixed;
-            top: 0;
-            left: 0;
-            right: 0;
-            bottom: 0;
-            background: rgba(0,0,0,0.7);
-            z-index: 15;
-            display: none;
+        .user-item::before {
+            content: "●";
+            color: #00ff41;
+            font-size: 10px;
+            animation: pulse 2s infinite;
         }
 
-        .overlay.active {
-            display: block;
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+
+        /* Mobile: Hide sidebar behind menu */
+        @media (max-width: 768px) {
+            .sidebar {
+                position: fixed;
+                left: -260px;
+                top: 0;
+                bottom: 0;
+                z-index: 20;
+                transition: left 0.3s ease;
+            }
+            .sidebar.open {
+                left: 0;
+            }
+            .overlay {
+                position: fixed;
+                top: 0;
+                left: 0;
+                right: 0;
+                bottom: 0;
+                background: rgba(0,0,0,0.7);
+                z-index: 15;
+                display: none;
+            }
+            .overlay.active {
+                display: block;
+            }
+        }
+
+        /* Desktop: Always show sidebar */
+        @media (min-width: 769px) {
+            .menu-btn {
+                display: none;
+            }
+            .overlay {
+                display: none;
+            }
         }
 
         /* Chat Area */
@@ -550,8 +591,12 @@ HTML_PAGE = """<!DOCTYPE html>
     </div>
     <div class="main-content">
         <div class="sidebar" id="sidebar">
-            <div class="sidebar-header"><h3>● ONLINE USERS</h3></div>
-            <div class="users-list" id="usersList"></div>
+            <div class="sidebar-header">
+                <h3>● ONLINE USERS <span id="onlineCount" style="font-size:11px;"></span></h3>
+            </div>
+            <div class="users-list" id="usersList">
+                <div class="user-item">Loading...</div>
+            </div>
         </div>
         <div class="overlay" id="overlay" onclick="toggleSidebar()"></div>
         <div class="chat-area">
@@ -656,27 +701,38 @@ HTML_PAGE = """<!DOCTYPE html>
         return div.innerHTML;
     }
 
+    function updateUsersList(users) {
+        const usersList = document.getElementById('usersList');
+        const onlineCount = document.getElementById('onlineCount');
+        
+        onlineCount.innerHTML = `(${users.length})`;
+        
+        if (users.length === 0) {
+            usersList.innerHTML = '<div class="user-item">No users online</div>';
+        } else {
+            usersList.innerHTML = users.map(u => `<div class="user-item">${escapeHtml(u)}</div>`).join('');
+        }
+    }
+
     function logout() {
         if (ws && ws.readyState === WebSocket.OPEN) {
             ws.close();
         }
         
-        // Reset all variables
         ws = null;
         username = '';
         groupName = '';
         groupPassword = '';
         groupSalt = '';
         
-        // Clear chat screen
         document.getElementById('chatScreen').classList.remove('active');
         document.getElementById('loginScreen').style.display = 'flex';
         document.getElementById('messages').innerHTML = '<div style="text-align:center;color:#666;">Connecting to secure server...</div>';
-        document.getElementById('usersList').innerHTML = '';
+        document.getElementById('usersList').innerHTML = '<div class="user-item">Loading...</div>';
         document.getElementById('messageInput').value = '';
         document.getElementById('typingIndicator').innerHTML = '';
+        document.getElementById('onlineCount').innerHTML = '';
         
-        // Clear input fields
         document.getElementById('username').value = '';
         document.getElementById('groupName').value = '';
         document.getElementById('groupPassword').value = '';
@@ -734,19 +790,17 @@ HTML_PAGE = """<!DOCTYPE html>
                 }
             } 
             else if (data.type === 'users') {
-                document.getElementById('onlineCount').innerHTML = data.users.length;
-                const usersList = document.getElementById('usersList');
-                if (data.users.length === 0) {
-                    usersList.innerHTML = '<div class="user-item">No users online</div>';
-                } else {
-                    usersList.innerHTML = data.users.map(u => `<div class="user-item">● ${escapeHtml(u)}</div>`).join('');
-                }
+                updateUsersList(data.users);
             } 
             else if (data.type === 'user_joined') {
                 addSystemMessage(`👤 ${data.user} joined the chat`);
+                // Request updated users list
+                ws.send(JSON.stringify({ type: 'get_users' }));
             }
             else if (data.type === 'user_left') {
                 addSystemMessage(`👋 ${data.user} left the chat`);
+                // Request updated users list
+                ws.send(JSON.stringify({ type: 'get_users' }));
             }
             else if (data.type === 'typing') {
                 document.getElementById('typingIndicator').innerHTML = '✏️ ' + data.user + ' is typing...';
@@ -892,6 +946,10 @@ async def websocket_endpoint(websocket: WebSocket):
                 
                 print(f"[+] {username} joined {group_name}")
             
+            elif msg_type == 'get_users':
+                online_users = db.get_online_users(group_name)
+                await websocket.send_json({'type': 'users', 'users': online_users})
+            
             elif msg_type == 'message':
                 ciphertext = data.get('ciphertext')
                 salt = data.get('salt')
@@ -942,8 +1000,8 @@ if __name__ == "__main__":
 ║              PROFESSIONAL SECURE MESSAGING SYSTEM                 ║
 ║                   MESSAGES AUTO-DELETE 24H                        ║
 ║                        AUTHOR: MUGISHA PC                         ║
-║                        VERSION: 6.0.0                             ║
-║                      WITH LOGOUT FEATURE                          ║
+║                        VERSION: 7.0.0                             ║
+║                   WITH ONLINE USERS LIST                          ║
 ║                                                                   ║
 ╚═══════════════════════════════════════════════════════════════════╝
     """)
@@ -951,7 +1009,8 @@ if __name__ == "__main__":
     print(f"[✓] Database: SQLite")
     print(f"[✓] Encryption: AES-256-GCM")
     print(f"[✓] Auto-delete: 24 hours")
-    print(f"[✓] Logout button added - visible to all users")
+    print(f"[✓] Online users list - visible on desktop left side")
+    print(f"[✓] Mobile: tap ☰ to see online users")
     print(f"[✓] Open: https://abavandimwe.onrender.com")
     
     uvicorn.run(app, host="0.0.0.0", port=port)
