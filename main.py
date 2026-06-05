@@ -1,7 +1,7 @@
 """
 ABAVANDIMWE - Professional Secure Messaging System
 Author: Mugisha Pc
-Android Optimized + Working Messages
+Android Optimized + Working Messages + Logout
 """
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
@@ -166,7 +166,7 @@ class ConnectionManager:
 
 manager = ConnectionManager()
 
-# ========== HTML PAGE - ANDROID OPTIMIZED ==========
+# ========== HTML PAGE - WITH LOGOUT ==========
 HTML_PAGE = """<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -293,11 +293,14 @@ HTML_PAGE = """<!DOCTYPE html>
             justify-content: space-between;
             align-items: center;
             flex-shrink: 0;
+            gap: 8px;
         }
 
         .chat-header h2 {
             font-size: 16px;
             font-weight: normal;
+            flex: 1;
+            text-align: center;
         }
 
         .online-badge {
@@ -307,7 +310,7 @@ HTML_PAGE = """<!DOCTYPE html>
             border-radius: 20px;
         }
 
-        .menu-btn {
+        .menu-btn, .logout-btn {
             background: transparent;
             border: 1px solid #00ff41;
             color: #00ff41;
@@ -316,7 +319,13 @@ HTML_PAGE = """<!DOCTYPE html>
             cursor: pointer;
             width: auto;
             margin: 0;
-            font-size: 14px;
+            font-size: 12px;
+        }
+
+        .logout-btn:hover, .logout-btn:active {
+            background: #ff0041;
+            border-color: #ff0041;
+            color: white;
         }
 
         /* Main Content */
@@ -452,6 +461,14 @@ HTML_PAGE = """<!DOCTYPE html>
             opacity: 0.5;
         }
 
+        .system-message {
+            text-align: center;
+            font-size: 11px;
+            color: #ffaa00;
+            margin: 8px 0;
+            font-style: italic;
+        }
+
         /* Typing Indicator */
         .typing-indicator {
             padding: 8px 16px;
@@ -529,7 +546,7 @@ HTML_PAGE = """<!DOCTYPE html>
     <div class="chat-header">
         <button class="menu-btn" onclick="toggleSidebar()">☰</button>
         <h2 id="groupTitle"># LOADING</h2>
-        <span class="online-badge" id="onlineCount">0</span>
+        <button class="logout-btn" onclick="logout()">🚪 EXIT</button>
     </div>
     <div class="main-content">
         <div class="sidebar" id="sidebar">
@@ -599,10 +616,21 @@ HTML_PAGE = """<!DOCTYPE html>
         overlay.classList.toggle('active');
     }
 
+    function addSystemMessage(text) {
+        const messagesDiv = document.getElementById('messages');
+        if (messagesDiv.children.length === 1 && messagesDiv.children[0].innerText.includes('Connecting')) {
+            messagesDiv.innerHTML = '';
+        }
+        const msgDiv = document.createElement('div');
+        msgDiv.className = 'system-message';
+        msgDiv.innerHTML = text;
+        messagesDiv.appendChild(msgDiv);
+        messagesDiv.scrollTop = messagesDiv.scrollHeight;
+    }
+
     function addMessage(sender, text, isSent) {
         const messagesDiv = document.getElementById('messages');
         
-        // Clear connecting message
         if (messagesDiv.children.length === 1 && messagesDiv.children[0].innerText.includes('Connecting')) {
             messagesDiv.innerHTML = '';
         }
@@ -626,6 +654,34 @@ HTML_PAGE = """<!DOCTYPE html>
         const div = document.createElement('div');
         div.textContent = text;
         return div.innerHTML;
+    }
+
+    function logout() {
+        if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.close();
+        }
+        
+        // Reset all variables
+        ws = null;
+        username = '';
+        groupName = '';
+        groupPassword = '';
+        groupSalt = '';
+        
+        // Clear chat screen
+        document.getElementById('chatScreen').classList.remove('active');
+        document.getElementById('loginScreen').style.display = 'flex';
+        document.getElementById('messages').innerHTML = '<div style="text-align:center;color:#666;">Connecting to secure server...</div>';
+        document.getElementById('usersList').innerHTML = '';
+        document.getElementById('messageInput').value = '';
+        document.getElementById('typingIndicator').innerHTML = '';
+        
+        // Clear input fields
+        document.getElementById('username').value = '';
+        document.getElementById('groupName').value = '';
+        document.getElementById('groupPassword').value = '';
+        
+        console.log('Logged out');
     }
 
     function connect() {
@@ -659,6 +715,7 @@ HTML_PAGE = """<!DOCTYPE html>
                 document.getElementById('loginScreen').style.display = 'none';
                 document.getElementById('chatScreen').classList.add('active');
                 document.getElementById('groupTitle').innerHTML = '# ' + data.group;
+                addSystemMessage('🔐 You joined the secure chat');
             } 
             else if (data.type === 'message') {
                 try {
@@ -685,6 +742,12 @@ HTML_PAGE = """<!DOCTYPE html>
                     usersList.innerHTML = data.users.map(u => `<div class="user-item">● ${escapeHtml(u)}</div>`).join('');
                 }
             } 
+            else if (data.type === 'user_joined') {
+                addSystemMessage(`👤 ${data.user} joined the chat`);
+            }
+            else if (data.type === 'user_left') {
+                addSystemMessage(`👋 ${data.user} left the chat`);
+            }
             else if (data.type === 'typing') {
                 document.getElementById('typingIndicator').innerHTML = '✏️ ' + data.user + ' is typing...';
                 setTimeout(() => {
@@ -695,6 +758,12 @@ HTML_PAGE = """<!DOCTYPE html>
             } 
             else if (data.type === 'stop_typing') {
                 document.getElementById('typingIndicator').innerHTML = '';
+            }
+        };
+        
+        ws.onclose = function() {
+            if (document.getElementById('chatScreen').classList.contains('active')) {
+                addSystemMessage('⚠️ Disconnected from server');
             }
         };
         
@@ -749,7 +818,6 @@ HTML_PAGE = """<!DOCTYPE html>
                 salt: groupSalt 
             }));
             
-            // Display own message immediately
             addMessage(username, text, true);
             input.value = '';
         } catch(e) {
@@ -798,6 +866,9 @@ async def websocket_endpoint(websocket: WebSocket):
                     manager.active_connections[group_name] = {}
                 manager.active_connections[group_name][username] = websocket
                 db.set_user_status(username, 'online', group_name)
+                
+                # Broadcast user joined
+                await manager.broadcast(group_name, {'type': 'user_joined', 'user': username}, exclude=username)
                 
                 # Send message history
                 for msg in db.get_messages(group_name):
@@ -851,6 +922,7 @@ async def websocket_endpoint(websocket: WebSocket):
             db.set_user_status(username, 'offline', group_name)
             online_users = db.get_online_users(group_name)
             await manager.broadcast(group_name, {'type': 'users', 'users': online_users})
+            await manager.broadcast(group_name, {'type': 'user_left', 'user': username})
             print(f"[-] {username} left {group_name}")
 
 # ========== MAIN ==========
@@ -870,9 +942,8 @@ if __name__ == "__main__":
 ║              PROFESSIONAL SECURE MESSAGING SYSTEM                 ║
 ║                   MESSAGES AUTO-DELETE 24H                        ║
 ║                        AUTHOR: MUGISHA PC                         ║
-║                        VERSION: 5.0.0                             ║
-║                      ANDROID OPTIMIZED                            ║
-║                      FULLY WORKING                                ║
+║                        VERSION: 6.0.0                             ║
+║                      WITH LOGOUT FEATURE                          ║
 ║                                                                   ║
 ╚═══════════════════════════════════════════════════════════════════╝
     """)
@@ -880,7 +951,7 @@ if __name__ == "__main__":
     print(f"[✓] Database: SQLite")
     print(f"[✓] Encryption: AES-256-GCM")
     print(f"[✓] Auto-delete: 24 hours")
-    print(f"[✓] Android optimized CSS")
+    print(f"[✓] Logout button added - visible to all users")
     print(f"[✓] Open: https://abavandimwe.onrender.com")
     
     uvicorn.run(app, host="0.0.0.0", port=port)
