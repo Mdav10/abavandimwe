@@ -16,13 +16,6 @@ import sys
 from datetime import datetime
 from typing import Dict, Set, List, Optional
 
-# Simple logging (no color issues)
-def log_info(msg):
-    print(f"[INFO] {msg}")
-
-def log_error(msg):
-    print(f"[ERROR] {msg}")
-
 # ============================================
 # CRYPTO ENGINE
 # ============================================
@@ -104,7 +97,7 @@ class Database:
         
         conn.commit()
         conn.close()
-        log_info("Database ready")
+        print("[INFO] Database ready")
     
     async def save_message(self, ciphertext: str, group: str, sender: str, salt: str):
         def _save():
@@ -181,7 +174,7 @@ class Database:
             conn.commit()
             conn.close()
             if deleted > 0:
-                log_info(f"Cleaned {deleted} expired messages")
+                print(f"[INFO] Cleaned {deleted} expired messages")
         await asyncio.to_thread(_clean)
     
     async def start_cleaner(self):
@@ -218,7 +211,7 @@ class WebSocketServer:
         for user in disconnected:
             del self.connections[group][user]
     
-    async def handle(self, websocket: websockets.WebSocketServerProtocol, path: str):
+    async def handler(self, websocket: websockets.WebSocketServerProtocol, path: str):
         user = None
         group = None
         
@@ -262,7 +255,7 @@ class WebSocketServer:
                         'group': group
                     }))
                     
-                    log_info(f"User {user} joined {group}")
+                    print(f"[INFO] User {user} joined {group}")
                 
                 elif msg_type == 'message':
                     ciphertext = data['ciphertext']
@@ -286,7 +279,7 @@ class WebSocketServer:
                     await self.broadcast(group, {'type': 'stop_typing', 'user': user}, exclude=user)
         
         except Exception as e:
-            log_error(f"Error: {e}")
+            print(f"[ERROR] {e}")
         finally:
             if user and group:
                 if group in self.connections:
@@ -294,9 +287,12 @@ class WebSocketServer:
                 await db.set_user_status(user, 'offline', group)
                 online = await db.get_online_users(group)
                 await self.broadcast(group, {'type': 'users', 'users': online})
-                log_info(f"User {user} left")
-
-server = WebSocketServer()
+                print(f"[INFO] User {user} left")
+    
+    async def run(self, host: str = "0.0.0.0", port: int = 8080):
+        async with websockets.serve(self.handler, host, port):
+            print(f"[INFO] Server running on ws://{host}:{port}")
+            await asyncio.Future()
 
 # ============================================
 # MAIN
@@ -318,16 +314,17 @@ BANNER = """
 ║              SECURE MESSAGING SYSTEM                              ║
 ║           Messages Auto-Delete After 24 Hours                     ║
 ║                    Author: Mugisha Pc                             ║
-║                    Version: 6.0.0                                 ║
+║                    Version: 7.0.0                                 ║
 ║                                                                   ║
 ╚═══════════════════════════════════════════════════════════════════╝
 """
 
 async def main():
     print(BANNER)
-    log_info(f"ABAVANDIMWE v6.0 starting on {HOST}:{PORT}")
+    print(f"[INFO] ABAVANDIMWE v7.0 starting on {HOST}:{PORT}")
     await db.connect()
-    await server.start(HOST, PORT)
+    server = WebSocketServer()
+    await server.run(HOST, PORT)
 
 if __name__ == "__main__":
     asyncio.run(main())
