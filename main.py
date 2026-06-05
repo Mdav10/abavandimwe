@@ -2,7 +2,7 @@
 """
 ABAVANDIMWE - Complete Secure Messaging System
 Author: Mugisha Pc
-Single server handles both HTTP and WebSocket
+Single server handling HTTP + WebSocket on same port
 """
 
 import asyncio
@@ -15,9 +15,6 @@ import hashlib
 import os
 from datetime import datetime
 from typing import Dict, Set, List, Optional
-from http.server import HTTPServer, SimpleHTTPRequestHandler
-import threading
-import socket
 
 # ============================================
 # CRYPTO ENGINE
@@ -415,18 +412,14 @@ HTML_PAGE = '''<!DOCTYPE html>
                 wsUrl = `ws://${window.location.host}`;
             }
             
-            console.log('Connecting to:', wsUrl);
-            
             ws = new WebSocket(wsUrl);
             
             ws.onopen = function() {
-                console.log('WebSocket connected');
                 ws.send(JSON.stringify({type:'join', username, group, password}));
             };
             
             ws.onmessage = async function(e) {
                 const data = JSON.parse(e.data);
-                console.log('Received:', data.type);
                 
                 if(data.type==='ready'){
                     groupSalt = data.salt;
@@ -457,12 +450,7 @@ HTML_PAGE = '''<!DOCTYPE html>
             };
             
             ws.onerror = function(error) {
-                console.error('WebSocket error:', error);
-                alert('Connection failed. Make sure server is running.');
-            };
-            
-            ws.onclose = function() {
-                console.log('WebSocket closed');
+                alert('Connection failed. Server may be starting up. Refresh and try again.');
             };
         }
         
@@ -510,31 +498,79 @@ HTML_PAGE = '''<!DOCTYPE html>
 </html>'''
 
 # ============================================
-# HTTP REQUEST HANDLER
+# COMBINED HTTP + WEBSOCKET SERVER
 # ============================================
 
-class CustomHTTPHandler(SimpleHTTPRequestHandler):
-    def do_GET(self):
-        if self.path == '/' or self.path == '/index.html':
-            self.send_response(200)
-            self.send_header('Content-type', 'text/html')
-            self.end_headers()
-            self.wfile.write(HTML_PAGE.encode())
+async def handle_http(reader, writer):
+    """Handle HTTP requests"""
+    try:
+        data = await reader.read(1024)
+        request = data.decode()
+        
+        if request.startswith('GET /') or request.startswith('GET /index.html'):
+            response = f"""HTTP/1.1 200 OK
+Content-Type: text/html
+Content-Length: {len(HTML_PAGE)}
+Connection: close
+
+{HTML_PAGE}"""
+            writer.write(response.encode())
         else:
-            self.send_response(404)
-            self.end_headers()
-    
-    def log_message(self, format, *args):
+            response = """HTTP/1.1 404 Not Found
+Content-Type: text/plain
+Content-Length: 9
+
+Not Found"""
+            writer.write(response.encode())
+        
+        await writer.drain()
+        writer.close()
+        await writer.wait_closed()
+    except:
         pass
 
-def run_http_server(port):
-    server = HTTPServer(('0.0.0.0', port), CustomHTTPHandler)
-    print(f"[INFO] HTTP server on http://0.0.0.0:{port}")
-    server.serve_forever()
-
-# ============================================
-# WEBSOCKET SERVER
-# ============================================
+async def main():
+    PORT = int(os.getenv('PORT', 8080))
+    
+    print("""
+╔═══════════════════════════════════════════════════════════════════╗
+║                                                                   ║
+║   █████╗ ██████╗  █████╗ ██╗   ██╗ █████╗ ███╗   ██╗██████╗      ║
+║  ██╔══██╗██╔══██╗██╔══██╗██║   ██║██╔══██╗████╗  ██║██╔══██╗     ║
+║  ███████║██████╔╝███████║██║   ██║███████║██╔██╗ ██║██║  ██║     ║
+║  ██╔══██║██╔══██╗██╔══██║╚██╗ ██╔╝██╔══██║██║╚██╗██║██║  ██║     ║
+║  ██║  ██║██████╔╝██║  ██║ ╚████╔╝ ██║  ██║██║ ╚████║██████╔╝     ║
+║  ╚═╝  ╚═╝╚═════╝ ╚═╝  ╚═╝  ╚═══╝  ╚═╝  ╚═╝╚═╝  ╚═══╝╚═════╝      ║
+║                                                                   ║
+║              SECURE MESSAGING SYSTEM                              ║
+║           Messages Auto-Delete After 24 Hours                     ║
+║                    Author: Mugisha Pc                             ║
+║                    Version: 11.0.0                                ║
+║                                                                   ║
+╚═══════════════════════════════════════════════════════════════════╝
+""")
+    
+    print(f"[INFO] ABAVANDIMWE v11.0 starting on port {PORT}")
+    
+    await db.connect()
+    
+    # Create WebSocket server
+    ws_server = await websockets.serve(
+        WebSocketChatServer().handler, 
+        '0.0.0.0', 
+        PORT
+    )
+    
+    print(f"[INFO] WebSocket server on ws://0.0.0.0:{PORT}")
+    
+    # Create HTTP server
+    http_server = await asyncio.start_server(handle_http, '0.0.0.0', PORT)
+    
+    print(f"[INFO] HTTP server on http://0.0.0.0:{PORT}")
+    print(f"[INFO] Open https://abavandimwe.onrender.com in your browser")
+    
+    # Run both servers
+    await asyncio.gather(ws_server.wait_closed(), http_server.wait_closed())
 
 class WebSocketChatServer:
     def __init__(self):
@@ -630,46 +666,6 @@ class WebSocketChatServer:
                 online = await db.get_online_users(group)
                 await self.broadcast(group, {'type': 'users', 'users': online})
                 print(f"[INFO] User {user} left")
-    
-    async def run(self, host: str = "0.0.0.0", port: int = 8080):
-        async with websockets.serve(self.handler, host, port):
-            print(f"[INFO] WebSocket server on ws://{host}:{port}")
-            await asyncio.Future()
 
-# ============================================
-# MAIN
-# ============================================
-
-PORT = int(os.getenv('PORT', 8080))
-
-print("""
-╔═══════════════════════════════════════════════════════════════════╗
-║                                                                   ║
-║   █████╗ ██████╗  █████╗ ██╗   ██╗ █████╗ ███╗   ██╗██████╗      ║
-║  ██╔══██╗██╔══██╗██╔══██╗██║   ██║██╔══██╗████╗  ██║██╔══██╗     ║
-║  ███████║██████╔╝███████║██║   ██║███████║██╔██╗ ██║██║  ██║     ║
-║  ██╔══██║██╔══██╗██╔══██║╚██╗ ██╔╝██╔══██║██║╚██╗██║██║  ██║     ║
-║  ██║  ██║██████╔╝██║  ██║ ╚████╔╝ ██║  ██║██║ ╚████║██████╔╝     ║
-║  ╚═╝  ╚═╝╚═════╝ ╚═╝  ╚═╝  ╚═══╝  ╚═╝  ╚═╝╚═╝  ╚═══╝╚═════╝      ║
-║                                                                   ║
-║              SECURE MESSAGING SYSTEM                              ║
-║           Messages Auto-Delete After 24 Hours                     ║
-║                    Author: Mugisha Pc                             ║
-║                    Version: 10.0.0                                ║
-║                                                                   ║
-╚═══════════════════════════════════════════════════════════════════╝
-""")
-
-print(f"[INFO] ABAVANDIMWE v10.0 starting on port {PORT}")
-
-# Start HTTP server in thread
-http_thread = threading.Thread(target=run_http_server, args=(PORT,), daemon=True)
-http_thread.start()
-
-# Start WebSocket server
-async def main():
-    await db.connect()
-    ws_server = WebSocketChatServer()
-    await ws_server.run('0.0.0.0', PORT)
-
-asyncio.run(main())
+if __name__ == "__main__":
+    asyncio.run(main())
