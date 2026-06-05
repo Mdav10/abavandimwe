@@ -2,7 +2,6 @@
 """
 ABAVANDIMWE - Complete Secure Messaging System
 Author: Mugisha Pc
-One file - No import issues!
 """
 
 import asyncio
@@ -16,7 +15,13 @@ import os
 import sys
 from datetime import datetime
 from typing import Dict, Set, List, Optional
-from loguru import logger
+
+# Simple logging (no color issues)
+def log_info(msg):
+    print(f"[INFO] {msg}")
+
+def log_error(msg):
+    print(f"[ERROR] {msg}")
 
 # ============================================
 # CRYPTO ENGINE
@@ -99,7 +104,7 @@ class Database:
         
         conn.commit()
         conn.close()
-        logger.info("✅ Database ready")
+        log_info("Database ready")
     
     async def save_message(self, ciphertext: str, group: str, sender: str, salt: str):
         def _save():
@@ -176,7 +181,7 @@ class Database:
             conn.commit()
             conn.close()
             if deleted > 0:
-                logger.info(f"🧹 Cleaned {deleted} messages")
+                log_info(f"Cleaned {deleted} expired messages")
         await asyncio.to_thread(_clean)
     
     async def start_cleaner(self):
@@ -257,7 +262,7 @@ class WebSocketServer:
                         'group': group
                     }))
                     
-                    logger.info(f"✅ {user} joined {group}")
+                    log_info(f"User {user} joined {group}")
                 
                 elif msg_type == 'message':
                     ciphertext = data['ciphertext']
@@ -281,7 +286,7 @@ class WebSocketServer:
                     await self.broadcast(group, {'type': 'stop_typing', 'user': user}, exclude=user)
         
         except Exception as e:
-            logger.error(f"Error: {e}")
+            log_error(f"Error: {e}")
         finally:
             if user and group:
                 if group in self.connections:
@@ -289,12 +294,7 @@ class WebSocketServer:
                 await db.set_user_status(user, 'offline', group)
                 online = await db.get_online_users(group)
                 await self.broadcast(group, {'type': 'users', 'users': online})
-                logger.info(f"👋 {user} left")
-    
-    async def start(self, host: str = "0.0.0.0", port: int = 8080):
-        async with websockets.serve(self.handle, host, port):
-            logger.info(f"🚀 Server on ws://{host}:{port}")
-            await asyncio.Future()
+                log_info(f"User {user} left")
 
 server = WebSocketServer()
 
@@ -304,9 +304,6 @@ server = WebSocketServer()
 
 HOST = os.getenv('HOST', '0.0.0.0')
 PORT = int(os.getenv('PORT', 8080))
-
-logger.remove()
-logger.add(sys.stdout, format="<green>{time:HH:mm:ss}</green> | <level>{level}</level> | <message>", level="INFO")
 
 BANNER = """
 ╔═══════════════════════════════════════════════════════════════════╗
@@ -328,7 +325,7 @@ BANNER = """
 
 async def main():
     print(BANNER)
-    logger.info(f"🔥 ABAVANDIMWE v6.0 starting on {HOST}:{PORT}")
+    log_info(f"ABAVANDIMWE v6.0 starting on {HOST}:{PORT}")
     await db.connect()
     await server.start(HOST, PORT)
 
