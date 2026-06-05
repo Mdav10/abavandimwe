@@ -2,6 +2,7 @@
 """
 ABAVANDIMWE - Complete Secure Messaging System
 Author: Mugisha Pc
+Single server handles both HTTP and WebSocket
 """
 
 import asyncio
@@ -16,6 +17,7 @@ from datetime import datetime
 from typing import Dict, Set, List, Optional
 from http.server import HTTPServer, SimpleHTTPRequestHandler
 import threading
+import socket
 
 # ============================================
 # CRYPTO ENGINE
@@ -190,112 +192,6 @@ class Database:
 db = Database()
 
 # ============================================
-# WEBSOCKET SERVER
-# ============================================
-
-class WebSocketServer:
-    def __init__(self):
-        self.connections: Dict[str, Dict[str, websockets.WebSocketServerProtocol]] = {}
-        self.typing: Set[str] = set()
-    
-    async def broadcast(self, group: str, message: dict, exclude: str = None):
-        if group not in self.connections:
-            return
-        disconnected = []
-        for user, ws in self.connections[group].items():
-            if user == exclude:
-                continue
-            try:
-                await ws.send(json.dumps(message))
-            except:
-                disconnected.append(user)
-        for user in disconnected:
-            del self.connections[group][user]
-    
-    async def handler(self, websocket: websockets.WebSocketServerProtocol, path: str):
-        user = None
-        group = None
-        
-        try:
-            async for message in websocket:
-                data = json.loads(message)
-                msg_type = data.get('type')
-                
-                if msg_type == 'join':
-                    user = data['username']
-                    group = data['group']
-                    password = data['password']
-                    
-                    salt = await db.get_group_salt(group)
-                    if not salt:
-                        salt = crypto.generate_salt()
-                        await db.create_group(group, salt, user)
-                    
-                    if group not in self.connections:
-                        self.connections[group] = {}
-                    self.connections[group][user] = websocket
-                    
-                    await db.set_user_status(user, 'online', group)
-                    
-                    # Send history
-                    for msg in await db.get_messages(group):
-                        await websocket.send(json.dumps({
-                            'type': 'history',
-                            'ciphertext': msg['ciphertext'],
-                            'sender': msg['sender'],
-                            'salt': msg['salt']
-                        }))
-                    
-                    # Send online users
-                    online = await db.get_online_users(group)
-                    await self.broadcast(group, {'type': 'users', 'users': online})
-                    
-                    await websocket.send(json.dumps({
-                        'type': 'ready',
-                        'salt': salt,
-                        'group': group
-                    }))
-                    
-                    print(f"[INFO] User {user} joined {group}")
-                
-                elif msg_type == 'message':
-                    ciphertext = data['ciphertext']
-                    salt = data['salt']
-                    
-                    await db.save_message(ciphertext, group, user, salt)
-                    await self.broadcast(group, {
-                        'type': 'message',
-                        'ciphertext': ciphertext,
-                        'sender': user,
-                        'salt': salt,
-                        'time': datetime.now().isoformat()
-                    }, exclude=user)
-                
-                elif msg_type == 'typing':
-                    self.typing.add(user)
-                    await self.broadcast(group, {'type': 'typing', 'user': user}, exclude=user)
-                
-                elif msg_type == 'stop_typing':
-                    self.typing.discard(user)
-                    await self.broadcast(group, {'type': 'stop_typing', 'user': user}, exclude=user)
-        
-        except Exception as e:
-            print(f"[ERROR] {e}")
-        finally:
-            if user and group:
-                if group in self.connections:
-                    self.connections[group].pop(user, None)
-                await db.set_user_status(user, 'offline', group)
-                online = await db.get_online_users(group)
-                await self.broadcast(group, {'type': 'users', 'users': online})
-                print(f"[INFO] User {user} left")
-    
-    async def run(self, host: str = "0.0.0.0", port: int = 8080):
-        async with websockets.serve(self.handler, host, port):
-            print(f"[INFO] WebSocket server on ws://{host}:{port}")
-            await asyncio.Future()
-
-# ============================================
 # HTML PAGE
 # ============================================
 
@@ -439,7 +335,6 @@ HTML_PAGE = '''<!DOCTYPE html>
             .message { max-width: 90%; }
         }
         .menu-btn { display: none; background: transparent; border: 1px solid #00ff41; color: #00ff41; padding: 8px 12px; cursor: pointer; }
-        .hidden { display: none !important; }
     </style>
 </head>
 <body>
@@ -456,10 +351,24 @@ HTML_PAGE = '''<!DOCTYPE html>
         </div>
     </div>
     <div id="chatContainer" class="chat-container">
-        <div class="chat-header"><button class="menu-btn" onclick="toggleSidebar()">☰</button><h2 id="groupName"># LOADING</h2><div class="online-count" id="onlineCount">0 online</div></div>
+        <div class="chat-header">
+            <button class="menu-btn" onclick="toggleSidebar()">☰</button>
+            <h2 id="groupName"># LOADING</h2>
+            <div class="online-count" id="onlineCount">0 online</div>
+        </div>
         <div class="main-content">
-            <div class="sidebar" id="sidebar"><div class="sidebar-header"><h3>> ONLINE USERS</h3></div><div class="online-users" id="usersList"><div>connecting...</div></div></div>
-            <div class="chat-area"><div class="messages" id="messages"><div style="text-align:center;">> connecting to secure server...</div></div><div class="typing-indicator" id="typingIndicator"></div><div class="input-area"><input type="text" id="messageInput" placeholder="> type message..."><button onclick="sendMessage()">SEND</button></div></div>
+            <div class="sidebar" id="sidebar">
+                <div class="sidebar-header"><h3>> ONLINE USERS</h3></div>
+                <div class="online-users" id="usersList"><div>connecting...</div></div>
+            </div>
+            <div class="chat-area">
+                <div class="messages" id="messages"><div style="text-align:center;">> connecting to secure server...</div></div>
+                <div class="typing-indicator" id="typingIndicator"></div>
+                <div class="input-area">
+                    <input type="text" id="messageInput" placeholder="> type message...">
+                    <button onclick="sendMessage()">SEND</button>
+                </div>
+            </div>
         </div>
     </div>
     <script>
@@ -498,8 +407,14 @@ HTML_PAGE = '''<!DOCTYPE html>
                 return;
             }
             
-            // Use the same host as the page, but port 8080 for WebSocket
-            const wsUrl = `wss://${window.location.hostname}:8080`;
+            // Use WebSocket on same host and port
+            let wsUrl;
+            if (window.location.protocol === 'https:') {
+                wsUrl = `wss://${window.location.host}`;
+            } else {
+                wsUrl = `ws://${window.location.host}`;
+            }
+            
             console.log('Connecting to:', wsUrl);
             
             ws = new WebSocket(wsUrl);
@@ -594,7 +509,11 @@ HTML_PAGE = '''<!DOCTYPE html>
 </body>
 </html>'''
 
-class HTTPHandler(SimpleHTTPRequestHandler):
+# ============================================
+# HTTP REQUEST HANDLER
+# ============================================
+
+class CustomHTTPHandler(SimpleHTTPRequestHandler):
     def do_GET(self):
         if self.path == '/' or self.path == '/index.html':
             self.send_response(200)
@@ -608,10 +527,114 @@ class HTTPHandler(SimpleHTTPRequestHandler):
     def log_message(self, format, *args):
         pass
 
-def run_http_server(port=8081):
-    server = HTTPServer(('0.0.0.0', port), HTTPHandler)
+def run_http_server(port):
+    server = HTTPServer(('0.0.0.0', port), CustomHTTPHandler)
     print(f"[INFO] HTTP server on http://0.0.0.0:{port}")
     server.serve_forever()
+
+# ============================================
+# WEBSOCKET SERVER
+# ============================================
+
+class WebSocketChatServer:
+    def __init__(self):
+        self.connections: Dict[str, Dict[str, websockets.WebSocketServerProtocol]] = {}
+        self.typing: Set[str] = set()
+    
+    async def broadcast(self, group: str, message: dict, exclude: str = None):
+        if group not in self.connections:
+            return
+        disconnected = []
+        for user, ws in self.connections[group].items():
+            if user == exclude:
+                continue
+            try:
+                await ws.send(json.dumps(message))
+            except:
+                disconnected.append(user)
+        for user in disconnected:
+            del self.connections[group][user]
+    
+    async def handler(self, websocket: websockets.WebSocketServerProtocol, path: str):
+        user = None
+        group = None
+        
+        try:
+            async for message in websocket:
+                data = json.loads(message)
+                msg_type = data.get('type')
+                
+                if msg_type == 'join':
+                    user = data['username']
+                    group = data['group']
+                    password = data['password']
+                    
+                    salt = await db.get_group_salt(group)
+                    if not salt:
+                        salt = crypto.generate_salt()
+                        await db.create_group(group, salt, user)
+                    
+                    if group not in self.connections:
+                        self.connections[group] = {}
+                    self.connections[group][user] = websocket
+                    
+                    await db.set_user_status(user, 'online', group)
+                    
+                    for msg in await db.get_messages(group):
+                        await websocket.send(json.dumps({
+                            'type': 'history',
+                            'ciphertext': msg['ciphertext'],
+                            'sender': msg['sender'],
+                            'salt': msg['salt']
+                        }))
+                    
+                    online = await db.get_online_users(group)
+                    await self.broadcast(group, {'type': 'users', 'users': online})
+                    
+                    await websocket.send(json.dumps({
+                        'type': 'ready',
+                        'salt': salt,
+                        'group': group
+                    }))
+                    
+                    print(f"[INFO] User {user} joined {group}")
+                
+                elif msg_type == 'message':
+                    ciphertext = data['ciphertext']
+                    salt = data['salt']
+                    
+                    await db.save_message(ciphertext, group, user, salt)
+                    await self.broadcast(group, {
+                        'type': 'message',
+                        'ciphertext': ciphertext,
+                        'sender': user,
+                        'salt': salt,
+                        'time': datetime.now().isoformat()
+                    }, exclude=user)
+                
+                elif msg_type == 'typing':
+                    self.typing.add(user)
+                    await self.broadcast(group, {'type': 'typing', 'user': user}, exclude=user)
+                
+                elif msg_type == 'stop_typing':
+                    self.typing.discard(user)
+                    await self.broadcast(group, {'type': 'stop_typing', 'user': user}, exclude=user)
+        
+        except Exception as e:
+            print(f"[ERROR] {e}")
+        finally:
+            if user and group:
+                if group in self.connections:
+                    self.connections[group].pop(user, None)
+                await db.set_user_status(user, 'offline', group)
+                online = await db.get_online_users(group)
+                await self.broadcast(group, {'type': 'users', 'users': online})
+                print(f"[INFO] User {user} left")
+    
+    async def run(self, host: str = "0.0.0.0", port: int = 8080):
+        async with websockets.serve(self.handler, host, port):
+            print(f"[INFO] WebSocket server on ws://{host}:{port}")
+            await asyncio.Future()
 
 # ============================================
 # MAIN
@@ -632,24 +655,21 @@ print("""
 ║              SECURE MESSAGING SYSTEM                              ║
 ║           Messages Auto-Delete After 24 Hours                     ║
 ║                    Author: Mugisha Pc                             ║
-║                    Version: 9.0.0                                 ║
+║                    Version: 10.0.0                                ║
 ║                                                                   ║
 ╚═══════════════════════════════════════════════════════════════════╝
 """)
 
-print(f"[INFO] ABAVANDIMWE v9.0 starting")
-print(f"[INFO] Port: {PORT}")
-print(f"[INFO] WebSocket and HTTP both on port {PORT}")
-print(f"[INFO] Open https://abavandimwe.onrender.com in your browser")
+print(f"[INFO] ABAVANDIMWE v10.0 starting on port {PORT}")
 
-# Start HTTP server with same port
+# Start HTTP server in thread
 http_thread = threading.Thread(target=run_http_server, args=(PORT,), daemon=True)
 http_thread.start()
 
-# Start WebSocket server on same port
+# Start WebSocket server
 async def main():
     await db.connect()
-    ws_server = WebSocketServer()
+    ws_server = WebSocketChatServer()
     await ws_server.run('0.0.0.0', PORT)
 
 asyncio.run(main())
