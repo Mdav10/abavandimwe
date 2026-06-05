@@ -17,8 +17,8 @@ class Database:
     async def connect(self):
         self.pool = await asyncpg.create_pool(
             self.url,
-            min_size=5,
-            max_size=20,
+            min_size=2,
+            max_size=10,
             command_timeout=60
         )
         await self._init_tables()
@@ -58,6 +58,7 @@ class Database:
             """)
             
             await conn.execute("CREATE INDEX IF NOT EXISTS idx_expires ON messages(expires_at)")
+            logger.info("✅ Tables ready")
     
     async def save_message(self, ciphertext: str, group: str, sender: str, salt: str):
         async with self.pool.acquire() as conn:
@@ -114,8 +115,8 @@ class Database:
         while True:
             await asyncio.sleep(3600)
             async with self.pool.acquire() as conn:
-                result = await conn.execute("DELETE FROM messages WHERE expires_at < NOW()")
-                logger.info(f"🧹 Cleanup completed")
+                await conn.execute("DELETE FROM messages WHERE expires_at < NOW()")
+                logger.info("🧹 Cleaned expired messages")
     
     async def close(self):
         if self.pool:
