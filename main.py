@@ -63,9 +63,39 @@ class Database:
     def _init_db(self):
         conn = sqlite3.connect(self.db_path)
         c = conn.cursor()
-        c.execute('CREATE TABLE IF NOT EXISTS messages (id INTEGER PRIMARY KEY, ciphertext TEXT, group_name TEXT, sender TEXT, salt TEXT, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, expires_at TIMESTAMP DEFAULT (datetime("now", "+24 hours")))')
-        c.execute('CREATE TABLE IF NOT EXISTS users (username TEXT PRIMARY KEY, status TEXT, current_group TEXT, last_seen TIMESTAMP)')
-        c.execute('CREATE TABLE IF NOT EXISTS groups (group_name TEXT PRIMARY KEY, salt TEXT, created_by TEXT)')
+        
+        # Messages table
+        c.execute('''
+            CREATE TABLE IF NOT EXISTS messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ciphertext TEXT,
+                group_name TEXT,
+                sender TEXT,
+                salt TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                expires_at TIMESTAMP DEFAULT (datetime('now', '+24 hours'))
+            )
+        ''')
+        
+        # Users table
+        c.execute('''
+            CREATE TABLE IF NOT EXISTS users (
+                username TEXT PRIMARY KEY,
+                status TEXT,
+                current_group TEXT,
+                last_seen TIMESTAMP
+            )
+        ''')
+        
+        # Groups table
+        c.execute('''
+            CREATE TABLE IF NOT EXISTS groups (
+                group_name TEXT PRIMARY KEY,
+                salt TEXT,
+                created_by TEXT
+            )
+        ''')
+        
         conn.commit()
         conn.close()
         print("[INFO] Database ready")
@@ -74,7 +104,8 @@ class Database:
         def _save():
             conn = sqlite3.connect(self.db_path)
             c = conn.cursor()
-            c.execute('INSERT INTO messages (ciphertext, group_name, sender, salt) VALUES (?,?,?,?)', (ciphertext, group, sender, salt))
+            c.execute('INSERT INTO messages (ciphertext, group_name, sender, salt) VALUES (?, ?, ?, ?)',
+                     (ciphertext, group, sender, salt))
             conn.commit()
             conn.close()
         await asyncio.to_thread(_save)
@@ -83,15 +114,18 @@ class Database:
         def _get():
             conn = sqlite3.connect(self.db_path)
             c = conn.cursor()
-            c.execute('SELECT ciphertext, sender, salt FROM messages WHERE group_name=? AND created_at > datetime("now","-24 hours") ORDER BY id ASC', (group,))
-            return [{'ciphertext': r[0], 'sender': r[1], 'salt': r[2]} for r in c.fetchall()]
+            c.execute('SELECT ciphertext, sender, salt FROM messages WHERE group_name = ? AND created_at > datetime("now", "-24 hours") ORDER BY id ASC', (group,))
+            rows = c.fetchall()
+            conn.close()
+            return [{'ciphertext': r[0], 'sender': r[1], 'salt': r[2]} for r in rows]
         return await asyncio.to_thread(_get)
     
     async def set_user_status(self, username: str, status: str, group: str = None):
         def _set():
             conn = sqlite3.connect(self.db_path)
             c = conn.cursor()
-            c.execute('INSERT OR REPLACE INTO users (username, status, current_group, last_seen) VALUES (?,?,?,CURRENT_TIMESTAMP)', (username, status, group))
+            c.execute('INSERT OR REPLACE INTO users (username, status, current_group, last_seen) VALUES (?, ?, ?, CURRENT_TIMESTAMP)',
+                     (username, status, group))
             conn.commit()
             conn.close()
         await asyncio.to_thread(_set)
@@ -100,17 +134,20 @@ class Database:
         def _get():
             conn = sqlite3.connect(self.db_path)
             c = conn.cursor()
-            c.execute('SELECT username FROM users WHERE status="online" AND current_group=? AND last_seen > datetime("now","-2 minutes")', (group,))
-            return [r[0] for r in c.fetchall()]
+            c.execute('SELECT username FROM users WHERE status = "online" AND current_group = ? AND last_seen > datetime("now", "-2 minutes")', (group,))
+            rows = c.fetchall()
+            conn.close()
+            return [r[0] for r in rows]
         return await asyncio.to_thread(_get)
     
     async def get_group_salt(self, group: str):
         def _get():
             conn = sqlite3.connect(self.db_path)
             c = conn.cursor()
-            c.execute('SELECT salt FROM groups WHERE group_name=?', (group,))
-            r = c.fetchone()
-            return r[0] if r else None
+            c.execute('SELECT salt FROM groups WHERE group_name = ?', (group,))
+            row = c.fetchone()
+            conn.close()
+            return row[0] if row else None
         return await asyncio.to_thread(_get)
     
     async def create_group(self, group: str, salt: str, creator: str):
@@ -118,7 +155,7 @@ class Database:
             conn = sqlite3.connect(self.db_path)
             c = conn.cursor()
             try:
-                c.execute('INSERT INTO groups (group_name, salt, created_by) VALUES (?,?,?)', (group, salt, creator))
+                c.execute('INSERT INTO groups (group_name, salt, created_by) VALUES (?, ?, ?)', (group, salt, creator))
                 conn.commit()
             except:
                 pass
@@ -142,7 +179,7 @@ class Database:
 db = Database()
 
 # ============================================
-# HTML (Embedded)
+# HTML
 # ============================================
 
 HTML = '''<!DOCTYPE html>
@@ -326,10 +363,12 @@ class ChatServer:
         self.typing: Set[str] = set()
     
     async def broadcast(self, group: str, msg: dict, exclude=None):
-        if group not in self.conns: return
+        if group not in self.conns:
+            return
         dead = []
         for user, ws in self.conns[group].items():
-            if user == exclude: continue
+            if user == exclude:
+                continue
             try:
                 await ws.send(json.dumps(msg))
             except:
@@ -384,8 +423,8 @@ class ChatServer:
                     self.typing.discard(user)
                     await self.broadcast(group, {'type':'stop_typing','user':user}, exclude=user)
         
-        except:
-            pass
+        except Exception as e:
+            print(f"[ERROR] {e}")
         finally:
             if user and group:
                 if group in self.conns:
@@ -396,7 +435,25 @@ class ChatServer:
                 print(f"[-] {user} left {group}")
 
 # ============================================
-# MAIN - Single server that does both
+# HTTP HANDLER
+# ============================================
+
+async def http_handler(reader, writer):
+    try:
+        data = await reader.read(1024)
+        if data:
+            req = data.decode().split(' ')[0] if data else ''
+            if req == 'GET':
+                response = f'HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {len(HTML)}\r\nConnection: close\r\n\r\n{HTML}'
+                writer.write(response.encode())
+                await writer.drain()
+        writer.close()
+        await writer.wait_closed()
+    except:
+        pass
+
+# ============================================
+# MAIN
 # ============================================
 
 PORT = int(os.getenv('PORT', 8080))
@@ -412,28 +469,12 @@ print("""
 
 print(f"[INFO] Starting on port {PORT}")
 
-async def http_handler(reader, writer):
-    try:
-        data = await reader.read(1024)
-        req = data.decode().split(' ')[0] if data else ''
-        if req == 'GET':
-            response = f'HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {len(HTML)}\r\nConnection: close\r\n\r\n{HTML}'
-            writer.write(response.encode())
-            await writer.drain()
-        writer.close()
-        await writer.wait_closed()
-    except:
-        pass
-
 async def main():
     await db.connect()
     asyncio.create_task(db.start_cleaner())
     
-    # Start WebSocket server
     server = ChatServer()
     ws_server = await websockets.serve(server.handle, '0.0.0.0', PORT)
-    
-    # Start HTTP server on same port
     http_server = await asyncio.start_server(http_handler, '0.0.0.0', PORT)
     
     print(f"[INFO] Server running on port {PORT}")
