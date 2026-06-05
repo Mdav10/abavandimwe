@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-ABAVANDIMWE - Professional Secure Messaging System
+ABAVANDIMWE - Secure Messaging System
 Author: Mugisha Pc
-Version: 1.0 - Production Ready
+Single server for HTTP + WebSocket
 """
 
 import asyncio
@@ -16,7 +16,7 @@ import os
 from datetime import datetime
 from typing import Dict, Set
 
-# ========== CRYPTOGRAPHY ==========
+# ========== CRYPTO ==========
 class Crypto:
     @staticmethod
     def generate_salt() -> str:
@@ -56,14 +56,14 @@ class Database:
         conn = sqlite3.connect(self.db_path)
         c = conn.cursor()
         c.execute('''CREATE TABLE IF NOT EXISTS messages
-                    (id INTEGER PRIMARY KEY, ciphertext TEXT, group_name TEXT, sender TEXT, salt TEXT, created_at TIMESTAMP)''')
+                    (id INTEGER PRIMARY KEY, ciphertext TEXT, group_name TEXT, sender TEXT, salt TEXT, created_at TEXT)''')
         c.execute('''CREATE TABLE IF NOT EXISTS users
-                    (username TEXT PRIMARY KEY, status TEXT, current_group TEXT, last_seen TIMESTAMP)''')
+                    (username TEXT PRIMARY KEY, status TEXT, current_group TEXT, last_seen TEXT)''')
         c.execute('''CREATE TABLE IF NOT EXISTS groups
                     (group_name TEXT PRIMARY KEY, salt TEXT, created_by TEXT)''')
         conn.commit()
         conn.close()
-        print("[✓] Database initialized")
+        print("[✓] Database ready")
     
     def save_message(self, ciphertext: str, group: str, sender: str, salt: str):
         conn = sqlite3.connect(self.db_path)
@@ -117,29 +117,27 @@ class Database:
 
 db = Database()
 
-# ========== HTML CLIENT ==========
+# ========== HTML ==========
 HTML = '''<!DOCTYPE html>
 <html>
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>ABAVANDIMWE | Secure Chat</title>
+    <title>ABAVANDIMWE</title>
     <style>
         *{margin:0;padding:0;box-sizing:border-box;}
         body{font-family:'Courier New',monospace;background:#0a0a0f;height:100vh;color:#0f0;}
-        .screen{position:fixed;top:0;left:0;right:0;bottom:0;display:flex;justify-content:center;align-items:center;background:#0a0a0f;z-index:1000;}
+        .login{position:fixed;top:0;left:0;right:0;bottom:0;display:flex;justify-content:center;align-items:center;background:#0a0a0f;z-index:1000;}
         .card{background:#050508;border:2px solid #0f0;border-radius:10px;padding:40px;width:90%;max-width:400px;}
-        h1{text-align:center;margin-bottom:10px;font-size:28px;}
+        h1{text-align:center;margin-bottom:10px;}
         .sub{text-align:center;margin-bottom:30px;font-size:12px;color:#888;}
-        input{width:100%;padding:12px;margin:10px 0;background:#111;border:1px solid #0f0;border-radius:5px;color:#0f0;font-family:monospace;font-size:14px;}
+        input{width:100%;padding:12px;margin:10px 0;background:#111;border:1px solid #0f0;border-radius:5px;color:#0f0;font-family:monospace;}
         input:focus{outline:none;box-shadow:0 0 10px rgba(0,255,0,0.3);}
-        button{width:100%;padding:12px;margin-top:20px;background:transparent;border:2px solid #0f0;border-radius:5px;color:#0f0;font-size:16px;cursor:pointer;font-family:monospace;}
+        button{width:100%;padding:12px;margin-top:20px;background:transparent;border:2px solid #0f0;border-radius:5px;color:#0f0;font-size:16px;cursor:pointer;}
         button:hover{background:#0f0;color:#000;}
         .chat{display:none;width:100%;height:100%;flex-direction:column;}
         .chat.active{display:flex;}
-        .header{padding:15px 20px;background:#050508;border-bottom:1px solid #0f0;display:flex;justify-content:space-between;align-items:center;}
-        .header h2{font-size:18px;}
-        .online-badge{font-size:12px;padding:4px 10px;border:1px solid #0f0;border-radius:20px;}
+        .header{padding:15px 20px;background:#050508;border-bottom:1px solid #0f0;display:flex;justify-content:space-between;}
         .main{flex:1;display:flex;overflow:hidden;}
         .sidebar{width:250px;background:#050508;border-right:1px solid #0f0;display:flex;flex-direction:column;}
         .sidebar h3{padding:15px;border-bottom:1px solid #0f0;font-size:14px;}
@@ -158,286 +156,122 @@ HTML = '''<!DOCTYPE html>
         .input-area{padding:15px 20px;background:#050508;border-top:1px solid #0f0;display:flex;gap:10px;}
         .input-area input{flex:1;margin:0;}
         .input-area button{width:auto;margin:0;padding:12px 20px;}
-        .footer{text-align:center;padding:8px;font-size:10px;color:#444;border-top:1px solid #0f0;}
     </style>
 </head>
 <body>
-<div id="loginScreen" class="screen">
+<div id="login" class="login">
     <div class="card">
         <h1># ABAVANDIMWE</h1>
-        <div class="sub">Secure Encrypted Messaging by Mugisha Pc</div>
+        <div class="sub">by Mugisha Pc</div>
         <input type="text" id="username" placeholder="USERNAME">
-        <input type="text" id="group" placeholder="GROUP NAME">
-        <input type="password" id="password" placeholder="GROUP PASSWORD">
-        <button onclick="connect()">▶ CONNECT</button>
-        <div style="text-align:center;margin-top:20px;font-size:10px;color:#444;">🔒 AES-256 | ⏰ Auto-Delete 24h</div>
+        <input type="text" id="group" placeholder="GROUP">
+        <input type="password" id="password" placeholder="PASSWORD">
+        <button onclick="connect()">CONNECT</button>
+        <div style="text-align:center;margin-top:20px;font-size:10px;">🔒 AES-256 | ⏰ Auto-Delete 24h</div>
     </div>
 </div>
-<div id="chatScreen" class="chat">
-    <div class="header">
-        <h2 id="groupTitle"># LOADING</h2>
-        <span class="online-badge" id="onlineCount">0 online</span>
-    </div>
+<div id="chat" class="chat">
+    <div class="header"><h2 id="groupTitle"># LOADING</h2><span id="onlineCount">0 online</span></div>
     <div class="main">
-        <div class="sidebar">
-            <h3>● ONLINE USERS</h3>
-            <div class="users" id="usersList"><div class="user">connecting...</div></div>
-        </div>
-        <div class="chatarea">
-            <div class="messages" id="messages"><div style="text-align:center;">connecting to server...</div></div>
-            <div class="typing" id="typingIndicator"></div>
-            <div class="input-area">
-                <input type="text" id="messageInput" placeholder="Type encrypted message...">
-                <button onclick="sendMessage()">SEND</button>
-            </div>
-            <div class="footer">🔐 End-to-End Encrypted | Messages Self-Destruct in 24 Hours</div>
-        </div>
+        <div class="sidebar"><h3>● ONLINE</h3><div class="users" id="users">connecting...</div></div>
+        <div class="chatarea"><div class="messages" id="msgs"><div style="text-align:center;">connecting...</div></div><div class="typing" id="typing"></div><div class="input-area"><input type="text" id="msgInput" placeholder="Type message..."><button onclick="sendMsg()">SEND</button></div></div>
     </div>
 </div>
 <script>
-    let ws, username, group, password, groupSalt;
-    let typingTimeout;
-    
-    async function encrypt(text, pwd, salt) {
-        const enc = new TextEncoder();
-        const keyMaterial = await crypto.subtle.importKey('raw', enc.encode(pwd), 'PBKDF2', false, ['deriveKey']);
-        const key = await crypto.subtle.deriveKey({
-            name: 'PBKDF2', salt: enc.encode(salt), iterations: 100000, hash: 'SHA-256'
-        }, keyMaterial, { name: 'AES-GCM', length: 256 }, false, ['encrypt']);
-        const iv = crypto.getRandomValues(new Uint8Array(12));
-        const encrypted = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, enc.encode(text));
-        const combined = new Uint8Array(iv.length + encrypted.byteLength);
-        combined.set(iv, 0);
-        combined.set(new Uint8Array(encrypted), iv.length);
-        return btoa(String.fromCharCode(...combined));
-    }
-    
-    async function decrypt(encrypted, pwd, salt) {
-        const combined = Uint8Array.from(atob(encrypted), c => c.charCodeAt(0));
-        const iv = combined.slice(0, 12);
-        const data = combined.slice(12);
-        const enc = new TextEncoder();
-        const keyMaterial = await crypto.subtle.importKey('raw', enc.encode(pwd), 'PBKDF2', false, ['deriveKey']);
-        const key = await crypto.subtle.deriveKey({
-            name: 'PBKDF2', salt: enc.encode(salt), iterations: 100000, hash: 'SHA-256'
-        }, keyMaterial, { name: 'AES-GCM', length: 256 }, false, ['decrypt']);
-        const decrypted = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, data);
-        return new TextDecoder().decode(decrypted);
-    }
-    
-    function connect() {
-        username = document.getElementById('username').value.trim();
-        group = document.getElementById('group').value.trim();
-        password = document.getElementById('password').value;
-        if (!username || !group || !password) {
-            alert('Please fill all fields');
-            return;
-        }
-        
-        const wsUrl = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host;
-        ws = new WebSocket(wsUrl);
-        
-        ws.onopen = () => {
-            ws.send(JSON.stringify({ type: 'join', username, group, password }));
-        };
-        
-        ws.onmessage = async (e) => {
-            const data = JSON.parse(e.data);
-            if (data.type === 'ready') {
-                groupSalt = data.salt;
-                document.getElementById('loginScreen').style.display = 'none';
-                document.getElementById('chatScreen').classList.add('active');
-                document.getElementById('groupTitle').innerText = '# ' + data.group;
-            } else if (data.type === 'message') {
-                try {
-                    const decrypted = await decrypt(data.ciphertext, password, data.salt);
-                    addMessage(data.sender, decrypted, data.sender === username);
-                } catch(e) {
-                    addMessage(data.sender, '🔒 [Encrypted]', data.sender === username);
-                }
-            } else if (data.type === 'history') {
-                try {
-                    const decrypted = await decrypt(data.ciphertext, password, data.salt);
-                    addMessage(data.sender, decrypted, data.sender === username);
-                } catch(e) {
-                    addMessage(data.sender, '🔒 [Encrypted]', data.sender === username);
-                }
-            } else if (data.type === 'users') {
-                document.getElementById('onlineCount').innerText = data.users.length + ' online';
-                const usersDiv = document.getElementById('usersList');
-                if (data.users.length === 0) {
-                    usersDiv.innerHTML = '<div class="user">> no users online</div>';
-                } else {
-                    usersDiv.innerHTML = data.users.map(u => '<div class="user">● ' + escapeHtml(u) + '</div>').join('');
-                }
-            } else if (data.type === 'typing') {
-                document.getElementById('typingIndicator').innerHTML = '✏️ ' + data.user + ' is typing...';
-            } else if (data.type === 'stop_typing') {
-                document.getElementById('typingIndicator').innerHTML = '';
-            }
-        };
-        
-        ws.onerror = () => {
-            alert('Connection failed. Server may be starting up. Refresh and try again.');
-        };
-    }
-    
-    function addMessage(sender, text, isSent) {
-        const messagesDiv = document.getElementById('messages');
-        if (messagesDiv.children.length === 1 && messagesDiv.children[0].innerText.includes('connecting')) {
-            messagesDiv.innerHTML = '';
-        }
-        const msgDiv = document.createElement('div');
-        msgDiv.className = 'msg ' + (isSent ? 'sent' : 'received');
-        const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-        msgDiv.innerHTML = '<div class="sender">' + (isSent ? 'YOU' : sender) + ' • ' + time + '</div><div class="bubble">' + escapeHtml(text) + '</div>';
-        messagesDiv.appendChild(msgDiv);
-        messagesDiv.scrollTop = messagesDiv.scrollHeight;
-    }
-    
-    function escapeHtml(text) {
-        const div = document.createElement('div');
-        div.textContent = text;
-        return div.innerHTML;
-    }
-    
-    const msgInput = document.getElementById('messageInput');
-    if (msgInput) {
-        msgInput.addEventListener('input', () => {
-            if (ws && ws.readyState === WebSocket.OPEN) {
-                ws.send(JSON.stringify({ type: 'typing' }));
-                clearTimeout(typingTimeout);
-                typingTimeout = setTimeout(() => {
-                    ws.send(JSON.stringify({ type: 'stop_typing' }));
-                }, 1000);
-            }
-        });
-        msgInput.addEventListener('keypress', (e) => {
-            if (e.key === 'Enter') sendMessage();
-        });
-    }
-    
-    async function sendMessage() {
-        const input = document.getElementById('messageInput');
-        const text = input.value.trim();
-        if (!text || !ws || ws.readyState !== WebSocket.OPEN) return;
-        try {
-            const ciphertext = await encrypt(text, password, groupSalt);
-            ws.send(JSON.stringify({ type: 'message', ciphertext, salt: groupSalt }));
-            input.value = '';
-        } catch(e) {
-            console.error(e);
-        }
-    }
+let ws, username, group, password, salt, typingTimeout;
+async function encrypt(t,p,s){const e=new TextEncoder(),km=await crypto.subtle.importKey('raw',e.encode(p),'PBKDF2',false,['deriveKey']),k=await crypto.subtle.deriveKey({name:'PBKDF2',salt:e.encode(s),iterations:100000,hash:'SHA-256'},km,{name:'AES-GCM',length:256},false,['encrypt']),iv=crypto.getRandomValues(new Uint8Array(12)),enc=await crypto.subtle.encrypt({name:'AES-GCM',iv},k,e.encode(t)),c=new Uint8Array(iv.length+enc.byteLength);c.set(iv,0),c.set(new Uint8Array(enc),iv.length);return btoa(String.fromCharCode(...c));}
+async function decrypt(c,p,s){const d=Uint8Array.from(atob(c),c=>c.charCodeAt(0)),iv=d.slice(0,12),data=d.slice(12),e=new TextEncoder(),km=await crypto.subtle.importKey('raw',e.encode(p),'PBKDF2',false,['deriveKey']),k=await crypto.subtle.deriveKey({name:'PBKDF2',salt:e.encode(s),iterations:100000,hash:'SHA-256'},km,{name:'AES-GCM',length:256},false,['decrypt']),dec=await crypto.subtle.decrypt({name:'AES-GCM',iv},k,data);return new TextDecoder().decode(dec);}
+function connect(){username=document.getElementById('username').value.trim();group=document.getElementById('group').value.trim();password=document.getElementById('password').value;if(!username||!group||!password){alert('Fill all fields');return;}const wsUrl=(location.protocol==='https:'?'wss://':'ws://')+location.host;ws=new WebSocket(wsUrl);ws.onopen=()=>ws.send(JSON.stringify({type:'join',username,group,password}));ws.onmessage=async(e)=>{let d=JSON.parse(e.data);if(d.type==='ready'){salt=d.salt;document.getElementById('login').style.display='none';document.getElementById('chat').classList.add('active');document.getElementById('groupTitle').innerText='# '+d.group;}else if(d.type==='message'){try{let dec=await decrypt(d.ciphertext,password,d.salt);addMsg(d.sender,dec,d.sender===username);}catch(e){addMsg(d.sender,'🔒 ENCRYPTED',d.sender===username);}}else if(d.type==='history'){try{let dec=await decrypt(d.ciphertext,password,d.salt);addMsg(d.sender,dec,d.sender===username);}catch(e){addMsg(d.sender,'🔒 ENCRYPTED',d.sender===username);}}else if(d.type==='users'){document.getElementById('onlineCount').innerText=d.users.length+' online';let ud=document.getElementById('users');if(d.users.length===0)ud.innerHTML='<div class="user">> no users</div>';else ud.innerHTML=d.users.map(u=>'<div class="user">● '+escapeHtml(u)+'</div>').join('');}else if(d.type==='typing'){document.getElementById('typing').innerHTML='✏️ '+d.user+' is typing...';}else if(d.type==='stop_typing'){document.getElementById('typing').innerHTML='';}};ws.onerror=()=>alert('Connection failed');}
+function addMsg(sender,text,isSent){let m=document.getElementById('msgs');if(m.children.length===1&&m.children[0].innerText.includes('connecting'))m.innerHTML='';let div=document.createElement('div');div.className='msg '+(isSent?'sent':'received');div.innerHTML='<div class="sender">'+(isSent?'YOU':sender)+'</div><div class="bubble">'+escapeHtml(text)+'</div>';m.appendChild(div);m.scrollTop=m.scrollHeight;}
+function escapeHtml(t){let d=document.createElement('div');d.textContent=t;return d.innerHTML;}
+document.getElementById('msgInput')?.addEventListener('input',function(){if(ws&&ws.readyState===WebSocket.OPEN){ws.send(JSON.stringify({type:'typing'}));clearTimeout(typingTimeout);typingTimeout=setTimeout(()=>ws.send(JSON.stringify({type:'stop_typing'})),1000);}});
+document.getElementById('msgInput')?.addEventListener('keypress',function(e){if(e.key==='Enter')sendMsg();});
+async function sendMsg(){let i=document.getElementById('msgInput'),t=i.value.trim();if(!t||!ws||ws.readyState!==WebSocket.OPEN)return;try{let c=await encrypt(t,password,salt);ws.send(JSON.stringify({type:'message',ciphertext:c,salt:salt}));i.value='';}catch(e){}}
 </script>
 </body>
 </html>'''
 
-# ========== WEBSOCKET SERVER ==========
-class WebSocketHandler:
-    def __init__(self):
-        self.connections: Dict[str, Dict[str, websockets.WebSocketServerProtocol]] = {}
-    
-    async def broadcast(self, group: str, message: dict, exclude: str = None):
-        if group not in self.connections:
-            return
-        dead = []
-        for user, ws in self.connections[group].items():
-            if user == exclude:
-                continue
-            try:
-                await ws.send(json.dumps(message))
-            except:
-                dead.append(user)
-        for user in dead:
-            del self.connections[group][user]
-    
-    async def handle(self, websocket, path):
-        username = None
-        group = None
-        
-        try:
-            async for message in websocket:
-                data = json.loads(message)
-                msg_type = data.get('type')
-                
-                if msg_type == 'join':
-                    username = data['username']
-                    group = data['group']
-                    password = data['password']
-                    
-                    # Get or create group salt
-                    salt = db.get_group_salt(group)
-                    if not salt:
-                        salt = crypto.generate_salt()
-                        db.create_group(group, salt, username)
-                    
-                    # Add connection
-                    if group not in self.connections:
-                        self.connections[group] = {}
-                    self.connections[group][username] = websocket
-                    
-                    # Update user status
-                    db.set_user_status(username, 'online', group)
-                    
-                    # Send message history
-                    for msg in db.get_messages(group):
-                        await websocket.send(json.dumps({
-                            'type': 'history',
-                            'ciphertext': msg['ciphertext'],
-                            'sender': msg['sender'],
-                            'salt': msg['salt']
-                        }))
-                    
-                    # Send online users
-                    online_users = db.get_online_users(group)
-                    await self.broadcast(group, {'type': 'users', 'users': online_users})
-                    
-                    # Send ready signal
-                    await websocket.send(json.dumps({
-                        'type': 'ready',
-                        'salt': salt,
-                        'group': group
-                    }))
-                    
-                    print(f"[+] {username} joined {group}")
-                
-                elif msg_type == 'message':
-                    ciphertext = data['ciphertext']
-                    salt = data['salt']
-                    
-                    db.save_message(ciphertext, group, username, salt)
-                    await self.broadcast(group, {
-                        'type': 'message',
-                        'ciphertext': ciphertext,
-                        'sender': username,
-                        'salt': salt
-                    }, exclude=username)
-                
-                elif msg_type == 'typing':
-                    await self.broadcast(group, {'type': 'typing', 'user': username}, exclude=username)
-                
-                elif msg_type == 'stop_typing':
-                    await self.broadcast(group, {'type': 'stop_typing', 'user': username}, exclude=username)
-        
-        except Exception as e:
-            print(f"[!] Error: {e}")
-        finally:
-            if username and group:
-                if group in self.connections:
-                    self.connections[group].pop(username, None)
-                db.set_user_status(username, 'offline', group)
-                online_users = db.get_online_users(group)
-                await self.broadcast(group, {'type': 'users', 'users': online_users})
-                print(f"[-] {username} left {group}")
+# ========== WEBSOCKET HANDLER ==========
+connections: Dict[str, Dict[str, websockets.WebSocketServerProtocol]] = {}
+typing_users: Set[str] = set()
 
-# ========== HTTP SERVER ==========
+async def broadcast(group: str, msg: dict, exclude: str = None):
+    if group not in connections:
+        return
+    dead = []
+    for user, ws in connections[group].items():
+        if user == exclude:
+            continue
+        try:
+            await ws.send(json.dumps(msg))
+        except:
+            dead.append(user)
+    for user in dead:
+        del connections[group][user]
+
+async def ws_handler(websocket, path):
+    username = None
+    group = None
+    try:
+        async for message in websocket:
+            data = json.loads(message)
+            t = data.get('type')
+            
+            if t == 'join':
+                username = data['username']
+                group = data['group']
+                pwd = data['password']
+                
+                salt = db.get_group_salt(group)
+                if not salt:
+                    salt = crypto.generate_salt()
+                    db.create_group(group, salt, username)
+                
+                if group not in connections:
+                    connections[group] = {}
+                connections[group][username] = websocket
+                
+                db.set_user_status(username, 'online', group)
+                
+                for msg in db.get_messages(group):
+                    await websocket.send(json.dumps({'type': 'history', 'ciphertext': msg['ciphertext'], 'sender': msg['sender'], 'salt': msg['salt']}))
+                
+                online = db.get_online_users(group)
+                await broadcast(group, {'type': 'users', 'users': online})
+                
+                await websocket.send(json.dumps({'type': 'ready', 'salt': salt, 'group': group}))
+                print(f"[+] {username} joined {group}")
+            
+            elif t == 'message':
+                cipher = data['ciphertext']
+                salt = data['salt']
+                db.save_message(cipher, group, username, salt)
+                await broadcast(group, {'type': 'message', 'ciphertext': cipher, 'sender': username, 'salt': salt}, exclude=username)
+            
+            elif t == 'typing':
+                await broadcast(group, {'type': 'typing', 'user': username}, exclude=username)
+            
+            elif t == 'stop_typing':
+                await broadcast(group, {'type': 'stop_typing', 'user': username}, exclude=username)
+    
+    except Exception as e:
+        print(f"[!] Error: {e}")
+    finally:
+        if username and group:
+            if group in connections:
+                connections[group].pop(username, None)
+            db.set_user_status(username, 'offline', group)
+            online = db.get_online_users(group)
+            await broadcast(group, {'type': 'users', 'users': online})
+            print(f"[-] {username} left {group}")
+
+# ========== HTTP HANDLER ==========
 async def http_handler(reader, writer):
     try:
         data = await reader.read(1024)
         if data:
-            request = data.decode().split(' ')[0] if data else ''
-            if request == 'GET':
+            req = data.decode().split(' ')[0] if data else ''
+            if req == 'GET':
                 response = f'HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {len(HTML)}\r\nConnection: close\r\n\r\n{HTML}'
                 writer.write(response.encode())
                 await writer.drain()
@@ -450,34 +284,23 @@ async def http_handler(reader, writer):
 PORT = int(os.getenv('PORT', 8080))
 
 print("""
-╔════════════════════════════════════════════════════════════╗
-║                                                            ║
-║   █████╗ ██████╗  █████╗ ██╗   ██╗ █████╗ ███╗   ██╗     ║
-║  ██╔══██╗██╔══██╗██╔══██╗██║   ██║██╔══██╗████╗  ██║     ║
-║  ███████║██████╔╝███████║██║   ██║███████║██╔██╗ ██║     ║
-║  ██╔══██║██╔══██╗██╔══██║╚██╗ ██╔╝██╔══██║██║╚██╗██║     ║
-║  ██║  ██║██████╔╝██║  ██║ ╚████╔╝ ██║  ██║██║ ╚████║     ║
-║  ╚═╝  ╚═╝╚═════╝ ╚═╝  ╚═╝  ╚═══╝  ╚═╝  ╚═╝╚═╝  ╚═══╝     ║
-║                                                            ║
-║         PROFESSIONAL SECURE MESSAGING SYSTEM               ║
-║              MESSAGES AUTO-DELETE AFTER 24H               ║
-║                    AUTHOR: MUGISHA PC                      ║
-║                    VERSION: 1.0.0                          ║
-║                                                            ║
-╚════════════════════════════════════════════════════════════╝
+╔════════════════════════════════════════════════╗
+║     ABAVANDIMWE - Secure Messaging System     ║
+║          Messages Auto-Delete 24h             ║
+║              Author: Mugisha Pc               ║
+╚════════════════════════════════════════════════╝
 """)
 
-print(f"[✓] Starting server on port {PORT}")
-print(f"[✓] Database: SQLite (abavandimwe.db)")
-print(f"[✓] Encryption: AES-256-GCM")
-print(f"[✓] Auto-delete: 24 hours")
+print(f"[✓] Starting on port {PORT}")
 print(f"[✓] Open: https://abavandimwe.onrender.com")
 
 async def main():
-    handler = WebSocketHandler()
-    ws_server = await websockets.serve(handler.handle, '0.0.0.0', PORT)
+    # Start WebSocket server
+    ws_server = await websockets.serve(ws_handler, '0.0.0.0', PORT)
+    # Start HTTP server on the same port
     http_server = await asyncio.start_server(http_handler, '0.0.0.0', PORT)
-    print(f"[✓] Server running! Ready for connections.")
+    
+    print(f"[✓] Both HTTP and WebSocket running on port {PORT}")
     await asyncio.gather(ws_server.wait_closed(), http_server.wait_closed())
 
 asyncio.run(main())
