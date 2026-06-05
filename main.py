@@ -1,12 +1,11 @@
 """
 ABAVANDIMWE - Professional Secure Messaging System
 Author: Mugisha Pc
-Deployed on Render - 100% Working
+Mobile Optimized + Fixed Messaging
 """
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request
 from fastapi.responses import HTMLResponse
-from fastapi.staticfiles import StaticFiles
 import asyncio
 import json
 import sqlite3
@@ -17,8 +16,7 @@ from datetime import datetime
 from typing import Dict, Set
 import os
 
-# ========== CONFIGURATION ==========
-app = FastAPI(title="ABAVANDIMWE", description="Secure Messaging System")
+app = FastAPI(title="ABAVANDIMWE")
 
 # ========== CRYPTOGRAPHY ==========
 class Crypto:
@@ -81,7 +79,7 @@ class Database:
                      created_at TEXT)''')
         conn.commit()
         conn.close()
-        print("[✓] Database initialized")
+        print("[✓] Database ready")
     
     def save_message(self, ciphertext: str, group: str, sender: str, salt: str):
         conn = sqlite3.connect(self.db_path)
@@ -140,7 +138,6 @@ db = Database()
 class ConnectionManager:
     def __init__(self):
         self.active_connections: Dict[str, Dict[str, WebSocket]] = {}
-        self.typing_users: Set[str] = set()
     
     async def connect(self, websocket: WebSocket, group: str, username: str):
         await websocket.accept()
@@ -166,62 +163,354 @@ class ConnectionManager:
                     await connection.send_json(message)
                 except:
                     pass
-    
-    async def send_personal(self, websocket: WebSocket, message: dict):
-        await websocket.send_json(message)
 
 manager = ConnectionManager()
 
-# ========== HTML PAGE ==========
+# ========== HTML PAGE - MOBILE OPTIMIZED ==========
 HTML_PAGE = """<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <meta name="theme-color" content="#0a0a0f">
     <title>ABAVANDIMWE | Secure Chat</title>
     <style>
-        *{margin:0;padding:0;box-sizing:border-box;}
-        body{font-family:'Courier New',monospace;background:#0a0a0f;height:100vh;color:#0f0;overflow:hidden;}
-        .login-container{position:fixed;top:0;left:0;right:0;bottom:0;display:flex;justify-content:center;align-items:center;background:#0a0a0f;z-index:1000;}
-        .login-card{background:#050508;border:2px solid #0f0;border-radius:16px;padding:40px;width:90%;max-width:420px;box-shadow:0 0 40px rgba(0,255,0,0.1);}
-        h1{text-align:center;margin-bottom:8px;font-size:32px;letter-spacing:2px;}
-        .sub{text-align:center;margin-bottom:32px;font-size:12px;color:#888;}
-        input{width:100%;padding:14px;margin:10px 0;background:#111;border:1px solid #0f0;border-radius:8px;color:#0f0;font-family:monospace;font-size:14px;}
-        input:focus{outline:none;box-shadow:0 0 10px rgba(0,255,0,0.3);}
-        button{width:100%;padding:14px;margin-top:20px;background:transparent;border:2px solid #0f0;border-radius:8px;color:#0f0;font-size:16px;font-weight:bold;cursor:pointer;transition:all 0.3s;}
-        button:hover{background:#0f0;color:#000;box-shadow:0 0 20px rgba(0,255,0,0.3);}
-        .chat-container{display:none;width:100%;height:100%;flex-direction:column;}
-        .chat-container.active{display:flex;}
-        .chat-header{padding:16px 20px;background:#050508;border-bottom:1px solid #0f0;display:flex;justify-content:space-between;align-items:center;}
-        .chat-header h2{font-size:18px;}
-        .online-badge{font-size:12px;padding:4px 12px;border:1px solid #0f0;border-radius:20px;}
-        .main-content{flex:1;display:flex;overflow:hidden;}
-        .sidebar{width:260px;background:#050508;border-right:1px solid #0f0;display:flex;flex-direction:column;}
-        .sidebar-header{padding:15px;border-bottom:1px solid #0f0;}
-        .sidebar-header h3{font-size:14px;}
-        .users-list{padding:12px;flex:1;overflow-y:auto;}
-        .user-item{padding:10px 12px;margin:6px 0;border:1px solid #0f0;border-radius:8px;font-size:13px;}
-        .chat-area{flex:1;display:flex;flex-direction:column;}
-        .messages-container{flex:1;padding:20px;overflow-y:auto;display:flex;flex-direction:column;gap:12px;}
-        .message{max-width:75%;display:flex;flex-direction:column;}
-        .message.sent{align-self:flex-end;}
-        .message.received{align-self:flex-start;}
-        .message-bubble{padding:10px 16px;border-radius:16px;font-size:14px;}
-        .message.sent .message-bubble{background:#0f0;color:#000;}
-        .message.received .message-bubble{background:#1a1a2e;border:1px solid #0f0;}
-        .message-sender{font-size:10px;margin-bottom:4px;opacity:0.7;}
-        .typing-indicator{padding:8px 20px;color:#0f0;font-style:italic;font-size:12px;}
-        .input-area{padding:16px 20px;background:#050508;border-top:1px solid #0f0;display:flex;gap:12px;}
-        .input-area input{flex:1;margin:0;}
-        .input-area button{width:auto;margin:0;padding:14px 24px;}
-        .footer{text-align:center;padding:8px;font-size:9px;color:#444;border-top:1px solid #0f0;}
-        @media (max-width: 768px){
-            .sidebar{position:fixed;left:-260px;top:0;bottom:0;z-index:100;transition:left 0.3s;}
-            .sidebar.open{left:0;}
-            .menu-btn{display:block;}
-            .message{max-width:90%;}
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            -webkit-tap-highlight-color: transparent;
         }
-        .menu-btn{display:none;background:transparent;border:1px solid #0f0;color:#0f0;padding:8px 12px;border-radius:8px;cursor:pointer;}
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Courier New', monospace;
+            background: #0a0a0f;
+            height: 100vh;
+            overflow: hidden;
+            color: #00ff41;
+        }
+
+        /* Login Screen */
+        .login-container {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            background: #0a0a0f;
+            z-index: 1000;
+            padding: 20px;
+        }
+
+        .login-card {
+            background: #050508;
+            border: 2px solid #00ff41;
+            border-radius: 24px;
+            padding: 32px 24px;
+            width: 100%;
+            max-width: 400px;
+            box-shadow: 0 0 40px rgba(0,255,65,0.1);
+        }
+
+        h1 {
+            text-align: center;
+            margin-bottom: 8px;
+            font-size: 28px;
+            letter-spacing: 2px;
+        }
+
+        .sub {
+            text-align: center;
+            margin-bottom: 32px;
+            font-size: 11px;
+            color: #666;
+        }
+
+        input {
+            width: 100%;
+            padding: 14px 16px;
+            margin: 10px 0;
+            background: #111;
+            border: 1px solid #00ff41;
+            border-radius: 12px;
+            color: #00ff41;
+            font-family: monospace;
+            font-size: 15px;
+            transition: all 0.3s;
+        }
+
+        input:focus {
+            outline: none;
+            box-shadow: 0 0 10px rgba(0,255,65,0.3);
+        }
+
+        button {
+            width: 100%;
+            padding: 14px;
+            margin-top: 20px;
+            background: transparent;
+            border: 2px solid #00ff41;
+            border-radius: 12px;
+            color: #00ff41;
+            font-size: 16px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+
+        button:hover, button:active {
+            background: #00ff41;
+            color: #000;
+        }
+
+        /* Chat Container */
+        .chat-container {
+            display: none;
+            width: 100%;
+            height: 100%;
+            flex-direction: column;
+            background: #0a0a0f;
+        }
+
+        .chat-container.active {
+            display: flex;
+        }
+
+        /* Header */
+        .chat-header {
+            padding: 12px 16px;
+            background: #050508;
+            border-bottom: 1px solid #00ff41;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            position: sticky;
+            top: 0;
+            z-index: 10;
+        }
+
+        .chat-header h2 {
+            font-size: 16px;
+            font-weight: normal;
+            letter-spacing: 1px;
+        }
+
+        .online-badge {
+            font-size: 11px;
+            padding: 4px 10px;
+            border: 1px solid #00ff41;
+            border-radius: 20px;
+        }
+
+        .menu-btn {
+            background: transparent;
+            border: 1px solid #00ff41;
+            color: #00ff41;
+            padding: 6px 12px;
+            border-radius: 8px;
+            cursor: pointer;
+            width: auto;
+            margin: 0;
+            font-size: 14px;
+        }
+
+        /* Main Content */
+        .main-content {
+            flex: 1;
+            display: flex;
+            overflow: hidden;
+            position: relative;
+        }
+
+        /* Sidebar */
+        .sidebar {
+            position: fixed;
+            left: -280px;
+            top: 0;
+            bottom: 0;
+            width: 280px;
+            background: #050508;
+            border-right: 1px solid #00ff41;
+            z-index: 20;
+            transition: left 0.3s ease;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .sidebar.open {
+            left: 0;
+        }
+
+        .sidebar-header {
+            padding: 16px;
+            border-bottom: 1px solid #00ff41;
+        }
+
+        .sidebar-header h3 {
+            font-size: 14px;
+        }
+
+        .users-list {
+            flex: 1;
+            padding: 12px;
+            overflow-y: auto;
+        }
+
+        .user-item {
+            padding: 10px 12px;
+            margin: 6px 0;
+            border: 1px solid #00ff41;
+            border-radius: 10px;
+            font-size: 13px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .user-item::before {
+            content: "●";
+            color: #00ff41;
+            font-size: 10px;
+        }
+
+        /* Overlay */
+        .overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0,0,0,0.7);
+            z-index: 15;
+            display: none;
+        }
+
+        .overlay.active {
+            display: block;
+        }
+
+        /* Chat Area */
+        .chat-area {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            width: 100%;
+        }
+
+        /* Messages */
+        .messages-container {
+            flex: 1;
+            padding: 16px;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+
+        .message {
+            max-width: 85%;
+            display: flex;
+            flex-direction: column;
+            animation: fadeIn 0.2s ease;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .message.sent {
+            align-self: flex-end;
+        }
+
+        .message.received {
+            align-self: flex-start;
+        }
+
+        .message-bubble {
+            padding: 10px 14px;
+            border-radius: 18px;
+            font-size: 14px;
+            word-wrap: break-word;
+            max-width: 100%;
+        }
+
+        .message.sent .message-bubble {
+            background: #00ff41;
+            color: #000;
+            border-bottom-right-radius: 4px;
+        }
+
+        .message.received .message-bubble {
+            background: #1a1a2e;
+            border: 1px solid #00ff41;
+            border-bottom-left-radius: 4px;
+        }
+
+        .message-sender {
+            font-size: 10px;
+            margin-bottom: 4px;
+            opacity: 0.7;
+            padding-left: 4px;
+        }
+
+        /* Typing Indicator */
+        .typing-indicator {
+            padding: 8px 16px;
+            color: #00ff41;
+            font-style: italic;
+            font-size: 11px;
+            min-height: 36px;
+        }
+
+        /* Input Area */
+        .input-area {
+            padding: 12px 16px;
+            background: #050508;
+            border-top: 1px solid #00ff41;
+            display: flex;
+            gap: 10px;
+        }
+
+        .input-area input {
+            flex: 1;
+            margin: 0;
+            padding: 12px 16px;
+            font-size: 14px;
+        }
+
+        .input-area button {
+            width: auto;
+            margin: 0;
+            padding: 12px 20px;
+            font-size: 14px;
+        }
+
+        /* Footer */
+        .footer {
+            text-align: center;
+            padding: 6px;
+            font-size: 8px;
+            color: #333;
+            border-top: 1px solid #00ff41;
+        }
+
+        /* Scrollbar */
+        ::-webkit-scrollbar {
+            width: 3px;
+        }
+
+        ::-webkit-scrollbar-track {
+            background: #1a1a2e;
+        }
+
+        ::-webkit-scrollbar-thumb {
+            background: #00ff41;
+            border-radius: 3px;
+        }
     </style>
 </head>
 <body>
@@ -232,38 +521,41 @@ HTML_PAGE = """<!DOCTYPE html>
         <input type="text" id="username" placeholder="USERNAME" autocomplete="off">
         <input type="text" id="groupName" placeholder="GROUP NAME" autocomplete="off">
         <input type="password" id="groupPassword" placeholder="GROUP PASSWORD">
-        <button onclick="connect()">▶ ENTER SECURE CHAT</button>
-        <div style="text-align:center;margin-top:24px;font-size:10px;color:#444;">
-            🔒 AES-256-GCM | ⏰ Auto-Delete 24h | 👁️ E2E Encrypted
+        <button onclick="connect()">▶ ENTER CHAT</button>
+        <div style="text-align:center;margin-top:20px;font-size:9px;color:#333;">
+            🔒 AES-256-GCM | ⏰ Auto-Delete 24h
         </div>
     </div>
 </div>
+
 <div id="chatScreen" class="chat-container">
     <div class="chat-header">
         <button class="menu-btn" onclick="toggleSidebar()">☰</button>
         <h2 id="groupTitle"># LOADING</h2>
-        <span class="online-badge" id="onlineCount">0 online</span>
+        <span class="online-badge" id="onlineCount">0</span>
     </div>
     <div class="main-content">
         <div class="sidebar" id="sidebar">
             <div class="sidebar-header"><h3>● ONLINE USERS</h3></div>
-            <div class="users-list" id="usersList"><div class="user-item">connecting...</div></div>
+            <div class="users-list" id="usersList"></div>
         </div>
+        <div class="overlay" id="overlay" onclick="toggleSidebar()"></div>
         <div class="chat-area">
-            <div class="messages-container" id="messages"><div style="text-align:center;">connecting to secure server...</div></div>
+            <div class="messages-container" id="messages"></div>
             <div class="typing-indicator" id="typingIndicator"></div>
             <div class="input-area">
-                <input type="text" id="messageInput" placeholder="Type encrypted message...">
+                <input type="text" id="messageInput" placeholder="Type message..." autocomplete="off">
                 <button onclick="sendMessage()">SEND</button>
             </div>
-            <div class="footer">🔐 End-to-End Encrypted | Messages Self-Destruct in 24 Hours</div>
+            <div class="footer">🔐 End-to-End Encrypted | Messages self-destruct in 24 hours</div>
         </div>
     </div>
 </div>
+
 <script>
     let ws, username, groupName, groupPassword, groupSalt;
     let typingTimeout;
-    
+
     async function encryptMessage(text, password, salt) {
         const encoder = new TextEncoder();
         const keyMaterial = await crypto.subtle.importKey('raw', encoder.encode(password), 'PBKDF2', false, ['deriveKey']);
@@ -277,7 +569,7 @@ HTML_PAGE = """<!DOCTYPE html>
         combined.set(new Uint8Array(encrypted), iv.length);
         return btoa(String.fromCharCode(...combined));
     }
-    
+
     async function decryptMessage(encrypted, password, salt) {
         const combined = Uint8Array.from(atob(encrypted), c => c.charCodeAt(0));
         const iv = combined.slice(0, 12);
@@ -290,11 +582,14 @@ HTML_PAGE = """<!DOCTYPE html>
         const decrypted = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, data);
         return new TextDecoder().decode(decrypted);
     }
-    
+
     function toggleSidebar() {
-        document.getElementById('sidebar').classList.toggle('open');
+        const sidebar = document.getElementById('sidebar');
+        const overlay = document.getElementById('overlay');
+        sidebar.classList.toggle('open');
+        overlay.classList.toggle('active');
     }
-    
+
     function connect() {
         username = document.getElementById('username').value.trim();
         groupName = document.getElementById('groupName').value.trim();
@@ -322,63 +617,75 @@ HTML_PAGE = """<!DOCTYPE html>
                 document.getElementById('loginScreen').style.display = 'none';
                 document.getElementById('chatScreen').classList.add('active');
                 document.getElementById('groupTitle').innerHTML = `# ${data.group}`;
-            } else if (data.type === 'message') {
+            } 
+            else if (data.type === 'message') {
                 try {
                     const decrypted = await decryptMessage(data.ciphertext, groupPassword, data.salt);
                     addMessage(data.sender, decrypted, data.sender === username);
                 } catch(e) {
-                    addMessage(data.sender, '🔒 [ENCRYPTED]', data.sender === username);
+                    addMessage(data.sender, '🔒 [Encrypted]', data.sender === username);
                 }
-            } else if (data.type === 'history') {
+            } 
+            else if (data.type === 'history') {
                 try {
                     const decrypted = await decryptMessage(data.ciphertext, groupPassword, data.salt);
                     addMessage(data.sender, decrypted, data.sender === username);
                 } catch(e) {
-                    addMessage(data.sender, '🔒 [ENCRYPTED]', data.sender === username);
+                    addMessage(data.sender, '🔒 [Encrypted]', data.sender === username);
                 }
-            } else if (data.type === 'users') {
-                document.getElementById('onlineCount').innerHTML = `${data.users.length} online`;
-                const usersDiv = document.getElementById('usersList');
+            } 
+            else if (data.type === 'users') {
+                const onlineCount = document.getElementById('onlineCount');
+                const usersList = document.getElementById('usersList');
+                onlineCount.innerHTML = data.users.length;
+                
                 if (data.users.length === 0) {
-                    usersDiv.innerHTML = '<div class="user-item">> no users online</div>';
+                    usersList.innerHTML = '<div class="user-item">No users online</div>';
                 } else {
-                    usersDiv.innerHTML = data.users.map(u => `<div class="user-item">● ${escapeHtml(u)}</div>`).join('');
+                    usersList.innerHTML = data.users.map(u => `<div class="user-item">${escapeHtml(u)}</div>`).join('');
                 }
-            } else if (data.type === 'typing') {
+            } 
+            else if (data.type === 'typing') {
                 document.getElementById('typingIndicator').innerHTML = `✏️ ${data.user} is typing...`;
-            } else if (data.type === 'stop_typing') {
+            } 
+            else if (data.type === 'stop_typing') {
                 document.getElementById('typingIndicator').innerHTML = '';
             }
         };
         
         ws.onerror = () => {
-            alert('Connection failed. Server may be starting up. Refresh and try again.');
+            alert('Connection failed. Please refresh and try again.');
         };
     }
-    
+
     function addMessage(sender, text, isSent) {
         const messagesDiv = document.getElementById('messages');
-        if (messagesDiv.children.length === 1 && messagesDiv.children[0].innerText.includes('connecting')) {
+        
+        if (messagesDiv.children.length === 0) {
             messagesDiv.innerHTML = '';
         }
+        
         const messageDiv = document.createElement('div');
         messageDiv.className = `message ${isSent ? 'sent' : 'received'}`;
         const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        
         messageDiv.innerHTML = `
-            <div class="message-sender">${isSent ? 'YOU' : sender} • ${time}</div>
+            <div class="message-sender">${isSent ? 'YOU' : escapeHtml(sender)} • ${time}</div>
             <div class="message-bubble">${escapeHtml(text)}</div>
         `;
+        
         messagesDiv.appendChild(messageDiv);
         messagesDiv.scrollTop = messagesDiv.scrollHeight;
     }
-    
+
     function escapeHtml(text) {
         const div = document.createElement('div');
         div.textContent = text;
         return div.innerHTML;
     }
-    
+
     const messageInput = document.getElementById('messageInput');
+    
     if (messageInput) {
         messageInput.addEventListener('input', () => {
             if (ws && ws.readyState === WebSocket.OPEN) {
@@ -391,21 +698,28 @@ HTML_PAGE = """<!DOCTYPE html>
         });
         
         messageInput.addEventListener('keypress', (e) => {
-            if (e.key === 'Enter') sendMessage();
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                sendMessage();
+            }
         });
     }
-    
+
     async function sendMessage() {
         const input = document.getElementById('messageInput');
         const text = input.value.trim();
-        if (!text || !ws || ws.readyState !== WebSocket.OPEN) return;
+        
+        if (!text || !ws || ws.readyState !== WebSocket.OPEN) {
+            return;
+        }
         
         try {
             const ciphertext = await encryptMessage(text, groupPassword, groupSalt);
             ws.send(JSON.stringify({ type: 'message', ciphertext, salt: groupSalt }));
             input.value = '';
         } catch(e) {
-            console.error(e);
+            console.error('Encryption error:', e);
+            alert('Failed to send message');
         }
     }
 </script>
@@ -438,19 +752,16 @@ async def websocket_endpoint(websocket: WebSocket):
                 group_name = data.get('group')
                 password = data.get('password')
                 
-                # Get or create group salt
                 salt = db.get_group_salt(group_name)
                 if not salt:
                     salt = crypto.generate_salt()
                     db.create_group(group_name, salt, username)
                 
-                # Add to connection manager
                 if group_name not in manager.active_connections:
                     manager.active_connections[group_name] = {}
                 manager.active_connections[group_name][username] = websocket
                 db.set_user_status(username, 'online', group_name)
                 
-                # Send message history
                 for msg in db.get_messages(group_name):
                     await websocket.send_json({
                         'type': 'history',
@@ -459,11 +770,9 @@ async def websocket_endpoint(websocket: WebSocket):
                         'salt': msg['salt']
                     })
                 
-                # Broadcast online users
                 online_users = db.get_online_users(group_name)
                 await manager.broadcast(group_name, {'type': 'users', 'users': online_users})
                 
-                # Send ready signal
                 await websocket.send_json({
                     'type': 'ready',
                     'salt': salt,
@@ -518,7 +827,8 @@ if __name__ == "__main__":
 ║              PROFESSIONAL SECURE MESSAGING SYSTEM                 ║
 ║                   MESSAGES AUTO-DELETE 24H                        ║
 ║                        AUTHOR: MUGISHA PC                         ║
-║                        VERSION: 2.0.0                             ║
+║                        VERSION: 3.0.0                             ║
+║                      MOBILE OPTIMIZED                              ║
 ║                                                                   ║
 ╚═══════════════════════════════════════════════════════════════════╝
     """)
@@ -526,7 +836,7 @@ if __name__ == "__main__":
     print(f"[✓] Database: SQLite (abavandimwe.db)")
     print(f"[✓] Encryption: AES-256-GCM")
     print(f"[✓] Auto-delete: 24 hours")
-    print(f"[✓] WebSocket: /ws")
+    print(f"[✓] Mobile optimized CSS")
     print(f"[✓] Open: https://abavandimwe.onrender.com")
     
     uvicorn.run(app, host="0.0.0.0", port=port)
