@@ -1,10 +1,10 @@
 """
 ABAVANDIMWE - Professional Secure Messaging System
 Author: Mugisha Pc
-Mobile Optimized + Fixed Messaging
+FULLY WORKING - Mobile Optimized
 """
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse
 import asyncio
 import json
@@ -13,7 +13,7 @@ import secrets
 import base64
 import hashlib
 from datetime import datetime
-from typing import Dict, Set
+from typing import Dict
 import os
 
 app = FastAPI(title="ABAVANDIMWE")
@@ -88,11 +88,12 @@ class Database:
                  (ciphertext, group, sender, salt, datetime.now().isoformat()))
         conn.commit()
         conn.close()
+        print(f"[DB] Message saved from {sender} in {group}")
     
     def get_messages(self, group: str):
         conn = sqlite3.connect(self.db_path)
         c = conn.cursor()
-        c.execute("SELECT ciphertext, sender, salt FROM messages WHERE group_name=? ORDER BY id ASC", (group,))
+        c.execute("SELECT ciphertext, sender, salt FROM messages WHERE group_name=? ORDER BY id ASC LIMIT 100", (group,))
         rows = c.fetchall()
         conn.close()
         return [{'ciphertext': r[0], 'sender': r[1], 'salt': r[2]} for r in rows]
@@ -128,8 +129,9 @@ class Database:
             c.execute("INSERT INTO groups (group_name, salt, created_by, created_at) VALUES (?,?,?,?)",
                      (group, salt, creator, datetime.now().isoformat()))
             conn.commit()
-        except:
-            pass
+            print(f"[DB] Group created: {group}")
+        except Exception as e:
+            print(f"[DB] Group exists: {group}")
         conn.close()
 
 db = Database()
@@ -145,6 +147,7 @@ class ConnectionManager:
             self.active_connections[group] = {}
         self.active_connections[group][username] = websocket
         db.set_user_status(username, 'online', group)
+        print(f"[WS] {username} connected to {group}")
     
     def disconnect(self, group: str, username: str):
         if group in self.active_connections:
@@ -153,6 +156,7 @@ class ConnectionManager:
             if not self.active_connections[group]:
                 del self.active_connections[group]
         db.set_user_status(username, 'offline', group)
+        print(f"[WS] {username} disconnected from {group}")
     
     async def broadcast(self, group: str, message: dict, exclude: str = None):
         if group not in self.active_connections:
@@ -166,13 +170,12 @@ class ConnectionManager:
 
 manager = ConnectionManager()
 
-# ========== HTML PAGE - MOBILE OPTIMIZED ==========
+# ========== HTML PAGE ==========
 HTML_PAGE = """<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
-    <meta name="theme-color" content="#0a0a0f">
     <title>ABAVANDIMWE | Secure Chat</title>
     <style>
         * {
@@ -183,14 +186,13 @@ HTML_PAGE = """<!DOCTYPE html>
         }
 
         body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Courier New', monospace;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', monospace;
             background: #0a0a0f;
             height: 100vh;
             overflow: hidden;
             color: #00ff41;
         }
 
-        /* Login Screen */
         .login-container {
             position: fixed;
             top: 0;
@@ -212,7 +214,6 @@ HTML_PAGE = """<!DOCTYPE html>
             padding: 32px 24px;
             width: 100%;
             max-width: 400px;
-            box-shadow: 0 0 40px rgba(0,255,65,0.1);
         }
 
         h1 {
@@ -239,7 +240,6 @@ HTML_PAGE = """<!DOCTYPE html>
             color: #00ff41;
             font-family: monospace;
             font-size: 15px;
-            transition: all 0.3s;
         }
 
         input:focus {
@@ -258,15 +258,13 @@ HTML_PAGE = """<!DOCTYPE html>
             font-size: 16px;
             font-weight: bold;
             cursor: pointer;
-            transition: all 0.3s;
         }
 
-        button:hover, button:active {
+        button:active {
             background: #00ff41;
             color: #000;
         }
 
-        /* Chat Container */
         .chat-container {
             display: none;
             width: 100%;
@@ -279,7 +277,6 @@ HTML_PAGE = """<!DOCTYPE html>
             display: flex;
         }
 
-        /* Header */
         .chat-header {
             padding: 12px 16px;
             background: #050508;
@@ -287,15 +284,11 @@ HTML_PAGE = """<!DOCTYPE html>
             display: flex;
             justify-content: space-between;
             align-items: center;
-            position: sticky;
-            top: 0;
-            z-index: 10;
         }
 
         .chat-header h2 {
             font-size: 16px;
             font-weight: normal;
-            letter-spacing: 1px;
         }
 
         .online-badge {
@@ -317,15 +310,12 @@ HTML_PAGE = """<!DOCTYPE html>
             font-size: 14px;
         }
 
-        /* Main Content */
         .main-content {
             flex: 1;
             display: flex;
             overflow: hidden;
-            position: relative;
         }
 
-        /* Sidebar */
         .sidebar {
             position: fixed;
             left: -280px;
@@ -349,10 +339,6 @@ HTML_PAGE = """<!DOCTYPE html>
             border-bottom: 1px solid #00ff41;
         }
 
-        .sidebar-header h3 {
-            font-size: 14px;
-        }
-
         .users-list {
             flex: 1;
             padding: 12px;
@@ -365,18 +351,8 @@ HTML_PAGE = """<!DOCTYPE html>
             border: 1px solid #00ff41;
             border-radius: 10px;
             font-size: 13px;
-            display: flex;
-            align-items: center;
-            gap: 8px;
         }
 
-        .user-item::before {
-            content: "●";
-            color: #00ff41;
-            font-size: 10px;
-        }
-
-        /* Overlay */
         .overlay {
             position: fixed;
             top: 0;
@@ -392,7 +368,6 @@ HTML_PAGE = """<!DOCTYPE html>
             display: block;
         }
 
-        /* Chat Area */
         .chat-area {
             flex: 1;
             display: flex;
@@ -400,7 +375,6 @@ HTML_PAGE = """<!DOCTYPE html>
             width: 100%;
         }
 
-        /* Messages */
         .messages-container {
             flex: 1;
             padding: 16px;
@@ -414,12 +388,6 @@ HTML_PAGE = """<!DOCTYPE html>
             max-width: 85%;
             display: flex;
             flex-direction: column;
-            animation: fadeIn 0.2s ease;
-        }
-
-        @keyframes fadeIn {
-            from { opacity: 0; transform: translateY(10px); }
-            to { opacity: 1; transform: translateY(0); }
         }
 
         .message.sent {
@@ -435,7 +403,6 @@ HTML_PAGE = """<!DOCTYPE html>
             border-radius: 18px;
             font-size: 14px;
             word-wrap: break-word;
-            max-width: 100%;
         }
 
         .message.sent .message-bubble {
@@ -457,7 +424,6 @@ HTML_PAGE = """<!DOCTYPE html>
             padding-left: 4px;
         }
 
-        /* Typing Indicator */
         .typing-indicator {
             padding: 8px 16px;
             color: #00ff41;
@@ -466,7 +432,6 @@ HTML_PAGE = """<!DOCTYPE html>
             min-height: 36px;
         }
 
-        /* Input Area */
         .input-area {
             padding: 12px 16px;
             background: #050508;
@@ -489,7 +454,6 @@ HTML_PAGE = """<!DOCTYPE html>
             font-size: 14px;
         }
 
-        /* Footer */
         .footer {
             text-align: center;
             padding: 6px;
@@ -498,7 +462,6 @@ HTML_PAGE = """<!DOCTYPE html>
             border-top: 1px solid #00ff41;
         }
 
-        /* Scrollbar */
         ::-webkit-scrollbar {
             width: 3px;
         }
@@ -509,7 +472,6 @@ HTML_PAGE = """<!DOCTYPE html>
 
         ::-webkit-scrollbar-thumb {
             background: #00ff41;
-            border-radius: 3px;
         }
     </style>
 </head>
@@ -523,7 +485,7 @@ HTML_PAGE = """<!DOCTYPE html>
         <input type="password" id="groupPassword" placeholder="GROUP PASSWORD">
         <button onclick="connect()">▶ ENTER CHAT</button>
         <div style="text-align:center;margin-top:20px;font-size:9px;color:#333;">
-            🔒 AES-256-GCM | ⏰ Auto-Delete 24h
+            🔒 AES-256 | ⏰ Auto-Delete 24h
         </div>
     </div>
 </div>
@@ -547,20 +509,27 @@ HTML_PAGE = """<!DOCTYPE html>
                 <input type="text" id="messageInput" placeholder="Type message..." autocomplete="off">
                 <button onclick="sendMessage()">SEND</button>
             </div>
-            <div class="footer">🔐 End-to-End Encrypted | Messages self-destruct in 24 hours</div>
+            <div class="footer">🔐 End-to-End Encrypted | Messages self-destruct in 24h</div>
         </div>
     </div>
 </div>
 
 <script>
-    let ws, username, groupName, groupPassword, groupSalt;
-    let typingTimeout;
+    let ws = null;
+    let username = '';
+    let groupName = '';
+    let groupPassword = '';
+    let groupSalt = '';
+    let typingTimeout = null;
 
     async function encryptMessage(text, password, salt) {
         const encoder = new TextEncoder();
         const keyMaterial = await crypto.subtle.importKey('raw', encoder.encode(password), 'PBKDF2', false, ['deriveKey']);
         const key = await crypto.subtle.deriveKey({
-            name: 'PBKDF2', salt: encoder.encode(salt), iterations: 100000, hash: 'SHA-256'
+            name: 'PBKDF2',
+            salt: encoder.encode(salt),
+            iterations: 100000,
+            hash: 'SHA-256'
         }, keyMaterial, { name: 'AES-GCM', length: 256 }, false, ['encrypt']);
         const iv = crypto.getRandomValues(new Uint8Array(12));
         const encrypted = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, encoder.encode(text));
@@ -577,7 +546,10 @@ HTML_PAGE = """<!DOCTYPE html>
         const encoder = new TextEncoder();
         const keyMaterial = await crypto.subtle.importKey('raw', encoder.encode(password), 'PBKDF2', false, ['deriveKey']);
         const key = await crypto.subtle.deriveKey({
-            name: 'PBKDF2', salt: encoder.encode(salt), iterations: 100000, hash: 'SHA-256'
+            name: 'PBKDF2',
+            salt: encoder.encode(salt),
+            iterations: 100000,
+            hash: 'SHA-256'
         }, keyMaterial, { name: 'AES-GCM', length: 256 }, false, ['decrypt']);
         const decrypted = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, data);
         return new TextDecoder().decode(decrypted);
@@ -590,90 +562,18 @@ HTML_PAGE = """<!DOCTYPE html>
         overlay.classList.toggle('active');
     }
 
-    function connect() {
-        username = document.getElementById('username').value.trim();
-        groupName = document.getElementById('groupName').value.trim();
-        groupPassword = document.getElementById('groupPassword').value;
-        
-        if (!username || !groupName || !groupPassword) {
-            alert('Please fill all fields');
-            return;
-        }
-        
-        const protocol = window.location.protocol === 'https:' ? 'wss://' : 'ws://';
-        const wsUrl = `${protocol}${window.location.host}/ws`;
-        
-        ws = new WebSocket(wsUrl);
-        
-        ws.onopen = () => {
-            ws.send(JSON.stringify({ type: 'join', username, group: groupName, password: groupPassword }));
-        };
-        
-        ws.onmessage = async (event) => {
-            const data = JSON.parse(event.data);
-            
-            if (data.type === 'ready') {
-                groupSalt = data.salt;
-                document.getElementById('loginScreen').style.display = 'none';
-                document.getElementById('chatScreen').classList.add('active');
-                document.getElementById('groupTitle').innerHTML = `# ${data.group}`;
-            } 
-            else if (data.type === 'message') {
-                try {
-                    const decrypted = await decryptMessage(data.ciphertext, groupPassword, data.salt);
-                    addMessage(data.sender, decrypted, data.sender === username);
-                } catch(e) {
-                    addMessage(data.sender, '🔒 [Encrypted]', data.sender === username);
-                }
-            } 
-            else if (data.type === 'history') {
-                try {
-                    const decrypted = await decryptMessage(data.ciphertext, groupPassword, data.salt);
-                    addMessage(data.sender, decrypted, data.sender === username);
-                } catch(e) {
-                    addMessage(data.sender, '🔒 [Encrypted]', data.sender === username);
-                }
-            } 
-            else if (data.type === 'users') {
-                const onlineCount = document.getElementById('onlineCount');
-                const usersList = document.getElementById('usersList');
-                onlineCount.innerHTML = data.users.length;
-                
-                if (data.users.length === 0) {
-                    usersList.innerHTML = '<div class="user-item">No users online</div>';
-                } else {
-                    usersList.innerHTML = data.users.map(u => `<div class="user-item">${escapeHtml(u)}</div>`).join('');
-                }
-            } 
-            else if (data.type === 'typing') {
-                document.getElementById('typingIndicator').innerHTML = `✏️ ${data.user} is typing...`;
-            } 
-            else if (data.type === 'stop_typing') {
-                document.getElementById('typingIndicator').innerHTML = '';
-            }
-        };
-        
-        ws.onerror = () => {
-            alert('Connection failed. Please refresh and try again.');
-        };
-    }
-
     function addMessage(sender, text, isSent) {
         const messagesDiv = document.getElementById('messages');
-        
-        if (messagesDiv.children.length === 0) {
+        if (messagesDiv.children.length === 0 || (messagesDiv.children.length === 1 && messagesDiv.children[0].innerText.includes('connecting'))) {
             messagesDiv.innerHTML = '';
         }
-        
         const messageDiv = document.createElement('div');
         messageDiv.className = `message ${isSent ? 'sent' : 'received'}`;
         const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-        
         messageDiv.innerHTML = `
-            <div class="message-sender">${isSent ? 'YOU' : escapeHtml(sender)} • ${time}</div>
+            <div class="message-sender">${isSent ? 'YOU' : sender} • ${time}</div>
             <div class="message-bubble">${escapeHtml(text)}</div>
         `;
-        
         messagesDiv.appendChild(messageDiv);
         messagesDiv.scrollTop = messagesDiv.scrollHeight;
     }
@@ -684,20 +584,103 @@ HTML_PAGE = """<!DOCTYPE html>
         return div.innerHTML;
     }
 
+    function connect() {
+        username = document.getElementById('username').value.trim();
+        groupName = document.getElementById('groupName').value.trim();
+        groupPassword = document.getElementById('groupPassword').value;
+        
+        if (!username || !groupName || !groupPassword) {
+            alert('Please fill all fields');
+            return;
+        }
+        
+        const wsUrl = `wss://${window.location.host}/ws`;
+        console.log('Connecting to:', wsUrl);
+        
+        ws = new WebSocket(wsUrl);
+        
+        ws.onopen = function() {
+            console.log('WebSocket connected');
+            ws.send(JSON.stringify({ 
+                type: 'join', 
+                username: username, 
+                group: groupName, 
+                password: groupPassword 
+            }));
+        };
+        
+        ws.onmessage = async function(event) {
+            console.log('Message received:', event.data);
+            const data = JSON.parse(event.data);
+            
+            if (data.type === 'ready') {
+                groupSalt = data.salt;
+                document.getElementById('loginScreen').style.display = 'none';
+                document.getElementById('chatScreen').classList.add('active');
+                document.getElementById('groupTitle').innerHTML = '# ' + data.group;
+                console.log('Ready! Group salt:', groupSalt);
+            } 
+            else if (data.type === 'message') {
+                try {
+                    const decrypted = await decryptMessage(data.ciphertext, groupPassword, data.salt);
+                    addMessage(data.sender, decrypted, data.sender === username);
+                } catch(e) {
+                    console.error('Decrypt error:', e);
+                    addMessage(data.sender, '🔒 [Encrypted]', data.sender === username);
+                }
+            } 
+            else if (data.type === 'history') {
+                try {
+                    const decrypted = await decryptMessage(data.ciphertext, groupPassword, data.salt);
+                    addMessage(data.sender, decrypted, data.sender === username);
+                } catch(e) {
+                    console.error('Decrypt history error:', e);
+                    addMessage(data.sender, '🔒 [Encrypted]', data.sender === username);
+                }
+            } 
+            else if (data.type === 'users') {
+                document.getElementById('onlineCount').innerHTML = data.users.length;
+                const usersList = document.getElementById('usersList');
+                if (data.users.length === 0) {
+                    usersList.innerHTML = '<div class="user-item">No users online</div>';
+                } else {
+                    usersList.innerHTML = data.users.map(u => `<div class="user-item">● ${escapeHtml(u)}</div>`).join('');
+                }
+            } 
+            else if (data.type === 'typing') {
+                document.getElementById('typingIndicator').innerHTML = '✏️ ' + data.user + ' is typing...';
+            } 
+            else if (data.type === 'stop_typing') {
+                document.getElementById('typingIndicator').innerHTML = '';
+            }
+        };
+        
+        ws.onerror = function(error) {
+            console.error('WebSocket error:', error);
+            alert('Connection failed. Please refresh and try again.');
+        };
+        
+        ws.onclose = function() {
+            console.log('WebSocket closed');
+        };
+    }
+
     const messageInput = document.getElementById('messageInput');
     
     if (messageInput) {
-        messageInput.addEventListener('input', () => {
+        messageInput.addEventListener('input', function() {
             if (ws && ws.readyState === WebSocket.OPEN) {
                 ws.send(JSON.stringify({ type: 'typing' }));
                 clearTimeout(typingTimeout);
-                typingTimeout = setTimeout(() => {
-                    ws.send(JSON.stringify({ type: 'stop_typing' }));
+                typingTimeout = setTimeout(function() {
+                    if (ws && ws.readyState === WebSocket.OPEN) {
+                        ws.send(JSON.stringify({ type: 'stop_typing' }));
+                    }
                 }, 1000);
             }
         });
         
-        messageInput.addEventListener('keypress', (e) => {
+        messageInput.addEventListener('keypress', function(e) {
             if (e.key === 'Enter') {
                 e.preventDefault();
                 sendMessage();
@@ -709,16 +692,34 @@ HTML_PAGE = """<!DOCTYPE html>
         const input = document.getElementById('messageInput');
         const text = input.value.trim();
         
-        if (!text || !ws || ws.readyState !== WebSocket.OPEN) {
+        if (!text) {
+            console.log('Empty message');
+            return;
+        }
+        
+        if (!ws || ws.readyState !== WebSocket.OPEN) {
+            console.log('WebSocket not connected');
+            alert('Not connected to server');
+            return;
+        }
+        
+        if (!groupSalt) {
+            console.log('No group salt');
+            alert('Not ready yet');
             return;
         }
         
         try {
             const ciphertext = await encryptMessage(text, groupPassword, groupSalt);
-            ws.send(JSON.stringify({ type: 'message', ciphertext, salt: groupSalt }));
+            ws.send(JSON.stringify({ 
+                type: 'message', 
+                ciphertext: ciphertext, 
+                salt: groupSalt 
+            }));
             input.value = '';
+            console.log('Message sent');
         } catch(e) {
-            console.error('Encryption error:', e);
+            console.error('Send error:', e);
             alert('Failed to send message');
         }
     }
@@ -752,17 +753,24 @@ async def websocket_endpoint(websocket: WebSocket):
                 group_name = data.get('group')
                 password = data.get('password')
                 
+                print(f"[WS] Join request: {username} -> {group_name}")
+                
+                # Get or create group salt
                 salt = db.get_group_salt(group_name)
                 if not salt:
                     salt = crypto.generate_salt()
                     db.create_group(group_name, salt, username)
                 
+                # Add to connections
                 if group_name not in manager.active_connections:
                     manager.active_connections[group_name] = {}
                 manager.active_connections[group_name][username] = websocket
                 db.set_user_status(username, 'online', group_name)
                 
-                for msg in db.get_messages(group_name):
+                # Send message history
+                messages = db.get_messages(group_name)
+                print(f"[WS] Sending {len(messages)} history messages to {username}")
+                for msg in messages:
                     await websocket.send_json({
                         'type': 'history',
                         'ciphertext': msg['ciphertext'],
@@ -770,22 +778,29 @@ async def websocket_endpoint(websocket: WebSocket):
                         'salt': msg['salt']
                     })
                 
+                # Broadcast online users
                 online_users = db.get_online_users(group_name)
                 await manager.broadcast(group_name, {'type': 'users', 'users': online_users})
                 
+                # Send ready signal
                 await websocket.send_json({
                     'type': 'ready',
                     'salt': salt,
                     'group': group_name
                 })
                 
-                print(f"[+] {username} joined {group_name}")
+                print(f"[WS] {username} joined {group_name}")
             
             elif msg_type == 'message':
                 ciphertext = data.get('ciphertext')
                 salt = data.get('salt')
                 
+                print(f"[WS] Message from {username} in {group_name}")
+                
+                # Save to database
                 db.save_message(ciphertext, group_name, username, salt)
+                
+                # Broadcast to others
                 await manager.broadcast(group_name, {
                     'type': 'message',
                     'ciphertext': ciphertext,
@@ -800,7 +815,9 @@ async def websocket_endpoint(websocket: WebSocket):
                 await manager.broadcast(group_name, {'type': 'stop_typing', 'user': username}, exclude=username)
     
     except WebSocketDisconnect:
-        pass
+        print(f"[WS] Disconnect: {username}")
+    except Exception as e:
+        print(f"[WS] Error: {e}")
     finally:
         if username and group_name:
             if group_name in manager.active_connections:
@@ -808,7 +825,7 @@ async def websocket_endpoint(websocket: WebSocket):
             db.set_user_status(username, 'offline', group_name)
             online_users = db.get_online_users(group_name)
             await manager.broadcast(group_name, {'type': 'users', 'users': online_users})
-            print(f"[-] {username} left {group_name}")
+            print(f"[WS] {username} left {group_name}")
 
 # ========== MAIN ==========
 if __name__ == "__main__":
@@ -827,8 +844,8 @@ if __name__ == "__main__":
 ║              PROFESSIONAL SECURE MESSAGING SYSTEM                 ║
 ║                   MESSAGES AUTO-DELETE 24H                        ║
 ║                        AUTHOR: MUGISHA PC                         ║
-║                        VERSION: 3.0.0                             ║
-║                      MOBILE OPTIMIZED                              ║
+║                        VERSION: 4.0.0                             ║
+║                      FULLY WORKING                                ║
 ║                                                                   ║
 ╚═══════════════════════════════════════════════════════════════════╝
     """)
@@ -836,7 +853,7 @@ if __name__ == "__main__":
     print(f"[✓] Database: SQLite (abavandimwe.db)")
     print(f"[✓] Encryption: AES-256-GCM")
     print(f"[✓] Auto-delete: 24 hours")
-    print(f"[✓] Mobile optimized CSS")
+    print(f"[✓] WebSocket endpoint: /ws")
     print(f"[✓] Open: https://abavandimwe.onrender.com")
     
     uvicorn.run(app, host="0.0.0.0", port=port)
