@@ -4,7 +4,7 @@ services:
     runtime: python
     repo: https://github.com/Mdav10/abavandimwe
     plan: free
-    region: oregon
+    region: frankfurt
     buildCommand: pip install -r requirements.txt
     startCommand: python main.py
     envVars:
