@@ -1,7 +1,7 @@
 """
-ABAVANDIMWE - Professional Secure Messaging System
+ABAVANDIMWE - Secure Messaging System
 Author: Mugisha Pc
-Messages persist for 24 hours from creation time
+Simple Working Version - No ASGI issues
 """
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
@@ -15,200 +15,153 @@ import hashlib
 import os
 import threading
 import time
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Dict
-from contextlib import asynccontextmanager
 
-# ========== DATABASE SETUP ==========
+app = FastAPI()
+
+# ========== DATABASE ==========
 DB_PATH = "abavandimwe.db"
 
 def init_db():
-    """Initialize SQLite database with 24-hour expiration from creation"""
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    
-    # Messages table - expires exactly 24 hours after creation
     c.execute('''
         CREATE TABLE IF NOT EXISTS messages (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            ciphertext TEXT NOT NULL,
-            group_name TEXT NOT NULL,
-            sender TEXT NOT NULL,
-            salt TEXT NOT NULL,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            expires_at TIMESTAMP DEFAULT (datetime(CURRENT_TIMESTAMP, '+24 hours'))
+            ciphertext TEXT,
+            group_name TEXT,
+            sender TEXT,
+            salt TEXT,
+            created_at REAL
         )
     ''')
-    
-    # Users table
     c.execute('''
         CREATE TABLE IF NOT EXISTS users (
             username TEXT PRIMARY KEY,
-            status TEXT DEFAULT 'offline',
+            status TEXT,
             current_group TEXT,
-            last_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            last_seen REAL
         )
     ''')
-    
-    # Groups table with password hash
     c.execute('''
         CREATE TABLE IF NOT EXISTS groups (
             group_name TEXT PRIMARY KEY,
-            salt TEXT NOT NULL,
-            password_hash TEXT NOT NULL,
-            created_by TEXT NOT NULL,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            salt TEXT,
+            password_hash TEXT,
+            created_by TEXT
         )
     ''')
-    
-    # Create index for fast cleanup
-    c.execute('''
-        CREATE INDEX IF NOT EXISTS idx_messages_expires_at ON messages(expires_at)
-    ''')
-    
     conn.commit()
     conn.close()
-    print("[✓] SQLite database ready")
-    print("[✓] Messages persist for 24 hours from creation time")
+    print("[✓] Database ready")
 
-def cleanup_expired_messages():
-    """Delete messages that are older than 24 hours (based on expires_at)"""
+def cleanup_old_messages():
+    """Delete messages older than 24 hours"""
+    now = time.time()
+    cutoff = now - (24 * 3600)  # 24 hours ago
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    # Delete messages where expires_at is in the past
-    c.execute("DELETE FROM messages WHERE expires_at < datetime('now')")
+    c.execute("DELETE FROM messages WHERE created_at < ?", (cutoff,))
     deleted = c.rowcount
     conn.commit()
     conn.close()
     if deleted > 0:
-        print(f"[🧹] Cleaned up {deleted} expired messages at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        print(f"[🧹] Deleted {deleted} old messages")
 
-def start_cleanup_scheduler():
-    """Run cleanup every hour in background thread"""
+def start_cleanup():
     def cleanup_loop():
         while True:
             time.sleep(3600)  # Every hour
-            cleanup_expired_messages()
-    
-    thread = threading.Thread(target=cleanup_loop, daemon=True)
-    thread.start()
-    print("[✓] Auto-cleanup scheduler started (runs every hour)")
+            cleanup_old_messages()
+    threading.Thread(target=cleanup_loop, daemon=True).start()
 
-# Initialize database
 init_db()
-start_cleanup_scheduler()
+start_cleanup()
 
-# ========== CRYPTOGRAPHY ==========
-class Crypto:
-    @staticmethod
-    def generate_salt() -> str:
-        return base64.b64encode(secrets.token_bytes(32)).decode()
-    
-    @staticmethod
-    def derive_key(password: str, salt: str) -> bytes:
-        return hashlib.pbkdf2_hmac('sha256', password.encode(), salt.encode(), 100000, 32)
-    
-    @staticmethod
-    def hash_password(password: str, salt: str) -> str:
-        key = Crypto.derive_key(password, salt)
-        return base64.b64encode(key).decode()
-    
-    @staticmethod
-    def verify_password(password: str, salt: str, stored_hash: str) -> bool:
-        return Crypto.hash_password(password, salt) == stored_hash
-    
-    @staticmethod
-    def encrypt(text: str, password: str, salt: str) -> str:
-        key = Crypto.derive_key(password, salt)
-        text_bytes = text.encode()
-        encrypted = bytearray()
-        for i in range(len(text_bytes)):
-            encrypted.append(text_bytes[i] ^ key[i % len(key)])
-        nonce = secrets.token_bytes(8)
-        result = nonce + encrypted
-        return base64.b64encode(result).decode()
-    
-    @staticmethod
-    def decrypt(encrypted: str, password: str, salt: str) -> str:
-        key = Crypto.derive_key(password, salt)
-        data = base64.b64decode(encrypted)
-        ciphertext = data[8:]
-        decrypted = bytearray()
-        for i in range(len(ciphertext)):
-            decrypted.append(ciphertext[i] ^ key[i % len(key)])
-        return decrypted.decode()
+# ========== CRYPTO ==========
+def generate_salt():
+    return base64.b64encode(secrets.token_bytes(32)).decode()
 
-crypto = Crypto()
+def derive_key(password, salt):
+    return hashlib.pbkdf2_hmac('sha256', password.encode(), salt.encode(), 100000, 32)
 
-# ========== DATABASE OPERATIONS ==========
-def save_message(ciphertext: str, group: str, sender: str, salt: str):
-    """Save message with expiration exactly 24 hours from now"""
+def hash_password(password, salt):
+    return base64.b64encode(derive_key(password, salt)).decode()
+
+def verify_password(password, salt, stored_hash):
+    return hash_password(password, salt) == stored_hash
+
+def encrypt(text, password, salt):
+    key = derive_key(password, salt)
+    text_bytes = text.encode()
+    encrypted = bytearray()
+    for i in range(len(text_bytes)):
+        encrypted.append(text_bytes[i] ^ key[i % len(key)])
+    nonce = secrets.token_bytes(8)
+    result = nonce + encrypted
+    return base64.b64encode(result).decode()
+
+def decrypt(encrypted, password, salt):
+    key = derive_key(password, salt)
+    data = base64.b64decode(encrypted)
+    ciphertext = data[8:]
+    decrypted = bytearray()
+    for i in range(len(ciphertext)):
+        decrypted.append(ciphertext[i] ^ key[i % len(key)])
+    return decrypted.decode()
+
+# ========== DATABASE FUNCTIONS ==========
+def save_message(ciphertext, group, sender, salt):
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    # expires_at is automatically set to 24 hours from created_at
-    c.execute('''
-        INSERT INTO messages (ciphertext, group_name, sender, salt)
-        VALUES (?, ?, ?, ?)
-    ''', (ciphertext, group, sender, salt))
+    c.execute("INSERT INTO messages (ciphertext, group_name, sender, salt, created_at) VALUES (?,?,?,?,?)",
+             (ciphertext, group, sender, salt, time.time()))
     conn.commit()
     conn.close()
 
-def get_messages(group: str):
-    """Get messages that are NOT expired (within 24 hours)"""
+def get_messages(group):
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    # Only select messages where expires_at is still in the future
-    c.execute('''
-        SELECT ciphertext, sender, salt, created_at
-        FROM messages 
-        WHERE group_name = ? 
-            AND expires_at > datetime('now')
-        ORDER BY id ASC
-    ''', (group,))
+    cutoff = time.time() - (24 * 3600)
+    c.execute("SELECT ciphertext, sender, salt FROM messages WHERE group_name=? AND created_at > ? ORDER BY id ASC", 
+             (group, cutoff))
     rows = c.fetchall()
     conn.close()
-    return [{'ciphertext': r[0], 'sender': r[1], 'salt': r[2], 'created_at': r[3]} for r in rows]
+    return [{'ciphertext': r[0], 'sender': r[1], 'salt': r[2]} for r in rows]
 
-def set_user_status(username: str, status: str, group: str = None):
+def set_user_status(username, status, group):
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    c.execute('''
-        INSERT OR REPLACE INTO users (username, status, current_group, last_seen)
-        VALUES (?, ?, ?, CURRENT_TIMESTAMP)
-    ''', (username, status, group))
+    c.execute("INSERT OR REPLACE INTO users (username, status, current_group, last_seen) VALUES (?,?,?,?)",
+             (username, status, group, time.time()))
     conn.commit()
     conn.close()
 
-def get_online_users(group: str):
+def get_online_users(group):
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    c.execute('''
-        SELECT username FROM users 
-        WHERE status = 'online' AND current_group = ?
-            AND last_seen > datetime('now', '-2 minutes')
-    ''', (group,))
+    cutoff = time.time() - 120  # 2 minutes ago
+    c.execute("SELECT username FROM users WHERE status='online' AND current_group=? AND last_seen > ?", 
+             (group, cutoff))
     rows = c.fetchall()
     conn.close()
     return [r[0] for r in rows]
 
-def get_group_info(group: str):
+def get_group_info(group):
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    c.execute('SELECT salt, password_hash, created_by FROM groups WHERE group_name = ?', (group,))
+    c.execute("SELECT salt, password_hash FROM groups WHERE group_name=?", (group,))
     row = c.fetchone()
     conn.close()
-    if row:
-        return {'salt': row[0], 'password_hash': row[1], 'created_by': row[2]}
-    return None
+    return {'salt': row[0], 'password_hash': row[1]} if row else None
 
-def create_group(group: str, salt: str, password_hash: str, creator: str):
+def create_group(group, salt, password_hash, creator):
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     try:
-        c.execute('''
-            INSERT INTO groups (group_name, salt, password_hash, created_by)
-            VALUES (?, ?, ?, ?)
-        ''', (group, salt, password_hash, creator))
+        c.execute("INSERT INTO groups (group_name, salt, password_hash, created_by) VALUES (?,?,?,?)",
+                 (group, salt, password_hash, creator))
         conn.commit()
         conn.close()
         return True
@@ -219,280 +172,269 @@ def create_group(group: str, salt: str, password_hash: str, creator: str):
 # ========== WEBSOCKET MANAGER ==========
 class ConnectionManager:
     def __init__(self):
-        self.active_connections: Dict[str, Dict[str, WebSocket]] = {}
+        self.connections: Dict[str, Dict[str, WebSocket]] = {}
     
-    async def connect(self, websocket: WebSocket, group: str, username: str):
-        await websocket.accept()
-        if group not in self.active_connections:
-            self.active_connections[group] = {}
-        self.active_connections[group][username] = websocket
-        set_user_status(username, 'online', group)
+    async def add(self, group: str, username: str, websocket: WebSocket):
+        if group not in self.connections:
+            self.connections[group] = {}
+        self.connections[group][username] = websocket
     
-    def disconnect(self, group: str, username: str):
-        if group in self.active_connections:
-            if username in self.active_connections[group]:
-                del self.active_connections[group][username]
-            if not self.active_connections[group]:
-                del self.active_connections[group]
+    def remove(self, group: str, username: str):
+        if group in self.connections:
+            self.connections[group].pop(username, None)
+            if not self.connections[group]:
+                del self.connections[group]
     
     async def broadcast(self, group: str, message: dict, exclude: str = None):
-        if group not in self.active_connections:
+        if group not in self.connections:
             return
-        for username, connection in self.active_connections[group].items():
+        for username, ws in self.connections[group].items():
             if username != exclude:
                 try:
-                    await connection.send_json(message)
+                    await ws.send_json(message)
                 except:
                     pass
 
 manager = ConnectionManager()
 
-# ========== HTML PAGE ==========
-HTML_PAGE = '''<!DOCTYPE html>
-<html lang="en">
+# ========== HTML ==========
+HTML = '''<!DOCTYPE html>
+<html>
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes, viewport-fit=cover">
-    <title>ABAVANDIMWE | Secure Chat</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
+    <title>ABAVANDIMWE</title>
     <style>
-        *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent;}
-        body{font-family:monospace;background:#0a0a0f;height:100vh;overflow:hidden;color:#0f0;}
-        .login-container{position:fixed;top:0;left:0;right:0;bottom:0;display:flex;justify-content:center;align-items:center;background:#0a0a0f;z-index:1000;padding:20px;}
-        .login-card{background:#050508;border:2px solid #0f0;border-radius:24px;padding:32px 24px;width:100%;max-width:400px;}
+        *{margin:0;padding:0;box-sizing:border-box;}
+        body{font-family:monospace;background:#0a0a0f;height:100vh;color:#0f0;}
+        .login{position:fixed;top:0;left:0;right:0;bottom:0;display:flex;justify-content:center;align-items:center;background:#0a0a0f;z-index:1000;padding:20px;}
+        .card{background:#050508;border:2px solid #0f0;border-radius:24px;padding:32px;width:100%;max-width:400px;}
         h1{text-align:center;margin-bottom:8px;font-size:28px;}
         .sub{text-align:center;margin-bottom:32px;font-size:11px;color:#666;}
         input{width:100%;padding:14px;margin:10px 0;background:#111;border:1px solid #0f0;border-radius:12px;color:#0f0;font-family:monospace;}
-        input:focus{outline:none;box-shadow:0 0 10px rgba(0,255,65,0.3);}
         button{width:100%;padding:14px;margin-top:20px;background:transparent;border:2px solid #0f0;border-radius:12px;color:#0f0;font-size:16px;font-weight:bold;cursor:pointer;}
         button:active{background:#0f0;color:#000;}
-        .error-message{color:#ff4444;font-size:12px;text-align:center;margin-top:12px;display:none;}
-        .chat-container{display:none;width:100%;height:100%;flex-direction:column;background:#0a0a0f;position:fixed;top:0;left:0;right:0;bottom:0;}
-        .chat-container.active{display:flex;}
-        .chat-header{padding:12px 16px;background:#050508;border-bottom:1px solid #0f0;display:flex;justify-content:space-between;align-items:center;gap:8px;}
-        .chat-header h2{font-size:14px;flex:1;text-align:center;overflow:hidden;text-overflow:ellipsis;}
-        .online-badge{font-size:11px;padding:4px 10px;border:1px solid #0f0;border-radius:20px;}
-        .menu-btn,.logout-btn{background:transparent;border:1px solid #0f0;color:#0f0;padding:6px 12px;border-radius:8px;cursor:pointer;width:auto;margin:0;font-size:12px;}
-        .logout-btn:active{background:#ff0041;border-color:#ff0041;color:white;}
-        .main-content{flex:1;display:flex;overflow:hidden;position:relative;}
-        .sidebar{width:260px;background:#050508;border-right:1px solid #0f0;display:flex;flex-direction:column;flex-shrink:0;}
-        .sidebar-header{padding:16px;border-bottom:1px solid #0f0;}
-        .users-list{flex:1;padding:12px;overflow-y:auto;}
-        .user-item{padding:10px 12px;margin:6px 0;border:1px solid #0f0;border-radius:10px;display:flex;align-items:center;gap:8px;}
-        .user-item::before{content:"●";color:#0f0;font-size:10px;animation:pulse 2s infinite;}
-        @keyframes pulse{0%,100%{opacity:1;}50%{opacity:0.5;}}
-        @media (max-width:768px){
-            .sidebar{position:fixed;left:-260px;top:0;bottom:0;z-index:20;transition:left 0.3s ease;}
-            .sidebar.open{left:0;}
-            .overlay{position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.7);z-index:15;display:none;}
-            .overlay.active{display:block;}
-        }
-        @media (min-width:769px){.menu-btn,.overlay{display:none;}}
-        .chat-area{flex:1;display:flex;flex-direction:column;}
-        .messages-container{flex:1;padding:16px;overflow-y:auto;display:flex;flex-direction:column;gap:12px;}
-        .message{max-width:85%;display:flex;flex-direction:column;animation:fadeIn 0.2s ease;}
-        @keyframes fadeIn{from{opacity:0;transform:translateY(10px);}to{opacity:1;transform:translateY(0);}}
-        .message.sent{align-self:flex-end;}
-        .message.received{align-self:flex-start;}
-        .message-bubble{padding:10px 14px;border-radius:18px;font-size:14px;word-wrap:break-word;}
-        .message.sent .message-bubble{background:#0f0;color:#000;border-bottom-right-radius:4px;}
-        .message.received .message-bubble{background:#1a1a2e;border:1px solid #0f0;border-bottom-left-radius:4px;}
-        .message-sender{font-size:10px;margin-bottom:4px;opacity:0.7;padding-left:4px;}
-        .message-time{font-size:9px;margin-top:4px;opacity:0.5;}
-        .system-message{text-align:center;font-size:11px;color:#ffaa00;margin:8px 0;font-style:italic;}
-        .typing-indicator{padding:8px 16px;color:#0f0;font-style:italic;font-size:11px;min-height:36px;}
-        .input-area{padding:12px 16px;background:#050508;border-top:1px solid #0f0;display:flex;gap:10px;}
-        .input-area input{flex:1;margin:0;padding:12px 16px;font-size:14px;}
-        .input-area button{width:auto;margin:0;padding:12px 20px;}
-        .footer{text-align:center;padding:6px;font-size:8px;color:#333;border-top:1px solid #0f0;}
-        ::-webkit-scrollbar{width:3px;}
-        ::-webkit-scrollbar-track{background:#1a1a2e;}
-        ::-webkit-scrollbar-thumb{background:#0f0;}
+        .chat{display:none;width:100%;height:100%;flex-direction:column;}
+        .chat.active{display:flex;}
+        .header{padding:12px 16px;background:#050508;border-bottom:1px solid #0f0;display:flex;justify-content:space-between;align-items:center;}
+        .header h2{font-size:14px;}
+        .exit-btn{background:transparent;border:1px solid #0f0;color:#0f0;padding:6px 12px;border-radius:8px;cursor:pointer;}
+        .main{flex:1;display:flex;overflow:hidden;}
+        .sidebar{width:250px;background:#050508;border-right:1px solid #0f0;display:flex;flex-direction:column;}
+        .sidebar h3{padding:16px;border-bottom:1px solid #0f0;font-size:14px;}
+        .users{padding:12px;flex:1;overflow-y:auto;}
+        .user{padding:10px;margin:5px 0;border:1px solid #0f0;border-radius:10px;}
+        .chatarea{flex:1;display:flex;flex-direction:column;}
+        .msgs{flex:1;padding:16px;overflow-y:auto;display:flex;flex-direction:column;gap:12px;}
+        .msg{max-width:80%;display:flex;flex-direction:column;}
+        .msg.sent{align-self:flex-end;}
+        .msg.received{align-self:flex-start;}
+        .bubble{padding:10px 14px;border-radius:18px;font-size:14px;}
+        .msg.sent .bubble{background:#0f0;color:#000;border-bottom-right-radius:4px;}
+        .msg.received .bubble{background:#1a1a2e;border:1px solid #0f0;border-bottom-left-radius:4px;}
+        .sender{font-size:10px;margin-bottom:4px;opacity:0.7;}
+        .time{font-size:9px;margin-top:4px;opacity:0.5;}
+        .typing{padding:8px 16px;color:#0f0;font-style:italic;font-size:11px;}
+        .input{padding:12px 16px;background:#050508;border-top:1px solid #0f0;display:flex;gap:10px;}
+        .input input{flex:1;margin:0;}
+        .input button{width:auto;margin:0;padding:12px 20px;}
+        @media (max-width:768px){.sidebar{position:fixed;left:-250px;top:0;bottom:0;z-index:20;transition:left 0.3s;}.sidebar.open{left:0;}.overlay{position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.7);z-index:15;display:none;}.overlay.active{display:block;}}
+        @media (min-width:769px){.menu-btn{display:none;}}
+        .menu-btn{background:transparent;border:1px solid #0f0;color:#0f0;padding:6px 12px;border-radius:8px;cursor:pointer;}
+        .error{color:#ff4444;font-size:12px;text-align:center;margin-top:12px;display:none;}
     </style>
 </head>
 <body>
-<div id="loginScreen" class="login-container">
-    <div class="login-card">
+<div id="loginDiv" class="login">
+    <div class="card">
         <h1># ABAVANDIMWE</h1>
-        <div class="sub">Secure Encrypted Messaging by Mugisha Pc</div>
+        <div class="sub">Secure Messaging by Mugisha Pc</div>
         <input type="text" id="username" placeholder="USERNAME">
         <input type="text" id="groupName" placeholder="GROUP NAME">
-        <input type="password" id="groupPassword" placeholder="GROUP PASSWORD">
-        <button onclick="connect()">▶ ENTER CHAT</button>
-        <div id="loginError" class="error-message"></div>
-        <div style="text-align:center;margin-top:20px;font-size:9px;color:#333;">
-            🔒 AES-256 | ⏰ Messages persist for 24 hours then auto-delete
-        </div>
+        <input type="password" id="groupPassword" placeholder="PASSWORD">
+        <button onclick="doConnect()">▶ CONNECT</button>
+        <div id="errorMsg" class="error"></div>
+        <div style="text-align:center;margin-top:20px;font-size:9px;color:#333;">🔒 24h auto-delete | AES-256</div>
     </div>
 </div>
-<div id="chatScreen" class="chat-container">
-    <div class="chat-header">
-        <button class="menu-btn" onclick="toggleSidebar()">☰</button>
+<div id="chatDiv" class="chat">
+    <div class="header">
+        <button class="menu-btn" onclick="toggleMenu()">☰</button>
         <h2 id="groupTitle"># LOADING</h2>
-        <button class="logout-btn" onclick="logout()">🚪 EXIT</button>
+        <button class="exit-btn" onclick="doLogout()">EXIT</button>
     </div>
-    <div class="main-content">
+    <div class="main">
         <div class="sidebar" id="sidebar">
-            <div class="sidebar-header"><h3>● ONLINE USERS <span id="onlineCount"></span></h3></div>
-            <div class="users-list" id="usersList"><div class="user-item">Loading...</div></div>
+            <h3>● ONLINE</h3>
+            <div class="users" id="usersList">Loading...</div>
         </div>
-        <div class="overlay" id="overlay" onclick="toggleSidebar()"></div>
-        <div class="chat-area">
-            <div class="messages-container" id="messages"><div style="text-align:center;">Connecting...</div></div>
-            <div class="typing-indicator" id="typingIndicator"></div>
-            <div class="input-area">
-                <input type="text" id="messageInput" placeholder="Type message...">
-                <button onclick="sendMessage()">SEND</button>
+        <div class="overlay" id="overlay" onclick="toggleMenu()"></div>
+        <div class="chatarea">
+            <div class="msgs" id="messages"><div style="text-align:center;">Connecting...</div></div>
+            <div class="typing" id="typingIndicator"></div>
+            <div class="input">
+                <input type="text" id="msgInput" placeholder="Type message...">
+                <button onclick="sendMsg()">SEND</button>
             </div>
-            <div class="footer">🔐 End-to-End Encrypted | Messages last 24 hours from sending time</div>
         </div>
     </div>
 </div>
 <script>
-let ws, username, groupName, groupPassword, groupSalt, typingTimeout;
-
-async function encrypt(text, pwd, salt){
-    const e=new TextEncoder();
-    const km=await crypto.subtle.importKey('raw',e.encode(pwd),'PBKDF2',false,['deriveKey']);
-    const k=await crypto.subtle.deriveKey({name:'PBKDF2',salt:e.encode(salt),iterations:100000,hash:'SHA-256'},km,{name:'AES-GCM',length:256},false,['encrypt']);
-    const iv=crypto.getRandomValues(new Uint8Array(12));
-    const enc=await crypto.subtle.encrypt({name:'AES-GCM',iv},k,e.encode(text));
-    const c=new Uint8Array(iv.length+enc.byteLength);
-    c.set(iv,0);c.set(new Uint8Array(enc),iv.length);
-    return btoa(String.fromCharCode(...c));
-}
-
-async function decrypt(enc,pwd,salt){
-    const d=Uint8Array.from(atob(enc),c=>c.charCodeAt(0));
-    const iv=d.slice(0,12),data=d.slice(12);
-    const e=new TextEncoder();
-    const km=await crypto.subtle.importKey('raw',e.encode(pwd),'PBKDF2',false,['deriveKey']);
-    const k=await crypto.subtle.deriveKey({name:'PBKDF2',salt:e.encode(salt),iterations:100000,hash:'SHA-256'},km,{name:'AES-GCM',length:256},false,['decrypt']);
-    const dec=await crypto.subtle.decrypt({name:'AES-GCM',iv},k,data);
-    return new TextDecoder().decode(dec);
-}
-
-function toggleSidebar(){
-    document.getElementById('sidebar').classList.toggle('open');
-    document.getElementById('overlay').classList.toggle('active');
-}
-
-function showError(msg){
-    let err=document.getElementById('loginError');
-    err.textContent=msg;
-    err.style.display='block';
-    setTimeout(()=>err.style.display='none',3000);
-}
-
-function addSystemMessage(text){
-    let msgs=document.getElementById('messages');
-    if(msgs.children.length===1 && msgs.children[0].innerText.includes('Connecting')) msgs.innerHTML='';
-    let div=document.createElement('div');
-    div.className='system-message';
-    div.innerHTML=text;
-    msgs.appendChild(div);
-    msgs.scrollTop=msgs.scrollHeight;
-}
-
-function addMessage(sender,text,isSent){
-    let msgs=document.getElementById('messages');
-    if(msgs.children.length===1 && msgs.children[0].innerText.includes('Connecting')) msgs.innerHTML='';
-    let div=document.createElement('div');
-    div.className='message '+(isSent?'sent':'received');
-    let time=new Date().toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
-    div.innerHTML='<div class="message-sender">'+(isSent?'YOU':sender)+'</div><div class="message-bubble">'+escapeHtml(text)+'</div><div class="message-time">'+time+'</div>';
-    msgs.appendChild(div);
-    msgs.scrollTop=msgs.scrollHeight;
-}
-
-function escapeHtml(t){let d=document.createElement('div');d.textContent=t;return d.innerHTML;}
-
-function updateUsers(users){
-    document.getElementById('onlineCount').innerHTML='('+users.length+')';
-    let ul=document.getElementById('usersList');
-    if(users.length===0) ul.innerHTML='<div class="user-item">No users online</div>';
-    else ul.innerHTML=users.map(u=>'<div class="user-item">'+escapeHtml(u)+'</div>').join('');
-}
-
-function logout(){
-    if(ws) ws.close();
-    ws=null;
-    document.getElementById('chatScreen').classList.remove('active');
-    document.getElementById('loginScreen').style.display='flex';
-    document.getElementById('messages').innerHTML='<div style="text-align:center;">Connecting...</div>';
-    document.getElementById('usersList').innerHTML='<div class="user-item">Loading...</div>';
-    document.getElementById('username').value='';
-    document.getElementById('groupName').value='';
-    document.getElementById('groupPassword').value='';
-}
-
-function connect(){
-    username=document.getElementById('username').value.trim();
-    groupName=document.getElementById('groupName').value.trim();
-    groupPassword=document.getElementById('groupPassword').value;
-    if(!username||!groupName||!groupPassword){showError('Fill all fields');return;}
-    let url='wss://'+window.location.host+'/ws';
-    ws=new WebSocket(url);
-    ws.onopen=()=>ws.send(JSON.stringify({type:'join',username,group:groupName,password:groupPassword}));
-    ws.onmessage=async(e)=>{
-        let d=JSON.parse(e.data);
-        if(d.type==='error'){showError(d.message);ws.close();return;}
-        if(d.type==='ready'){groupSalt=d.salt;document.getElementById('loginScreen').style.display='none';document.getElementById('chatScreen').classList.add('active');document.getElementById('groupTitle').innerHTML='# '+d.group;addSystemMessage('🔐 You joined the chat - Messages last 24 hours from sending');}
-        else if(d.type==='message'||d.type==='history'){
-            try{let dec=await decrypt(d.ciphertext,groupPassword,d.salt);addMessage(d.sender,dec,d.sender===username);}
-            catch(e){addMessage(d.sender,'🔒 Encrypted',d.sender===username);}
-        }
-        else if(d.type==='users') updateUsers(d.users);
-        else if(d.type==='user_joined') addSystemMessage('👤 '+d.user+' joined');
-        else if(d.type==='user_left') addSystemMessage('👋 '+d.user+' left');
-        else if(d.type==='typing') document.getElementById('typingIndicator').innerHTML='✏️ '+d.user+' typing...';
-        else if(d.type==='stop_typing') document.getElementById('typingIndicator').innerHTML='';
-    };
-    ws.onerror=()=>showError('Connection failed');
-}
-
-document.getElementById('messageInput')?.addEventListener('input',function(){
-    if(ws&&ws.readyState===WebSocket.OPEN){
-        ws.send(JSON.stringify({type:'typing'}));
-        clearTimeout(typingTimeout);
-        typingTimeout=setTimeout(()=>ws.send(JSON.stringify({type:'stop_typing'})),1000);
+    let ws, myName, myGroup, myPass, groupSalt, typingTO;
+    
+    async function encryptText(txt, pass, salt){
+        const enc=new TextEncoder();
+        const km=await crypto.subtle.importKey('raw',enc.encode(pass),'PBKDF2',false,['deriveKey']);
+        const key=await crypto.subtle.deriveKey({name:'PBKDF2',salt:enc.encode(salt),iterations:100000,hash:'SHA-256'},km,{name:'AES-GCM',length:256},false,['encrypt']);
+        const iv=crypto.getRandomValues(new Uint8Array(12));
+        const encrypted=await crypto.subtle.encrypt({name:'AES-GCM',iv},key,enc.encode(txt));
+        const c=new Uint8Array(iv.length+encrypted.byteLength);
+        c.set(iv,0);c.set(new Uint8Array(encrypted),iv.length);
+        return btoa(String.fromCharCode(...c));
     }
-});
-document.getElementById('messageInput')?.addEventListener('keypress',function(e){if(e.key==='Enter')sendMessage();});
-
-async function sendMessage(){
-    let input=document.getElementById('messageInput'),text=input.value.trim();
-    if(!text||!ws||ws.readyState!==WebSocket.OPEN||!groupSalt) return;
-    try{
-        let cipher=await encrypt(text,groupPassword,groupSalt);
-        ws.send(JSON.stringify({type:'message',ciphertext:cipher,salt:groupSalt}));
-        addMessage(username,text,true);
-        input.value='';
-    }catch(e){alert('Failed to send');}
-}
+    
+    async function decryptText(enc, pass, salt){
+        const d=Uint8Array.from(atob(enc),c=>c.charCodeAt(0));
+        const iv=d.slice(0,12),data=d.slice(12);
+        const enc2=new TextEncoder();
+        const km=await crypto.subtle.importKey('raw',enc2.encode(pass),'PBKDF2',false,['deriveKey']);
+        const key=await crypto.subtle.deriveKey({name:'PBKDF2',salt:enc2.encode(salt),iterations:100000,hash:'SHA-256'},km,{name:'AES-GCM',length:256},false,['decrypt']);
+        const dec=await crypto.subtle.decrypt({name:'AES-GCM',iv},key,data);
+        return new TextDecoder().decode(dec);
+    }
+    
+    function toggleMenu(){
+        document.getElementById('sidebar').classList.toggle('open');
+        document.getElementById('overlay').classList.toggle('active');
+    }
+    
+    function showError(msg){
+        let err=document.getElementById('errorMsg');
+        err.innerText=msg;
+        err.style.display='block';
+        setTimeout(()=>err.style.display='none',3000);
+    }
+    
+    function addSysMsg(txt){
+        let msgs=document.getElementById('messages');
+        if(msgs.children.length===1 && msgs.children[0].innerText.includes('Connecting')) msgs.innerHTML='';
+        let div=document.createElement('div');
+        div.style.textAlign='center';
+        div.style.color='#ffaa00';
+        div.style.fontSize='11px';
+        div.style.margin='8px 0';
+        div.innerText=txt;
+        msgs.appendChild(div);
+        msgs.scrollTop=msgs.scrollHeight;
+    }
+    
+    function addMsg(sender, text, isSent){
+        let msgs=document.getElementById('messages');
+        if(msgs.children.length===1 && msgs.children[0].innerText.includes('Connecting')) msgs.innerHTML='';
+        let div=document.createElement('div');
+        div.className='msg '+(isSent?'sent':'received');
+        let now=new Date();
+        let time=now.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
+        div.innerHTML='<div class="sender">'+(isSent?'YOU':sender)+'</div><div class="bubble">'+escapeHtml(text)+'</div><div class="time">'+time+'</div>';
+        msgs.appendChild(div);
+        msgs.scrollTop=msgs.scrollHeight;
+    }
+    
+    function escapeHtml(t){let d=document.createElement('div');d.textContent=t;return d.innerHTML;}
+    
+    function updateUsers(users){
+        let ul=document.getElementById('usersList');
+        if(users.length===0) ul.innerHTML='<div class="user">No users online</div>';
+        else ul.innerHTML=users.map(u=>'<div class="user">● '+escapeHtml(u)+'</div>').join('');
+    }
+    
+    function doLogout(){
+        if(ws) ws.close();
+        ws=null;
+        document.getElementById('chatDiv').classList.remove('active');
+        document.getElementById('loginDiv').style.display='flex';
+        document.getElementById('messages').innerHTML='<div style="text-align:center;">Connecting...</div>';
+        document.getElementById('usersList').innerHTML='Loading...';
+        document.getElementById('username').value='';
+        document.getElementById('groupName').value='';
+        document.getElementById('groupPassword').value='';
+    }
+    
+    function doConnect(){
+        myName=document.getElementById('username').value.trim();
+        myGroup=document.getElementById('groupName').value.trim();
+        myPass=document.getElementById('groupPassword').value;
+        if(!myName||!myGroup||!myPass){showError('Fill all fields');return;}
+        
+        let url='wss://'+window.location.host+'/ws';
+        ws=new WebSocket(url);
+        
+        ws.onopen=()=>{
+            ws.send(JSON.stringify({type:'join',username:myName,group:myGroup,password:myPass}));
+        };
+        
+        ws.onmessage=async (e)=>{
+            let d=JSON.parse(e.data);
+            if(d.type==='error'){showError(d.message);ws.close();return;}
+            if(d.type==='ready'){
+                groupSalt=d.salt;
+                document.getElementById('loginDiv').style.display='none';
+                document.getElementById('chatDiv').classList.add('active');
+                document.getElementById('groupTitle').innerHTML='# '+d.group;
+                addSysMsg('🔐 Connected - Messages last 24 hours');
+            }
+            else if(d.type==='message'||d.type==='history'){
+                try{
+                    let dec=await decryptText(d.ciphertext,myPass,d.salt);
+                    addMsg(d.sender,dec,d.sender===myName);
+                }catch(e){addMsg(d.sender,'🔒 Encrypted',d.sender===myName);}
+            }
+            else if(d.type==='users') updateUsers(d.users);
+            else if(d.type==='user_joined') addSysMsg('👤 '+d.user+' joined');
+            else if(d.type==='user_left') addSysMsg('👋 '+d.user+' left');
+            else if(d.type==='typing') document.getElementById('typingIndicator').innerHTML='✏️ '+d.user+' typing...';
+            else if(d.type==='stop_typing') document.getElementById('typingIndicator').innerHTML='';
+        };
+        
+        ws.onerror=()=>showError('Connection failed');
+    }
+    
+    document.getElementById('msgInput')?.addEventListener('input',function(){
+        if(ws&&ws.readyState===WebSocket.OPEN){
+            ws.send(JSON.stringify({type:'typing'}));
+            clearTimeout(typingTO);
+            typingTO=setTimeout(()=>ws.send(JSON.stringify({type:'stop_typing'})),1000);
+        }
+    });
+    
+    document.getElementById('msgInput')?.addEventListener('keypress',function(e){if(e.key==='Enter')sendMsg();});
+    
+    async function sendMsg(){
+        let input=document.getElementById('msgInput'),txt=input.value.trim();
+        if(!txt||!ws||ws.readyState!==WebSocket.OPEN||!groupSalt) return;
+        try{
+            let cipher=await encryptText(txt,myPass,groupSalt);
+            ws.send(JSON.stringify({type:'message',ciphertext:cipher,salt:groupSalt}));
+            addMsg(myName,txt,true);
+            input.value='';
+        }catch(e){alert('Failed');}
+    }
 </script>
 </body>
 </html>'''
 
-# ========== FASTAPI APP ==========
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    print("[✓] ABAVANDIMWE server starting")
-    yield
-    print("[✓] Server shutting down")
-
-app = FastAPI(title="ABAVANDIMWE", lifespan=lifespan)
-
+# ========== FASTAPI ENDPOINTS ==========
 @app.get("/")
-async def get_root():
-    return HTMLResponse(HTML_PAGE)
+async def root():
+    return HTMLResponse(HTML)
 
 @app.get("/health")
-async def health_check():
-    return {"status": "healthy", "database": "SQLite", "auto_delete": "24 hours from creation", "author": "Mugisha Pc"}
+async def health():
+    return {"status": "ok", "system": "ABAVANDIMWE", "author": "Mugisha Pc"}
 
-# ========== WEBSOCKET ENDPOINT ==========
+# ========== WEBSOCKET ==========
 @app.websocket("/ws")
-async def websocket_endpoint(websocket: WebSocket):
+async def ws_endpoint(websocket: WebSocket):
     await websocket.accept()
     username = None
     group_name = None
@@ -507,35 +449,53 @@ async def websocket_endpoint(websocket: WebSocket):
                 group_name = data.get('group')
                 password = data.get('password')
                 
+                # Check group
                 group_info = get_group_info(group_name)
-                
                 if group_info:
-                    if not crypto.verify_password(password, group_info['salt'], group_info['password_hash']):
-                        await websocket.send_json({'type': 'error', 'message': '❌ Invalid password'})
+                    if not verify_password(password, group_info['salt'], group_info['password_hash']):
+                        await websocket.send_json({'type': 'error', 'message': 'Wrong password'})
                         await websocket.close()
                         return
                     salt = group_info['salt']
                 else:
-                    salt = crypto.generate_salt()
-                    password_hash = crypto.hash_password(password, salt)
-                    create_group(group_name, salt, password_hash, username)
+                    salt = generate_salt()
+                    pwd_hash = hash_password(password, salt)
+                    create_group(group_name, salt, pwd_hash, username)
                 
-                await manager.connect(websocket, group_name, username)
+                # Add connection
+                await manager.add(group_name, username, websocket)
+                set_user_status(username, 'online', group_name)
+                
+                # Send history
+                for msg in get_messages(group_name):
+                    await websocket.send_json({
+                        'type': 'history',
+                        'ciphertext': msg['ciphertext'],
+                        'sender': msg['sender'],
+                        'salt': msg['salt']
+                    })
+                
+                # Send online users
+                online = get_online_users(group_name)
+                await manager.broadcast(group_name, {'type': 'users', 'users': online})
+                
+                # Broadcast joined
                 await manager.broadcast(group_name, {'type': 'user_joined', 'user': username}, exclude=username)
                 
-                for msg in get_messages(group_name):
-                    await websocket.send_json({'type': 'history', 'ciphertext': msg['ciphertext'], 'sender': msg['sender'], 'salt': msg['salt']})
-                
-                online_users = get_online_users(group_name)
-                await manager.broadcast(group_name, {'type': 'users', 'users': online_users})
+                # Send ready
                 await websocket.send_json({'type': 'ready', 'salt': salt, 'group': group_name})
                 print(f"[+] {username} joined {group_name}")
             
             elif msg_type == 'message':
-                ciphertext = data.get('ciphertext')
+                cipher = data.get('ciphertext')
                 salt = data.get('salt')
-                save_message(ciphertext, group_name, username, salt)
-                await manager.broadcast(group_name, {'type': 'message', 'ciphertext': ciphertext, 'sender': username, 'salt': salt}, exclude=username)
+                save_message(cipher, group_name, username, salt)
+                await manager.broadcast(group_name, {
+                    'type': 'message',
+                    'ciphertext': cipher,
+                    'sender': username,
+                    'salt': salt
+                }, exclude=username)
             
             elif msg_type == 'typing':
                 await manager.broadcast(group_name, {'type': 'typing', 'user': username}, exclude=username)
@@ -547,10 +507,10 @@ async def websocket_endpoint(websocket: WebSocket):
         pass
     finally:
         if username and group_name:
-            manager.disconnect(group_name, username)
+            manager.remove(group_name, username)
             set_user_status(username, 'offline', group_name)
-            online_users = get_online_users(group_name)
-            await manager.broadcast(group_name, {'type': 'users', 'users': online_users})
+            online = get_online_users(group_name)
+            await manager.broadcast(group_name, {'type': 'users', 'users': online})
             await manager.broadcast(group_name, {'type': 'user_left', 'user': username})
             print(f"[-] {username} left {group_name}")
 
@@ -559,29 +519,23 @@ if __name__ == "__main__":
     import uvicorn
     port = int(os.getenv('PORT', 8080))
     print("""
-╔═══════════════════════════════════════════════════════════════════╗
-║                                                                   ║
-║   █████╗ ██████╗  █████╗ ██╗   ██╗ █████╗ ███╗   ██╗██████╗      ║
-║  ██╔══██╗██╔══██╗██╔══██╗██║   ██║██╔══██╗████╗  ██║██╔══██╗     ║
-║  ███████║██████╔╝███████║██║   ██║███████║██╔██╗ ██║██║  ██║     ║
-║  ██╔══██║██╔══██╗██╔══██║╚██╗ ██╔╝██╔══██║██║╚██╗██║██║  ██║     ║
-║  ██║  ██║██████╔╝██║  ██║ ╚████╔╝ ██║  ██║██║ ╚████║██████╔╝     ║
-║  ╚═╝  ╚═╝╚═════╝ ╚═╝  ╚═╝  ╚═══╝  ╚═╝  ╚═╝╚═╝  ╚═══╝╚═════╝      ║
-║                                                                   ║
-║              PROFESSIONAL SECURE MESSAGING SYSTEM                 ║
-║              ✅ Messages persist for 24 hours from sending        ║
-║              ✅ Then auto-delete automatically                    ║
-║              ✅ Password protected groups                         ║
-║              ✅ AES-256-GCM encryption                            ║
-║                        AUTHOR: MUGISHA PC                         ║
-║                        VERSION: 11.0.0                            ║
-║                                                                   ║
-╚═══════════════════════════════════════════════════════════════════╝
+╔════════════════════════════════════════════════════════════╗
+║                                                            ║
+║   █████╗ ██████╗  █████╗ ██╗   ██╗ █████╗ ███╗   ██╗    ║
+║  ██╔══██╗██╔══██╗██╔══██╗██║   ██║██╔══██╗████╗  ██║    ║
+║  ███████║██████╔╝███████║██║   ██║███████║██╔██╗ ██║    ║
+║  ██╔══██║██╔══██╗██╔══██║╚██╗ ██╔╝██╔══██║██║╚██╗██║    ║
+║  ██║  ██║██████╔╝██║  ██║ ╚████╔╝ ██║  ██║██║ ╚████║    ║
+║  ╚═╝  ╚═╝╚═════╝ ╚═╝  ╚═╝  ╚═══╝  ╚═╝  ╚═╝╚═╝  ╚═══╝    ║
+║                                                            ║
+║              ABAVANDIMWE SECURE MESSAGING                  ║
+║           Messages auto-delete after 24 hours              ║
+║                    Author: Mugisha Pc                      ║
+║                                                            ║
+╚════════════════════════════════════════════════════════════╝
     """)
-    print(f"[✓] Server starting on port {port}")
-    print(f"[✓] Database: SQLite with 24-hour persistence")
-    print(f"[✓] Messages stay for exactly 24 hours from send time")
-    print(f"[✓] Cleanup runs every hour")
+    print(f"[✓] Server on port {port}")
+    print(f"[✓] Messages last 24 hours then auto-delete")
     print(f"[✓] Open: https://abavandimwe.onrender.com")
     
     uvicorn.run(app, host="0.0.0.0", port=port)
