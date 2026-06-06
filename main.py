@@ -1,7 +1,7 @@
 """
 ABAVANDIMWE - Secure Messaging System
 Author: Mugisha Pc
-Mobile Optimized CSS
+Professional Mobile Design
 """
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
@@ -15,7 +15,6 @@ import hashlib
 import os
 import threading
 import time
-from datetime import datetime
 from typing import Dict
 
 app = FastAPI()
@@ -196,7 +195,7 @@ class ConnectionManager:
 
 manager = ConnectionManager()
 
-# ========== HTML - MOBILE OPTIMIZED ==========
+# ========== HTML - PROFESSIONAL MOBILE DESIGN ==========
 HTML = '''<!DOCTYPE html>
 <html>
 <head>
@@ -213,11 +212,10 @@ HTML = '''<!DOCTYPE html>
         }
 
         body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', monospace;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, sans-serif;
             background: #0a0a0f;
             height: 100vh;
             overflow: hidden;
-            color: #00ff41;
         }
 
         /* Login Screen */
@@ -237,62 +235,66 @@ HTML = '''<!DOCTYPE html>
 
         .login-card {
             background: #050508;
-            border: 2px solid #00ff41;
-            border-radius: 24px;
+            border: 1px solid #00ff41;
+            border-radius: 20px;
             padding: 32px 24px;
             width: 100%;
-            max-width: 400px;
+            max-width: 380px;
         }
 
-        h1 {
+        .logo {
             text-align: center;
-            font-size: 28px;
-            margin-bottom: 8px;
-            letter-spacing: 2px;
-        }
-
-        .sub {
-            text-align: center;
-            font-size: 11px;
-            color: #666;
             margin-bottom: 32px;
+        }
+
+        .logo h1 {
+            color: #00ff41;
+            font-size: 26px;
+            font-weight: 600;
+            letter-spacing: -0.5px;
+        }
+
+        .logo p {
+            color: #666;
+            font-size: 11px;
+            margin-top: 6px;
         }
 
         input {
             width: 100%;
             padding: 14px 16px;
-            margin: 10px 0;
+            margin: 8px 0;
             background: #111;
-            border: 1px solid #00ff41;
+            border: 1px solid #2a2a2a;
             border-radius: 12px;
             color: #00ff41;
-            font-family: monospace;
             font-size: 15px;
+            font-family: monospace;
+            transition: all 0.2s;
         }
 
         input:focus {
             outline: none;
-            box-shadow: 0 0 10px rgba(0,255,65,0.3);
+            border-color: #00ff41;
         }
 
-        button {
+        .connect-btn {
             width: 100%;
             padding: 14px;
-            margin-top: 20px;
+            margin-top: 16px;
             background: transparent;
-            border: 2px solid #00ff41;
+            border: 1px solid #00ff41;
             border-radius: 12px;
             color: #00ff41;
             font-size: 16px;
-            font-weight: bold;
+            font-weight: 500;
             cursor: pointer;
             transition: all 0.2s;
         }
 
-        button:active {
+        .connect-btn:active {
             background: #00ff41;
             color: #000;
-            transform: scale(0.98);
         }
 
         .error {
@@ -303,12 +305,18 @@ HTML = '''<!DOCTYPE html>
             display: none;
         }
 
+        .footer-note {
+            text-align: center;
+            margin-top: 24px;
+            font-size: 9px;
+            color: #333;
+        }
+
         /* Chat Screen */
         .chat-screen {
             display: none;
-            width: 100%;
-            height: 100%;
             flex-direction: column;
+            height: 100vh;
             background: #0a0a0f;
         }
 
@@ -316,43 +324,45 @@ HTML = '''<!DOCTYPE html>
             display: flex;
         }
 
-        /* Header */
+        /* Chat Header */
         .chat-header {
             padding: 12px 16px;
             background: #050508;
-            border-bottom: 1px solid #00ff41;
+            border-bottom: 1px solid #1a1a1a;
             display: flex;
-            justify-content: space-between;
             align-items: center;
+            justify-content: space-between;
             gap: 12px;
             flex-shrink: 0;
         }
 
-        .chat-header h2 {
-            font-size: 16px;
-            font-weight: normal;
+        .menu-btn {
+            background: transparent;
+            border: none;
+            color: #00ff41;
+            font-size: 20px;
+            cursor: pointer;
+            padding: 4px 8px;
+        }
+
+        .group-name {
             flex: 1;
             text-align: center;
-            overflow: hidden;
-            text-overflow: ellipsis;
-            white-space: nowrap;
         }
 
-        .menu-btn, .exit-btn {
-            background: transparent;
-            border: 1px solid #00ff41;
-            border-radius: 8px;
+        .group-name h2 {
             color: #00ff41;
-            padding: 8px 14px;
-            font-size: 13px;
-            cursor: pointer;
-            flex-shrink: 0;
+            font-size: 15px;
+            font-weight: 500;
         }
 
-        .exit-btn:active {
-            background: #ff0041;
-            border-color: #ff0041;
-            color: white;
+        .exit-btn {
+            background: transparent;
+            border: none;
+            color: #ff4444;
+            font-size: 12px;
+            cursor: pointer;
+            padding: 4px 8px;
         }
 
         /* Main Content */
@@ -371,7 +381,7 @@ HTML = '''<!DOCTYPE html>
             bottom: 0;
             width: 280px;
             background: #050508;
-            border-right: 1px solid #00ff41;
+            border-right: 1px solid #1a1a1a;
             z-index: 20;
             transition: left 0.3s ease;
             display: flex;
@@ -382,10 +392,15 @@ HTML = '''<!DOCTYPE html>
             left: 0;
         }
 
-        .sidebar h3 {
+        .sidebar-header {
             padding: 16px;
-            border-bottom: 1px solid #00ff41;
-            font-size: 14px;
+            border-bottom: 1px solid #1a1a1a;
+        }
+
+        .sidebar-header h3 {
+            color: #00ff41;
+            font-size: 13px;
+            font-weight: 500;
         }
 
         .users-list {
@@ -396,9 +411,10 @@ HTML = '''<!DOCTYPE html>
 
         .user-item {
             padding: 10px 12px;
-            margin: 6px 0;
-            border: 1px solid #00ff41;
+            margin-bottom: 6px;
+            background: #111;
             border-radius: 10px;
+            color: #ccc;
             font-size: 13px;
         }
 
@@ -408,7 +424,7 @@ HTML = '''<!DOCTYPE html>
             left: 0;
             right: 0;
             bottom: 0;
-            background: rgba(0,0,0,0.7);
+            background: rgba(0,0,0,0.6);
             z-index: 15;
             display: none;
         }
@@ -417,7 +433,7 @@ HTML = '''<!DOCTYPE html>
             display: block;
         }
 
-        /* Desktop: always show sidebar */
+        /* Desktop */
         @media (min-width: 769px) {
             .sidebar {
                 position: relative;
@@ -425,9 +441,6 @@ HTML = '''<!DOCTYPE html>
                 width: 260px;
             }
             .menu-btn {
-                display: none;
-            }
-            .overlay {
                 display: none;
             }
         }
@@ -447,19 +460,13 @@ HTML = '''<!DOCTYPE html>
             overflow-y: auto;
             display: flex;
             flex-direction: column;
-            gap: 12px;
+            gap: 8px;
         }
 
         .message {
-            max-width: 85%;
+            max-width: 80%;
             display: flex;
             flex-direction: column;
-            animation: fadeIn 0.2s ease;
-        }
-
-        @keyframes fadeIn {
-            from { opacity: 0; transform: translateY(10px); }
-            to { opacity: 1; transform: translateY(0); }
         }
 
         .message.sent {
@@ -471,10 +478,10 @@ HTML = '''<!DOCTYPE html>
         }
 
         .message-bubble {
-            padding: 10px 14px;
-            border-radius: 18px;
+            padding: 8px 12px;
+            border-radius: 16px;
             font-size: 14px;
-            word-wrap: break-word;
+            line-height: 1.4;
         }
 
         .message.sent .message-bubble {
@@ -484,22 +491,23 @@ HTML = '''<!DOCTYPE html>
         }
 
         .message.received .message-bubble {
-            background: #1a1a2e;
-            border: 1px solid #00ff41;
+            background: #1a1a1a;
+            color: #e0e0e0;
             border-bottom-left-radius: 4px;
         }
 
         .message-sender {
             font-size: 10px;
             margin-bottom: 4px;
-            opacity: 0.7;
+            color: #888;
             padding-left: 4px;
         }
 
         .message-time {
             font-size: 9px;
             margin-top: 4px;
-            opacity: 0.5;
+            color: #555;
+            padding-left: 4px;
         }
 
         .system-message {
@@ -512,19 +520,19 @@ HTML = '''<!DOCTYPE html>
 
         /* Typing Indicator */
         .typing-indicator {
-            padding: 8px 16px;
+            padding: 6px 16px;
             color: #00ff41;
-            font-style: italic;
             font-size: 11px;
-            min-height: 36px;
+            font-style: italic;
+            min-height: 30px;
             flex-shrink: 0;
         }
 
         /* Input Area */
         .input-area {
-            padding: 12px 16px;
+            padding: 10px 16px;
             background: #050508;
-            border-top: 1px solid #00ff41;
+            border-top: 1px solid #1a1a1a;
             display: flex;
             gap: 10px;
             flex-shrink: 0;
@@ -533,25 +541,32 @@ HTML = '''<!DOCTYPE html>
         .input-area input {
             flex: 1;
             margin: 0;
-            padding: 12px 16px;
+            padding: 10px 14px;
+            background: #111;
+            border: 1px solid #2a2a2a;
+            border-radius: 20px;
+            color: #00ff41;
             font-size: 14px;
+        }
+
+        .input-area input:focus {
+            border-color: #00ff41;
         }
 
         .input-area button {
-            width: auto;
-            margin: 0;
-            padding: 12px 20px;
-            font-size: 14px;
+            background: transparent;
+            border: 1px solid #00ff41;
+            border-radius: 20px;
+            color: #00ff41;
+            padding: 10px 18px;
+            font-size: 13px;
+            font-weight: 500;
+            cursor: pointer;
         }
 
-        /* Footer */
-        .footer {
-            text-align: center;
-            padding: 6px;
-            font-size: 8px;
-            color: #333;
-            border-top: 1px solid #00ff41;
-            flex-shrink: 0;
+        .input-area button:active {
+            background: #00ff41;
+            color: #000;
         }
 
         /* Scrollbar */
@@ -560,48 +575,50 @@ HTML = '''<!DOCTYPE html>
         }
 
         ::-webkit-scrollbar-track {
-            background: #1a1a2e;
+            background: #1a1a1a;
         }
 
         ::-webkit-scrollbar-thumb {
             background: #00ff41;
+            border-radius: 3px;
         }
     </style>
 </head>
 <body>
 <div id="loginScreen" class="login-screen">
     <div class="login-card">
-        <h1># ABAVANDIMWE</h1>
-        <div class="sub">Secure Messaging by Mugisha Pc</div>
-        <input type="text" id="username" placeholder="USERNAME">
-        <input type="text" id="groupName" placeholder="GROUP NAME">
-        <input type="password" id="groupPassword" placeholder="PASSWORD">
-        <button onclick="doConnect()">▶ CONNECT</button>
+        <div class="logo">
+            <h1>ABAVANDIMWE</h1>
+            <p>Secure Messaging by Mugisha Pc</p>
+        </div>
+        <input type="text" id="username" placeholder="Username">
+        <input type="text" id="groupName" placeholder="Group name">
+        <input type="password" id="groupPassword" placeholder="Group password">
+        <button class="connect-btn" onclick="doConnect()">Connect</button>
         <div id="errorMsg" class="error"></div>
-        <div style="text-align:center;margin-top:20px;font-size:9px;color:#333;">🔒 24h auto-delete | AES-256</div>
+        <div class="footer-note">🔒 24h auto-delete | AES-256</div>
     </div>
 </div>
 
 <div id="chatScreen" class="chat-screen">
     <div class="chat-header">
         <button class="menu-btn" onclick="toggleMenu()">☰</button>
-        <h2 id="groupTitle"># LOADING</h2>
-        <button class="exit-btn" onclick="doLogout()">EXIT</button>
+        <div class="group-name"><h2 id="groupTitle">Loading...</h2></div>
+        <button class="exit-btn" onclick="doLogout()">Exit</button>
     </div>
     <div class="main-content">
         <div class="sidebar" id="sidebar">
-            <h3>● ONLINE USERS</h3>
+            <div class="sidebar-header"><h3>Online users</h3></div>
             <div class="users-list" id="usersList">Loading...</div>
         </div>
         <div class="overlay" id="overlay" onclick="toggleMenu()"></div>
         <div class="chat-area">
-            <div class="messages-container" id="messages"><div style="text-align:center;">Connecting...</div></div>
+            <div class="messages-container" id="messages"><div style="text-align:center;color:#666;">Connecting...</div></div>
             <div class="typing-indicator" id="typingIndicator"></div>
             <div class="input-area">
-                <input type="text" id="msgInput" placeholder="Type message...">
-                <button onclick="sendMsg()">SEND</button>
+                <input type="text" id="msgInput" placeholder="Message">
+                <button onclick="sendMsg()">Send</button>
             </div>
-            <div class="footer">🔐 Encrypted | Messages last 24 hours</div>
         </div>
     </div>
 </div>
@@ -659,7 +676,7 @@ HTML = '''<!DOCTYPE html>
         div.className='message '+(isSent?'sent':'received');
         let now=new Date();
         let time=now.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
-        div.innerHTML='<div class="message-sender">'+(isSent?'YOU':sender)+'</div><div class="message-bubble">'+escapeHtml(text)+'</div><div class="message-time">'+time+'</div>';
+        div.innerHTML='<div class="message-sender">'+(isSent?'You':sender)+'</div><div class="message-bubble">'+escapeHtml(text)+'</div><div class="message-time">'+time+'</div>';
         msgs.appendChild(div);
         msgs.scrollTop=msgs.scrollHeight;
     }
@@ -677,7 +694,7 @@ HTML = '''<!DOCTYPE html>
         ws=null;
         document.getElementById('chatScreen').classList.remove('active');
         document.getElementById('loginScreen').style.display='flex';
-        document.getElementById('messages').innerHTML='<div style="text-align:center;">Connecting...</div>';
+        document.getElementById('messages').innerHTML='<div style="text-align:center;color:#666;">Connecting...</div>';
         document.getElementById('usersList').innerHTML='Loading...';
         document.getElementById('username').value='';
         document.getElementById('groupName').value='';
@@ -704,8 +721,8 @@ HTML = '''<!DOCTYPE html>
                 groupSalt=d.salt;
                 document.getElementById('loginScreen').style.display='none';
                 document.getElementById('chatScreen').classList.add('active');
-                document.getElementById('groupTitle').innerHTML='# '+d.group;
-                addSystemMessage('🔐 Connected - Messages last 24 hours');
+                document.getElementById('groupTitle').innerHTML=d.group;
+                addSystemMessage('Connected - Messages last 24 hours');
             }
             else if(d.type==='message'||d.type==='history'){
                 try{
@@ -846,14 +863,14 @@ if __name__ == "__main__":
 ║                                                            ║
 ║              ABAVANDIMWE SECURE MESSAGING                  ║
 ║           Messages auto-delete after 24 hours              ║
-║              Mobile Optimized CSS                          ║
+║              Professional Mobile Design                    ║
 ║                    Author: Mugisha Pc                      ║
 ║                                                            ║
 ╚════════════════════════════════════════════════════════════╝
     """)
     print(f"[✓] Server on port {port}")
     print(f"[✓] Messages last 24 hours then auto-delete")
-    print(f"[✓] Mobile optimized CSS")
+    print(f"[✓] Professional mobile design")
     print(f"[✓] Open: https://abavandimwe.onrender.com")
     
     uvicorn.run(app, host="0.0.0.0", port=port)
