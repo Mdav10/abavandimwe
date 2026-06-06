@@ -1,7 +1,7 @@
 """
 ABAVANDIMWE - Secure Messaging System
 Author: Mugisha Pc
-Professional Mobile Design
+Complete Working Version - Clean UI
 """
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
@@ -195,106 +195,91 @@ class ConnectionManager:
 
 manager = ConnectionManager()
 
-# ========== HTML - PROFESSIONAL MOBILE DESIGN ==========
+# ========== HTML - CLEAN WORKING VERSION ==========
 HTML = '''<!DOCTYPE html>
 <html>
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes, viewport-fit=cover">
-    <meta name="theme-color" content="#0a0a0f">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
     <title>ABAVANDIMWE</title>
     <style>
         * {
             margin: 0;
             padding: 0;
             box-sizing: border-box;
-            -webkit-tap-highlight-color: transparent;
         }
 
         body {
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, sans-serif;
             background: #0a0a0f;
             height: 100vh;
-            overflow: hidden;
+            display: flex;
+            flex-direction: column;
         }
 
-        /* Login Screen */
-        .login-screen {
-            position: fixed;
-            top: 0;
-            left: 0;
-            right: 0;
-            bottom: 0;
+        /* Login */
+        .login-container {
+            flex: 1;
             display: flex;
             justify-content: center;
             align-items: center;
-            background: #0a0a0f;
-            z-index: 1000;
             padding: 20px;
         }
 
         .login-card {
-            background: #050508;
+            background: #0d1117;
             border: 1px solid #00ff41;
-            border-radius: 20px;
+            border-radius: 16px;
             padding: 32px 24px;
             width: 100%;
-            max-width: 380px;
+            max-width: 360px;
         }
 
-        .logo {
+        .login-card h1 {
+            color: #00ff41;
+            font-size: 24px;
+            text-align: center;
+            margin-bottom: 8px;
+        }
+
+        .login-card p {
+            color: #666;
+            font-size: 12px;
             text-align: center;
             margin-bottom: 32px;
         }
 
-        .logo h1 {
-            color: #00ff41;
-            font-size: 26px;
-            font-weight: 600;
-            letter-spacing: -0.5px;
-        }
-
-        .logo p {
-            color: #666;
-            font-size: 11px;
-            margin-top: 6px;
-        }
-
-        input {
+        .login-card input {
             width: 100%;
-            padding: 14px 16px;
+            padding: 12px 14px;
             margin: 8px 0;
-            background: #111;
-            border: 1px solid #2a2a2a;
-            border-radius: 12px;
+            background: #1a1a2e;
+            border: 1px solid #2a2a3e;
+            border-radius: 10px;
             color: #00ff41;
-            font-size: 15px;
-            font-family: monospace;
-            transition: all 0.2s;
+            font-size: 14px;
         }
 
-        input:focus {
+        .login-card input:focus {
             outline: none;
             border-color: #00ff41;
         }
 
-        .connect-btn {
+        .login-card button {
             width: 100%;
-            padding: 14px;
+            padding: 12px;
             margin-top: 16px;
-            background: transparent;
-            border: 1px solid #00ff41;
-            border-radius: 12px;
-            color: #00ff41;
-            font-size: 16px;
-            font-weight: 500;
+            background: #00ff41;
+            border: none;
+            border-radius: 10px;
+            color: #000;
+            font-size: 15px;
+            font-weight: 600;
             cursor: pointer;
-            transition: all 0.2s;
         }
 
-        .connect-btn:active {
-            background: #00ff41;
-            color: #000;
+        .login-card button:active {
+            opacity: 0.8;
         }
 
         .error {
@@ -302,147 +287,92 @@ HTML = '''<!DOCTYPE html>
             font-size: 12px;
             text-align: center;
             margin-top: 12px;
-            display: none;
         }
 
-        .footer-note {
-            text-align: center;
-            margin-top: 24px;
-            font-size: 9px;
-            color: #333;
-        }
-
-        /* Chat Screen */
-        .chat-screen {
+        /* Chat */
+        .chat-container {
             display: none;
+            flex: 1;
             flex-direction: column;
-            height: 100vh;
             background: #0a0a0f;
         }
 
-        .chat-screen.active {
+        .chat-container.active {
             display: flex;
         }
 
-        /* Chat Header */
+        /* Header */
         .chat-header {
+            background: #0d1117;
+            border-bottom: 1px solid #1a1a2e;
             padding: 12px 16px;
-            background: #050508;
-            border-bottom: 1px solid #1a1a1a;
             display: flex;
-            align-items: center;
             justify-content: space-between;
-            gap: 12px;
-            flex-shrink: 0;
+            align-items: center;
         }
 
-        .menu-btn {
-            background: transparent;
-            border: none;
+        .chat-header h3 {
             color: #00ff41;
-            font-size: 20px;
-            cursor: pointer;
-            padding: 4px 8px;
-        }
-
-        .group-name {
-            flex: 1;
-            text-align: center;
-        }
-
-        .group-name h2 {
-            color: #00ff41;
-            font-size: 15px;
+            font-size: 16px;
             font-weight: 500;
         }
 
         .exit-btn {
             background: transparent;
-            border: none;
+            border: 1px solid #ff4444;
             color: #ff4444;
+            padding: 6px 14px;
+            border-radius: 8px;
             font-size: 12px;
             cursor: pointer;
-            padding: 4px 8px;
         }
 
-        /* Main Content */
-        .main-content {
+        /* Main Area */
+        .main-area {
             flex: 1;
             display: flex;
             overflow: hidden;
-            position: relative;
         }
 
-        /* Sidebar */
+        /* Sidebar - Online Users */
         .sidebar {
-            position: fixed;
-            left: -280px;
-            top: 0;
-            bottom: 0;
-            width: 280px;
-            background: #050508;
-            border-right: 1px solid #1a1a1a;
-            z-index: 20;
-            transition: left 0.3s ease;
+            width: 220px;
+            background: #0d1117;
+            border-right: 1px solid #1a1a2e;
             display: flex;
             flex-direction: column;
         }
 
-        .sidebar.open {
-            left: 0;
-        }
-
-        .sidebar-header {
-            padding: 16px;
-            border-bottom: 1px solid #1a1a1a;
-        }
-
-        .sidebar-header h3 {
-            color: #00ff41;
-            font-size: 13px;
+        .sidebar h4 {
+            color: #888;
+            font-size: 11px;
             font-weight: 500;
+            padding: 12px 16px;
+            border-bottom: 1px solid #1a1a2e;
         }
 
         .users-list {
             flex: 1;
-            padding: 12px;
+            padding: 8px;
             overflow-y: auto;
         }
 
-        .user-item {
-            padding: 10px 12px;
-            margin-bottom: 6px;
-            background: #111;
-            border-radius: 10px;
+        .user {
+            padding: 8px 12px;
+            margin: 4px 0;
+            background: #1a1a2e;
+            border-radius: 8px;
             color: #ccc;
             font-size: 13px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
         }
 
-        .overlay {
-            position: fixed;
-            top: 0;
-            left: 0;
-            right: 0;
-            bottom: 0;
-            background: rgba(0,0,0,0.6);
-            z-index: 15;
-            display: none;
-        }
-
-        .overlay.active {
-            display: block;
-        }
-
-        /* Desktop */
-        @media (min-width: 769px) {
-            .sidebar {
-                position: relative;
-                left: 0;
-                width: 260px;
-            }
-            .menu-btn {
-                display: none;
-            }
+        .user::before {
+            content: "●";
+            color: #00ff41;
+            font-size: 8px;
         }
 
         /* Chat Area */
@@ -450,11 +380,10 @@ HTML = '''<!DOCTYPE html>
             flex: 1;
             display: flex;
             flex-direction: column;
-            width: 100%;
         }
 
         /* Messages */
-        .messages-container {
+        .messages {
             flex: 1;
             padding: 16px;
             overflow-y: auto;
@@ -464,7 +393,7 @@ HTML = '''<!DOCTYPE html>
         }
 
         .message {
-            max-width: 80%;
+            max-width: 75%;
             display: flex;
             flex-direction: column;
         }
@@ -477,288 +406,335 @@ HTML = '''<!DOCTYPE html>
             align-self: flex-start;
         }
 
-        .message-bubble {
+        .bubble {
             padding: 8px 12px;
             border-radius: 16px;
             font-size: 14px;
             line-height: 1.4;
         }
 
-        .message.sent .message-bubble {
+        .message.sent .bubble {
             background: #00ff41;
             color: #000;
-            border-bottom-right-radius: 4px;
         }
 
-        .message.received .message-bubble {
-            background: #1a1a1a;
+        .message.received .bubble {
+            background: #1a1a2e;
             color: #e0e0e0;
-            border-bottom-left-radius: 4px;
         }
 
-        .message-sender {
+        .sender {
             font-size: 10px;
             margin-bottom: 4px;
             color: #888;
             padding-left: 4px;
         }
 
-        .message-time {
+        .time {
             font-size: 9px;
             margin-top: 4px;
             color: #555;
             padding-left: 4px;
         }
 
-        .system-message {
+        .system-msg {
             text-align: center;
             font-size: 11px;
             color: #ffaa00;
             margin: 8px 0;
-            font-style: italic;
         }
 
-        /* Typing Indicator */
-        .typing-indicator {
+        /* Typing */
+        .typing {
             padding: 6px 16px;
             color: #00ff41;
             font-size: 11px;
             font-style: italic;
-            min-height: 30px;
-            flex-shrink: 0;
+            min-height: 28px;
         }
 
-        /* Input Area */
+        /* Input */
         .input-area {
-            padding: 10px 16px;
-            background: #050508;
-            border-top: 1px solid #1a1a1a;
+            padding: 12px 16px;
+            background: #0d1117;
+            border-top: 1px solid #1a1a2e;
             display: flex;
             gap: 10px;
-            flex-shrink: 0;
         }
 
         .input-area input {
             flex: 1;
-            margin: 0;
             padding: 10px 14px;
-            background: #111;
-            border: 1px solid #2a2a2a;
+            background: #1a1a2e;
+            border: 1px solid #2a2a3e;
             border-radius: 20px;
             color: #00ff41;
             font-size: 14px;
         }
 
         .input-area input:focus {
+            outline: none;
             border-color: #00ff41;
         }
 
         .input-area button {
-            background: transparent;
-            border: 1px solid #00ff41;
+            background: #00ff41;
+            border: none;
             border-radius: 20px;
-            color: #00ff41;
-            padding: 10px 18px;
+            color: #000;
+            padding: 10px 20px;
             font-size: 13px;
-            font-weight: 500;
+            font-weight: 600;
             cursor: pointer;
         }
 
-        .input-area button:active {
-            background: #00ff41;
-            color: #000;
+        /* Mobile */
+        @media (max-width: 768px) {
+            .sidebar {
+                display: none;
+            }
+            .message {
+                max-width: 85%;
+            }
         }
 
-        /* Scrollbar */
         ::-webkit-scrollbar {
             width: 3px;
         }
-
         ::-webkit-scrollbar-track {
-            background: #1a1a1a;
+            background: #1a1a2e;
         }
-
         ::-webkit-scrollbar-thumb {
             background: #00ff41;
-            border-radius: 3px;
         }
     </style>
 </head>
 <body>
-<div id="loginScreen" class="login-screen">
+
+<!-- Login Screen -->
+<div id="loginScreen" class="login-container">
     <div class="login-card">
-        <div class="logo">
-            <h1>ABAVANDIMWE</h1>
-            <p>Secure Messaging by Mugisha Pc</p>
-        </div>
+        <h1>ABAVANDIMWE</h1>
+        <p>Secure Messaging by Mugisha Pc</p>
         <input type="text" id="username" placeholder="Username">
         <input type="text" id="groupName" placeholder="Group name">
         <input type="password" id="groupPassword" placeholder="Group password">
-        <button class="connect-btn" onclick="doConnect()">Connect</button>
+        <button onclick="connect()">Connect</button>
         <div id="errorMsg" class="error"></div>
-        <div class="footer-note">🔒 24h auto-delete | AES-256</div>
     </div>
 </div>
 
-<div id="chatScreen" class="chat-screen">
+<!-- Chat Screen -->
+<div id="chatScreen" class="chat-container">
     <div class="chat-header">
-        <button class="menu-btn" onclick="toggleMenu()">☰</button>
-        <div class="group-name"><h2 id="groupTitle">Loading...</h2></div>
-        <button class="exit-btn" onclick="doLogout()">Exit</button>
+        <h3 id="groupTitle">Loading...</h3>
+        <button class="exit-btn" onclick="logout()">Exit</button>
     </div>
-    <div class="main-content">
-        <div class="sidebar" id="sidebar">
-            <div class="sidebar-header"><h3>Online users</h3></div>
-            <div class="users-list" id="usersList">Loading...</div>
+    <div class="main-area">
+        <div class="sidebar">
+            <h4>ONLINE USERS</h4>
+            <div class="users-list" id="usersList"></div>
         </div>
-        <div class="overlay" id="overlay" onclick="toggleMenu()"></div>
         <div class="chat-area">
-            <div class="messages-container" id="messages"><div style="text-align:center;color:#666;">Connecting...</div></div>
-            <div class="typing-indicator" id="typingIndicator"></div>
+            <div class="messages" id="messages"></div>
+            <div class="typing" id="typingIndicator"></div>
             <div class="input-area">
-                <input type="text" id="msgInput" placeholder="Message">
-                <button onclick="sendMsg()">Send</button>
+                <input type="text" id="messageInput" placeholder="Type a message...">
+                <button onclick="sendMessage()">Send</button>
             </div>
         </div>
     </div>
 </div>
 
 <script>
-    let ws, myName, myGroup, myPass, groupSalt, typingTO;
-    
-    async function encryptText(txt, pass, salt){
-        const enc=new TextEncoder();
-        const km=await crypto.subtle.importKey('raw',enc.encode(pass),'PBKDF2',false,['deriveKey']);
-        const key=await crypto.subtle.deriveKey({name:'PBKDF2',salt:enc.encode(salt),iterations:100000,hash:'SHA-256'},km,{name:'AES-GCM',length:256},false,['encrypt']);
-        const iv=crypto.getRandomValues(new Uint8Array(12));
-        const encrypted=await crypto.subtle.encrypt({name:'AES-GCM',iv},key,enc.encode(txt));
-        const c=new Uint8Array(iv.length+encrypted.byteLength);
-        c.set(iv,0);c.set(new Uint8Array(encrypted),iv.length);
-        return btoa(String.fromCharCode(...c));
+    let ws, username, groupName, groupPassword, groupSalt, typingTimeout;
+
+    async function encryptMessage(text, password, salt) {
+        const encoder = new TextEncoder();
+        const keyMaterial = await crypto.subtle.importKey('raw', encoder.encode(password), 'PBKDF2', false, ['deriveKey']);
+        const key = await crypto.subtle.deriveKey({
+            name: 'PBKDF2',
+            salt: encoder.encode(salt),
+            iterations: 100000,
+            hash: 'SHA-256'
+        }, keyMaterial, { name: 'AES-GCM', length: 256 }, false, ['encrypt']);
+        const iv = crypto.getRandomValues(new Uint8Array(12));
+        const encrypted = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, encoder.encode(text));
+        const combined = new Uint8Array(iv.length + encrypted.byteLength);
+        combined.set(iv, 0);
+        combined.set(new Uint8Array(encrypted), iv.length);
+        return btoa(String.fromCharCode(...combined));
     }
-    
-    async function decryptText(enc, pass, salt){
-        const d=Uint8Array.from(atob(enc),c=>c.charCodeAt(0));
-        const iv=d.slice(0,12),data=d.slice(12);
-        const enc2=new TextEncoder();
-        const km=await crypto.subtle.importKey('raw',enc2.encode(pass),'PBKDF2',false,['deriveKey']);
-        const key=await crypto.subtle.deriveKey({name:'PBKDF2',salt:enc2.encode(salt),iterations:100000,hash:'SHA-256'},km,{name:'AES-GCM',length:256},false,['decrypt']);
-        const dec=await crypto.subtle.decrypt({name:'AES-GCM',iv},key,data);
-        return new TextDecoder().decode(dec);
+
+    async function decryptMessage(encrypted, password, salt) {
+        const combined = Uint8Array.from(atob(encrypted), c => c.charCodeAt(0));
+        const iv = combined.slice(0, 12);
+        const data = combined.slice(12);
+        const encoder = new TextEncoder();
+        const keyMaterial = await crypto.subtle.importKey('raw', encoder.encode(password), 'PBKDF2', false, ['deriveKey']);
+        const key = await crypto.subtle.deriveKey({
+            name: 'PBKDF2',
+            salt: encoder.encode(salt),
+            iterations: 100000,
+            hash: 'SHA-256'
+        }, keyMaterial, { name: 'AES-GCM', length: 256 }, false, ['decrypt']);
+        const decrypted = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, data);
+        return new TextDecoder().decode(decrypted);
     }
-    
-    function toggleMenu(){
-        document.getElementById('sidebar').classList.toggle('open');
-        document.getElementById('overlay').classList.toggle('active');
+
+    function addSystemMessage(text) {
+        const messagesDiv = document.getElementById('messages');
+        if (messagesDiv.children.length === 0 || (messagesDiv.children.length === 1 && messagesDiv.children[0].innerText.includes('Connecting'))) {
+            messagesDiv.innerHTML = '';
+        }
+        const div = document.createElement('div');
+        div.className = 'system-msg';
+        div.innerText = text;
+        messagesDiv.appendChild(div);
+        messagesDiv.scrollTop = messagesDiv.scrollHeight;
     }
-    
-    function showError(msg){
-        let err=document.getElementById('errorMsg');
-        err.innerText=msg;
-        err.style.display='block';
-        setTimeout(()=>err.style.display='none',3000);
+
+    function addMessage(sender, text, isSent) {
+        const messagesDiv = document.getElementById('messages');
+        if (messagesDiv.children.length === 0 || (messagesDiv.children.length === 1 && messagesDiv.children[0].innerText.includes('Connecting'))) {
+            messagesDiv.innerHTML = '';
+        }
+        const div = document.createElement('div');
+        div.className = `message ${isSent ? 'sent' : 'received'}`;
+        const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        div.innerHTML = `
+            <div class="sender">${isSent ? 'You' : sender}</div>
+            <div class="bubble">${escapeHtml(text)}</div>
+            <div class="time">${time}</div>
+        `;
+        messagesDiv.appendChild(div);
+        messagesDiv.scrollTop = messagesDiv.scrollHeight;
     }
-    
-    function addSystemMessage(txt){
-        let msgs=document.getElementById('messages');
-        if(msgs.children.length===1 && msgs.children[0].innerText.includes('Connecting')) msgs.innerHTML='';
-        let div=document.createElement('div');
-        div.className='system-message';
-        div.innerText=txt;
-        msgs.appendChild(div);
-        msgs.scrollTop=msgs.scrollHeight;
+
+    function escapeHtml(text) {
+        const div = document.createElement('div');
+        div.textContent = text;
+        return div.innerHTML;
     }
-    
-    function addMessage(sender, text, isSent){
-        let msgs=document.getElementById('messages');
-        if(msgs.children.length===1 && msgs.children[0].innerText.includes('Connecting')) msgs.innerHTML='';
-        let div=document.createElement('div');
-        div.className='message '+(isSent?'sent':'received');
-        let now=new Date();
-        let time=now.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
-        div.innerHTML='<div class="message-sender">'+(isSent?'You':sender)+'</div><div class="message-bubble">'+escapeHtml(text)+'</div><div class="message-time">'+time+'</div>';
-        msgs.appendChild(div);
-        msgs.scrollTop=msgs.scrollHeight;
+
+    function updateUsersList(users) {
+        const usersDiv = document.getElementById('usersList');
+        if (users.length === 0) {
+            usersDiv.innerHTML = '<div style="color:#666; padding:8px;">No users online</div>';
+        } else {
+            usersDiv.innerHTML = users.map(u => `<div class="user">${escapeHtml(u)}</div>`).join('');
+        }
     }
-    
-    function escapeHtml(t){let d=document.createElement('div');d.textContent=t;return d.innerHTML;}
-    
-    function updateUsers(users){
-        let ul=document.getElementById('usersList');
-        if(users.length===0) ul.innerHTML='<div class="user-item">No users online</div>';
-        else ul.innerHTML=users.map(u=>'<div class="user-item">● '+escapeHtml(u)+'</div>').join('');
-    }
-    
-    function doLogout(){
-        if(ws) ws.close();
-        ws=null;
+
+    function logout() {
+        if (ws) ws.close();
+        ws = null;
         document.getElementById('chatScreen').classList.remove('active');
-        document.getElementById('loginScreen').style.display='flex';
-        document.getElementById('messages').innerHTML='<div style="text-align:center;color:#666;">Connecting...</div>';
-        document.getElementById('usersList').innerHTML='Loading...';
-        document.getElementById('username').value='';
-        document.getElementById('groupName').value='';
-        document.getElementById('groupPassword').value='';
+        document.getElementById('loginScreen').style.display = 'flex';
+        document.getElementById('messages').innerHTML = '';
+        document.getElementById('username').value = '';
+        document.getElementById('groupName').value = '';
+        document.getElementById('groupPassword').value = '';
     }
-    
-    function doConnect(){
-        myName=document.getElementById('username').value.trim();
-        myGroup=document.getElementById('groupName').value.trim();
-        myPass=document.getElementById('groupPassword').value;
-        if(!myName||!myGroup||!myPass){showError('Fill all fields');return;}
-        
-        let url='wss://'+window.location.host+'/ws';
-        ws=new WebSocket(url);
-        
-        ws.onopen=()=>{
-            ws.send(JSON.stringify({type:'join',username:myName,group:myGroup,password:myPass}));
+
+    function connect() {
+        username = document.getElementById('username').value.trim();
+        groupName = document.getElementById('groupName').value.trim();
+        groupPassword = document.getElementById('groupPassword').value;
+
+        if (!username || !groupName || !groupPassword) {
+            document.getElementById('errorMsg').innerText = 'Fill all fields';
+            return;
+        }
+
+        const wsUrl = `wss://${window.location.host}/ws`;
+        ws = new WebSocket(wsUrl);
+
+        ws.onopen = () => {
+            ws.send(JSON.stringify({ type: 'join', username, group: groupName, password: groupPassword }));
         };
-        
-        ws.onmessage=async (e)=>{
-            let d=JSON.parse(e.data);
-            if(d.type==='error'){showError(d.message);ws.close();return;}
-            if(d.type==='ready'){
-                groupSalt=d.salt;
-                document.getElementById('loginScreen').style.display='none';
+
+        ws.onmessage = async (e) => {
+            const data = JSON.parse(e.data);
+            
+            if (data.type === 'error') {
+                document.getElementById('errorMsg').innerText = data.message;
+                return;
+            }
+            
+            if (data.type === 'ready') {
+                groupSalt = data.salt;
+                document.getElementById('loginScreen').style.display = 'none';
                 document.getElementById('chatScreen').classList.add('active');
-                document.getElementById('groupTitle').innerHTML=d.group;
+                document.getElementById('groupTitle').innerText = data.group;
                 addSystemMessage('Connected - Messages last 24 hours');
             }
-            else if(d.type==='message'||d.type==='history'){
-                try{
-                    let dec=await decryptText(d.ciphertext,myPass,d.salt);
-                    addMessage(d.sender,dec,d.sender===myName);
-                }catch(e){addMessage(d.sender,'🔒 Encrypted',d.sender===myName);}
+            else if (data.type === 'message' || data.type === 'history') {
+                try {
+                    const decrypted = await decryptMessage(data.ciphertext, groupPassword, data.salt);
+                    addMessage(data.sender, decrypted, data.sender === username);
+                } catch(e) {
+                    addMessage(data.sender, '🔒 Encrypted', data.sender === username);
+                }
             }
-            else if(d.type==='users') updateUsers(d.users);
-            else if(d.type==='user_joined') addSystemMessage('👤 '+d.user+' joined');
-            else if(d.type==='user_left') addSystemMessage('👋 '+d.user+' left');
-            else if(d.type==='typing') document.getElementById('typingIndicator').innerHTML='✏️ '+d.user+' typing...';
-            else if(d.type==='stop_typing') document.getElementById('typingIndicator').innerHTML='';
+            else if (data.type === 'users') {
+                updateUsersList(data.users);
+            }
+            else if (data.type === 'user_joined') {
+                addSystemMessage(`👤 ${data.user} joined`);
+            }
+            else if (data.type === 'user_left') {
+                addSystemMessage(`👋 ${data.user} left`);
+            }
+            else if (data.type === 'typing') {
+                document.getElementById('typingIndicator').innerHTML = `✏️ ${data.user} is typing...`;
+            }
+            else if (data.type === 'stop_typing') {
+                document.getElementById('typingIndicator').innerHTML = '';
+            }
         };
-        
-        ws.onerror=()=>showError('Connection failed');
+
+        ws.onerror = () => {
+            document.getElementById('errorMsg').innerText = 'Connection failed';
+        };
     }
-    
-    document.getElementById('msgInput')?.addEventListener('input',function(){
-        if(ws&&ws.readyState===WebSocket.OPEN){
-            ws.send(JSON.stringify({type:'typing'}));
-            clearTimeout(typingTO);
-            typingTO=setTimeout(()=>ws.send(JSON.stringify({type:'stop_typing'})),1000);
+
+    const messageInput = document.getElementById('messageInput');
+    if (messageInput) {
+        messageInput.addEventListener('input', () => {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({ type: 'typing' }));
+                clearTimeout(typingTimeout);
+                typingTimeout = setTimeout(() => {
+                    if (ws && ws.readyState === WebSocket.OPEN) {
+                        ws.send(JSON.stringify({ type: 'stop_typing' }));
+                    }
+                }, 1000);
+            }
+        });
+        
+        messageInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                sendMessage();
+            }
+        });
+    }
+
+    async function sendMessage() {
+        const input = document.getElementById('messageInput');
+        const text = input.value.trim();
+        
+        if (!text || !ws || ws.readyState !== WebSocket.OPEN || !groupSalt) return;
+        
+        try {
+            const ciphertext = await encryptMessage(text, groupPassword, groupSalt);
+            ws.send(JSON.stringify({ type: 'message', ciphertext, salt: groupSalt }));
+            addMessage(username, text, true);
+            input.value = '';
+        } catch(e) {
+            console.error(e);
         }
-    });
-    
-    document.getElementById('msgInput')?.addEventListener('keypress',function(e){if(e.key==='Enter')sendMsg();});
-    
-    async function sendMsg(){
-        let input=document.getElementById('msgInput'),txt=input.value.trim();
-        if(!txt||!ws||ws.readyState!==WebSocket.OPEN||!groupSalt) return;
-        try{
-            let cipher=await encryptText(txt,myPass,groupSalt);
-            ws.send(JSON.stringify({type:'message',ciphertext:cipher,salt:groupSalt}));
-            addMessage(myName,txt,true);
-            input.value='';
-        }catch(e){alert('Failed');}
     }
 </script>
 </body>
@@ -863,14 +839,12 @@ if __name__ == "__main__":
 ║                                                            ║
 ║              ABAVANDIMWE SECURE MESSAGING                  ║
 ║           Messages auto-delete after 24 hours              ║
-║              Professional Mobile Design                    ║
 ║                    Author: Mugisha Pc                      ║
 ║                                                            ║
 ╚════════════════════════════════════════════════════════════╝
     """)
     print(f"[✓] Server on port {port}")
     print(f"[✓] Messages last 24 hours then auto-delete")
-    print(f"[✓] Professional mobile design")
     print(f"[✓] Open: https://abavandimwe.onrender.com")
     
     uvicorn.run(app, host="0.0.0.0", port=port)
