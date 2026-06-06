@@ -1,7 +1,7 @@
 """
 ABAVANDIMWE - Secure Messaging System
 Author: Mugisha Pc
-Simple Working Version - No ASGI issues
+Mobile Optimized CSS
 """
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
@@ -57,9 +57,8 @@ def init_db():
     print("[✓] Database ready")
 
 def cleanup_old_messages():
-    """Delete messages older than 24 hours"""
     now = time.time()
-    cutoff = now - (24 * 3600)  # 24 hours ago
+    cutoff = now - (24 * 3600)
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute("DELETE FROM messages WHERE created_at < ?", (cutoff,))
@@ -72,7 +71,7 @@ def cleanup_old_messages():
 def start_cleanup():
     def cleanup_loop():
         while True:
-            time.sleep(3600)  # Every hour
+            time.sleep(3600)
             cleanup_old_messages()
     threading.Thread(target=cleanup_loop, daemon=True).start()
 
@@ -141,7 +140,7 @@ def set_user_status(username, status, group):
 def get_online_users(group):
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    cutoff = time.time() - 120  # 2 minutes ago
+    cutoff = time.time() - 120
     c.execute("SELECT username FROM users WHERE status='online' AND current_group=? AND last_seen > ?", 
              (group, cutoff))
     rows = c.fetchall()
@@ -197,56 +196,381 @@ class ConnectionManager:
 
 manager = ConnectionManager()
 
-# ========== HTML ==========
+# ========== HTML - MOBILE OPTIMIZED ==========
 HTML = '''<!DOCTYPE html>
 <html>
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes, viewport-fit=cover">
+    <meta name="theme-color" content="#0a0a0f">
     <title>ABAVANDIMWE</title>
     <style>
-        *{margin:0;padding:0;box-sizing:border-box;}
-        body{font-family:monospace;background:#0a0a0f;height:100vh;color:#0f0;}
-        .login{position:fixed;top:0;left:0;right:0;bottom:0;display:flex;justify-content:center;align-items:center;background:#0a0a0f;z-index:1000;padding:20px;}
-        .card{background:#050508;border:2px solid #0f0;border-radius:24px;padding:32px;width:100%;max-width:400px;}
-        h1{text-align:center;margin-bottom:8px;font-size:28px;}
-        .sub{text-align:center;margin-bottom:32px;font-size:11px;color:#666;}
-        input{width:100%;padding:14px;margin:10px 0;background:#111;border:1px solid #0f0;border-radius:12px;color:#0f0;font-family:monospace;}
-        button{width:100%;padding:14px;margin-top:20px;background:transparent;border:2px solid #0f0;border-radius:12px;color:#0f0;font-size:16px;font-weight:bold;cursor:pointer;}
-        button:active{background:#0f0;color:#000;}
-        .chat{display:none;width:100%;height:100%;flex-direction:column;}
-        .chat.active{display:flex;}
-        .header{padding:12px 16px;background:#050508;border-bottom:1px solid #0f0;display:flex;justify-content:space-between;align-items:center;}
-        .header h2{font-size:14px;}
-        .exit-btn{background:transparent;border:1px solid #0f0;color:#0f0;padding:6px 12px;border-radius:8px;cursor:pointer;}
-        .main{flex:1;display:flex;overflow:hidden;}
-        .sidebar{width:250px;background:#050508;border-right:1px solid #0f0;display:flex;flex-direction:column;}
-        .sidebar h3{padding:16px;border-bottom:1px solid #0f0;font-size:14px;}
-        .users{padding:12px;flex:1;overflow-y:auto;}
-        .user{padding:10px;margin:5px 0;border:1px solid #0f0;border-radius:10px;}
-        .chatarea{flex:1;display:flex;flex-direction:column;}
-        .msgs{flex:1;padding:16px;overflow-y:auto;display:flex;flex-direction:column;gap:12px;}
-        .msg{max-width:80%;display:flex;flex-direction:column;}
-        .msg.sent{align-self:flex-end;}
-        .msg.received{align-self:flex-start;}
-        .bubble{padding:10px 14px;border-radius:18px;font-size:14px;}
-        .msg.sent .bubble{background:#0f0;color:#000;border-bottom-right-radius:4px;}
-        .msg.received .bubble{background:#1a1a2e;border:1px solid #0f0;border-bottom-left-radius:4px;}
-        .sender{font-size:10px;margin-bottom:4px;opacity:0.7;}
-        .time{font-size:9px;margin-top:4px;opacity:0.5;}
-        .typing{padding:8px 16px;color:#0f0;font-style:italic;font-size:11px;}
-        .input{padding:12px 16px;background:#050508;border-top:1px solid #0f0;display:flex;gap:10px;}
-        .input input{flex:1;margin:0;}
-        .input button{width:auto;margin:0;padding:12px 20px;}
-        @media (max-width:768px){.sidebar{position:fixed;left:-250px;top:0;bottom:0;z-index:20;transition:left 0.3s;}.sidebar.open{left:0;}.overlay{position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.7);z-index:15;display:none;}.overlay.active{display:block;}}
-        @media (min-width:769px){.menu-btn{display:none;}}
-        .menu-btn{background:transparent;border:1px solid #0f0;color:#0f0;padding:6px 12px;border-radius:8px;cursor:pointer;}
-        .error{color:#ff4444;font-size:12px;text-align:center;margin-top:12px;display:none;}
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            -webkit-tap-highlight-color: transparent;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', monospace;
+            background: #0a0a0f;
+            height: 100vh;
+            overflow: hidden;
+            color: #00ff41;
+        }
+
+        /* Login Screen */
+        .login-screen {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            background: #0a0a0f;
+            z-index: 1000;
+            padding: 20px;
+        }
+
+        .login-card {
+            background: #050508;
+            border: 2px solid #00ff41;
+            border-radius: 24px;
+            padding: 32px 24px;
+            width: 100%;
+            max-width: 400px;
+        }
+
+        h1 {
+            text-align: center;
+            font-size: 28px;
+            margin-bottom: 8px;
+            letter-spacing: 2px;
+        }
+
+        .sub {
+            text-align: center;
+            font-size: 11px;
+            color: #666;
+            margin-bottom: 32px;
+        }
+
+        input {
+            width: 100%;
+            padding: 14px 16px;
+            margin: 10px 0;
+            background: #111;
+            border: 1px solid #00ff41;
+            border-radius: 12px;
+            color: #00ff41;
+            font-family: monospace;
+            font-size: 15px;
+        }
+
+        input:focus {
+            outline: none;
+            box-shadow: 0 0 10px rgba(0,255,65,0.3);
+        }
+
+        button {
+            width: 100%;
+            padding: 14px;
+            margin-top: 20px;
+            background: transparent;
+            border: 2px solid #00ff41;
+            border-radius: 12px;
+            color: #00ff41;
+            font-size: 16px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        button:active {
+            background: #00ff41;
+            color: #000;
+            transform: scale(0.98);
+        }
+
+        .error {
+            color: #ff4444;
+            font-size: 12px;
+            text-align: center;
+            margin-top: 12px;
+            display: none;
+        }
+
+        /* Chat Screen */
+        .chat-screen {
+            display: none;
+            width: 100%;
+            height: 100%;
+            flex-direction: column;
+            background: #0a0a0f;
+        }
+
+        .chat-screen.active {
+            display: flex;
+        }
+
+        /* Header */
+        .chat-header {
+            padding: 12px 16px;
+            background: #050508;
+            border-bottom: 1px solid #00ff41;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 12px;
+            flex-shrink: 0;
+        }
+
+        .chat-header h2 {
+            font-size: 16px;
+            font-weight: normal;
+            flex: 1;
+            text-align: center;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .menu-btn, .exit-btn {
+            background: transparent;
+            border: 1px solid #00ff41;
+            border-radius: 8px;
+            color: #00ff41;
+            padding: 8px 14px;
+            font-size: 13px;
+            cursor: pointer;
+            flex-shrink: 0;
+        }
+
+        .exit-btn:active {
+            background: #ff0041;
+            border-color: #ff0041;
+            color: white;
+        }
+
+        /* Main Content */
+        .main-content {
+            flex: 1;
+            display: flex;
+            overflow: hidden;
+            position: relative;
+        }
+
+        /* Sidebar */
+        .sidebar {
+            position: fixed;
+            left: -280px;
+            top: 0;
+            bottom: 0;
+            width: 280px;
+            background: #050508;
+            border-right: 1px solid #00ff41;
+            z-index: 20;
+            transition: left 0.3s ease;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .sidebar.open {
+            left: 0;
+        }
+
+        .sidebar h3 {
+            padding: 16px;
+            border-bottom: 1px solid #00ff41;
+            font-size: 14px;
+        }
+
+        .users-list {
+            flex: 1;
+            padding: 12px;
+            overflow-y: auto;
+        }
+
+        .user-item {
+            padding: 10px 12px;
+            margin: 6px 0;
+            border: 1px solid #00ff41;
+            border-radius: 10px;
+            font-size: 13px;
+        }
+
+        .overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0,0,0,0.7);
+            z-index: 15;
+            display: none;
+        }
+
+        .overlay.active {
+            display: block;
+        }
+
+        /* Desktop: always show sidebar */
+        @media (min-width: 769px) {
+            .sidebar {
+                position: relative;
+                left: 0;
+                width: 260px;
+            }
+            .menu-btn {
+                display: none;
+            }
+            .overlay {
+                display: none;
+            }
+        }
+
+        /* Chat Area */
+        .chat-area {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            width: 100%;
+        }
+
+        /* Messages */
+        .messages-container {
+            flex: 1;
+            padding: 16px;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+
+        .message {
+            max-width: 85%;
+            display: flex;
+            flex-direction: column;
+            animation: fadeIn 0.2s ease;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .message.sent {
+            align-self: flex-end;
+        }
+
+        .message.received {
+            align-self: flex-start;
+        }
+
+        .message-bubble {
+            padding: 10px 14px;
+            border-radius: 18px;
+            font-size: 14px;
+            word-wrap: break-word;
+        }
+
+        .message.sent .message-bubble {
+            background: #00ff41;
+            color: #000;
+            border-bottom-right-radius: 4px;
+        }
+
+        .message.received .message-bubble {
+            background: #1a1a2e;
+            border: 1px solid #00ff41;
+            border-bottom-left-radius: 4px;
+        }
+
+        .message-sender {
+            font-size: 10px;
+            margin-bottom: 4px;
+            opacity: 0.7;
+            padding-left: 4px;
+        }
+
+        .message-time {
+            font-size: 9px;
+            margin-top: 4px;
+            opacity: 0.5;
+        }
+
+        .system-message {
+            text-align: center;
+            font-size: 11px;
+            color: #ffaa00;
+            margin: 8px 0;
+            font-style: italic;
+        }
+
+        /* Typing Indicator */
+        .typing-indicator {
+            padding: 8px 16px;
+            color: #00ff41;
+            font-style: italic;
+            font-size: 11px;
+            min-height: 36px;
+            flex-shrink: 0;
+        }
+
+        /* Input Area */
+        .input-area {
+            padding: 12px 16px;
+            background: #050508;
+            border-top: 1px solid #00ff41;
+            display: flex;
+            gap: 10px;
+            flex-shrink: 0;
+        }
+
+        .input-area input {
+            flex: 1;
+            margin: 0;
+            padding: 12px 16px;
+            font-size: 14px;
+        }
+
+        .input-area button {
+            width: auto;
+            margin: 0;
+            padding: 12px 20px;
+            font-size: 14px;
+        }
+
+        /* Footer */
+        .footer {
+            text-align: center;
+            padding: 6px;
+            font-size: 8px;
+            color: #333;
+            border-top: 1px solid #00ff41;
+            flex-shrink: 0;
+        }
+
+        /* Scrollbar */
+        ::-webkit-scrollbar {
+            width: 3px;
+        }
+
+        ::-webkit-scrollbar-track {
+            background: #1a1a2e;
+        }
+
+        ::-webkit-scrollbar-thumb {
+            background: #00ff41;
+        }
     </style>
 </head>
 <body>
-<div id="loginDiv" class="login">
-    <div class="card">
+<div id="loginScreen" class="login-screen">
+    <div class="login-card">
         <h1># ABAVANDIMWE</h1>
         <div class="sub">Secure Messaging by Mugisha Pc</div>
         <input type="text" id="username" placeholder="USERNAME">
@@ -257,28 +581,31 @@ HTML = '''<!DOCTYPE html>
         <div style="text-align:center;margin-top:20px;font-size:9px;color:#333;">🔒 24h auto-delete | AES-256</div>
     </div>
 </div>
-<div id="chatDiv" class="chat">
-    <div class="header">
+
+<div id="chatScreen" class="chat-screen">
+    <div class="chat-header">
         <button class="menu-btn" onclick="toggleMenu()">☰</button>
         <h2 id="groupTitle"># LOADING</h2>
         <button class="exit-btn" onclick="doLogout()">EXIT</button>
     </div>
-    <div class="main">
+    <div class="main-content">
         <div class="sidebar" id="sidebar">
-            <h3>● ONLINE</h3>
-            <div class="users" id="usersList">Loading...</div>
+            <h3>● ONLINE USERS</h3>
+            <div class="users-list" id="usersList">Loading...</div>
         </div>
         <div class="overlay" id="overlay" onclick="toggleMenu()"></div>
-        <div class="chatarea">
-            <div class="msgs" id="messages"><div style="text-align:center;">Connecting...</div></div>
-            <div class="typing" id="typingIndicator"></div>
-            <div class="input">
+        <div class="chat-area">
+            <div class="messages-container" id="messages"><div style="text-align:center;">Connecting...</div></div>
+            <div class="typing-indicator" id="typingIndicator"></div>
+            <div class="input-area">
                 <input type="text" id="msgInput" placeholder="Type message...">
                 <button onclick="sendMsg()">SEND</button>
             </div>
+            <div class="footer">🔐 Encrypted | Messages last 24 hours</div>
         </div>
     </div>
 </div>
+
 <script>
     let ws, myName, myGroup, myPass, groupSalt, typingTO;
     
@@ -315,27 +642,24 @@ HTML = '''<!DOCTYPE html>
         setTimeout(()=>err.style.display='none',3000);
     }
     
-    function addSysMsg(txt){
+    function addSystemMessage(txt){
         let msgs=document.getElementById('messages');
         if(msgs.children.length===1 && msgs.children[0].innerText.includes('Connecting')) msgs.innerHTML='';
         let div=document.createElement('div');
-        div.style.textAlign='center';
-        div.style.color='#ffaa00';
-        div.style.fontSize='11px';
-        div.style.margin='8px 0';
+        div.className='system-message';
         div.innerText=txt;
         msgs.appendChild(div);
         msgs.scrollTop=msgs.scrollHeight;
     }
     
-    function addMsg(sender, text, isSent){
+    function addMessage(sender, text, isSent){
         let msgs=document.getElementById('messages');
         if(msgs.children.length===1 && msgs.children[0].innerText.includes('Connecting')) msgs.innerHTML='';
         let div=document.createElement('div');
-        div.className='msg '+(isSent?'sent':'received');
+        div.className='message '+(isSent?'sent':'received');
         let now=new Date();
         let time=now.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
-        div.innerHTML='<div class="sender">'+(isSent?'YOU':sender)+'</div><div class="bubble">'+escapeHtml(text)+'</div><div class="time">'+time+'</div>';
+        div.innerHTML='<div class="message-sender">'+(isSent?'YOU':sender)+'</div><div class="message-bubble">'+escapeHtml(text)+'</div><div class="message-time">'+time+'</div>';
         msgs.appendChild(div);
         msgs.scrollTop=msgs.scrollHeight;
     }
@@ -344,15 +668,15 @@ HTML = '''<!DOCTYPE html>
     
     function updateUsers(users){
         let ul=document.getElementById('usersList');
-        if(users.length===0) ul.innerHTML='<div class="user">No users online</div>';
-        else ul.innerHTML=users.map(u=>'<div class="user">● '+escapeHtml(u)+'</div>').join('');
+        if(users.length===0) ul.innerHTML='<div class="user-item">No users online</div>';
+        else ul.innerHTML=users.map(u=>'<div class="user-item">● '+escapeHtml(u)+'</div>').join('');
     }
     
     function doLogout(){
         if(ws) ws.close();
         ws=null;
-        document.getElementById('chatDiv').classList.remove('active');
-        document.getElementById('loginDiv').style.display='flex';
+        document.getElementById('chatScreen').classList.remove('active');
+        document.getElementById('loginScreen').style.display='flex';
         document.getElementById('messages').innerHTML='<div style="text-align:center;">Connecting...</div>';
         document.getElementById('usersList').innerHTML='Loading...';
         document.getElementById('username').value='';
@@ -378,20 +702,20 @@ HTML = '''<!DOCTYPE html>
             if(d.type==='error'){showError(d.message);ws.close();return;}
             if(d.type==='ready'){
                 groupSalt=d.salt;
-                document.getElementById('loginDiv').style.display='none';
-                document.getElementById('chatDiv').classList.add('active');
+                document.getElementById('loginScreen').style.display='none';
+                document.getElementById('chatScreen').classList.add('active');
                 document.getElementById('groupTitle').innerHTML='# '+d.group;
-                addSysMsg('🔐 Connected - Messages last 24 hours');
+                addSystemMessage('🔐 Connected - Messages last 24 hours');
             }
             else if(d.type==='message'||d.type==='history'){
                 try{
                     let dec=await decryptText(d.ciphertext,myPass,d.salt);
-                    addMsg(d.sender,dec,d.sender===myName);
-                }catch(e){addMsg(d.sender,'🔒 Encrypted',d.sender===myName);}
+                    addMessage(d.sender,dec,d.sender===myName);
+                }catch(e){addMessage(d.sender,'🔒 Encrypted',d.sender===myName);}
             }
             else if(d.type==='users') updateUsers(d.users);
-            else if(d.type==='user_joined') addSysMsg('👤 '+d.user+' joined');
-            else if(d.type==='user_left') addSysMsg('👋 '+d.user+' left');
+            else if(d.type==='user_joined') addSystemMessage('👤 '+d.user+' joined');
+            else if(d.type==='user_left') addSystemMessage('👋 '+d.user+' left');
             else if(d.type==='typing') document.getElementById('typingIndicator').innerHTML='✏️ '+d.user+' typing...';
             else if(d.type==='stop_typing') document.getElementById('typingIndicator').innerHTML='';
         };
@@ -415,7 +739,7 @@ HTML = '''<!DOCTYPE html>
         try{
             let cipher=await encryptText(txt,myPass,groupSalt);
             ws.send(JSON.stringify({type:'message',ciphertext:cipher,salt:groupSalt}));
-            addMsg(myName,txt,true);
+            addMessage(myName,txt,true);
             input.value='';
         }catch(e){alert('Failed');}
     }
@@ -449,7 +773,6 @@ async def ws_endpoint(websocket: WebSocket):
                 group_name = data.get('group')
                 password = data.get('password')
                 
-                # Check group
                 group_info = get_group_info(group_name)
                 if group_info:
                     if not verify_password(password, group_info['salt'], group_info['password_hash']):
@@ -462,11 +785,9 @@ async def ws_endpoint(websocket: WebSocket):
                     pwd_hash = hash_password(password, salt)
                     create_group(group_name, salt, pwd_hash, username)
                 
-                # Add connection
                 await manager.add(group_name, username, websocket)
                 set_user_status(username, 'online', group_name)
                 
-                # Send history
                 for msg in get_messages(group_name):
                     await websocket.send_json({
                         'type': 'history',
@@ -475,14 +796,9 @@ async def ws_endpoint(websocket: WebSocket):
                         'salt': msg['salt']
                     })
                 
-                # Send online users
                 online = get_online_users(group_name)
                 await manager.broadcast(group_name, {'type': 'users', 'users': online})
-                
-                # Broadcast joined
                 await manager.broadcast(group_name, {'type': 'user_joined', 'user': username}, exclude=username)
-                
-                # Send ready
                 await websocket.send_json({'type': 'ready', 'salt': salt, 'group': group_name})
                 print(f"[+] {username} joined {group_name}")
             
@@ -530,12 +846,14 @@ if __name__ == "__main__":
 ║                                                            ║
 ║              ABAVANDIMWE SECURE MESSAGING                  ║
 ║           Messages auto-delete after 24 hours              ║
+║              Mobile Optimized CSS                          ║
 ║                    Author: Mugisha Pc                      ║
 ║                                                            ║
 ╚════════════════════════════════════════════════════════════╝
     """)
     print(f"[✓] Server on port {port}")
     print(f"[✓] Messages last 24 hours then auto-delete")
+    print(f"[✓] Mobile optimized CSS")
     print(f"[✓] Open: https://abavandimwe.onrender.com")
     
     uvicorn.run(app, host="0.0.0.0", port=port)
