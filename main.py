@@ -69,18 +69,8 @@ async def init_db():
             ON messages(expires_at) WHERE expires_at < CURRENT_TIMESTAMP
         ''')
         
-        # Create scheduled cleanup function
-        await conn.execute('''
-            CREATE OR REPLACE FUNCTION cleanup_expired_messages()
-            RETURNS void AS $$
-            BEGIN
-                DELETE FROM messages WHERE expires_at < CURRENT_TIMESTAMP;
-            END;
-            $$ LANGUAGE plpgsql;
-        ''')
-        
         print("[✓] PostgreSQL database ready")
-        print("[✓] Messages auto-delete after 24 hours configured")
+        print("[✓] Messages will auto-delete after 24 hours")
 
 async def cleanup_loop():
     """Background task to clean expired messages every hour"""
