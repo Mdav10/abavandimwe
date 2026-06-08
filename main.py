@@ -1,84 +1,86 @@
 """
 ABAVANDIMWE - Secure Messaging System
 Author: Mugisha Pc
-Messages stay for 24 hours then auto-delete
+PostgreSQL Database - Messages persist for 24 hours
+Multiple users can chat simultaneously
 """
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse
 import asyncio
 import json
-import sqlite3
 import secrets
 import base64
 import hashlib
 import os
-import threading
-import time
-from datetime import datetime
+import asyncpg
+from datetime import datetime, timedelta
 from typing import Dict
+from contextlib import asynccontextmanager
 
 app = FastAPI()
 
-# ========== DATABASE ==========
-DB_PATH = "abavandimwe.db"
+# ========== POSTGRESQL DATABASE ==========
+DATABASE_URL = os.getenv('DATABASE_URL', 'postgresql://neondb_owner:npg_Cb7XtKr0BIoN@ep-holy-scene-apw8vqig.c-7.us-east-1.aws.neon.tech/neondb?sslmode=require')
+db_pool = None
 
-def init_db():
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute('''
-        CREATE TABLE IF NOT EXISTS messages (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            ciphertext TEXT,
-            group_name TEXT,
-            sender TEXT,
-            salt TEXT,
-            created_at REAL
-        )
-    ''')
-    c.execute('''
-        CREATE TABLE IF NOT EXISTS users (
-            username TEXT PRIMARY KEY,
-            status TEXT,
-            current_group TEXT,
-            last_seen REAL
-        )
-    ''')
-    c.execute('''
-        CREATE TABLE IF NOT EXISTS groups (
-            group_name TEXT PRIMARY KEY,
-            salt TEXT,
-            password_hash TEXT,
-            created_by TEXT
-        )
-    ''')
-    conn.commit()
-    conn.close()
-    print("[✓] Database ready")
+async def init_db():
+    global db_pool
+    db_pool = await asyncpg.create_pool(DATABASE_URL, min_size=5, max_size=20)
+    
+    async with db_pool.acquire() as conn:
+        # Messages table with 24-hour expiration
+        await conn.execute('''
+            CREATE TABLE IF NOT EXISTS messages (
+                id BIGSERIAL PRIMARY KEY,
+                ciphertext TEXT NOT NULL,
+                group_name TEXT NOT NULL,
+                sender TEXT NOT NULL,
+                salt TEXT NOT NULL,
+                created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+                expires_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP + INTERVAL '24 hours'
+            )
+        ''')
+        
+        # Users table for presence
+        await conn.execute('''
+            CREATE TABLE IF NOT EXISTS users (
+                username TEXT PRIMARY KEY,
+                status TEXT DEFAULT 'offline',
+                current_group TEXT,
+                last_seen TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        
+        # Groups table with password hash
+        await conn.execute('''
+            CREATE TABLE IF NOT EXISTS groups (
+                group_name TEXT PRIMARY KEY,
+                salt TEXT NOT NULL,
+                password_hash TEXT NOT NULL,
+                created_by TEXT NOT NULL,
+                created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        
+        # Index for fast cleanup
+        await conn.execute('''
+            CREATE INDEX IF NOT EXISTS idx_messages_expires_at ON messages(expires_at)
+        ''')
+        
+        print("[✓] PostgreSQL database ready")
+        print("[✓] Messages persist for 24 hours")
 
-def cleanup_old_messages():
-    now = time.time()
-    cutoff = now - (24 * 3600)
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute("DELETE FROM messages WHERE created_at < ?", (cutoff,))
-    deleted = c.rowcount
-    conn.commit()
-    conn.close()
-    if deleted > 0:
-        print(f"[🧹] Deleted {deleted} old messages")
+async def cleanup_loop():
+    """Delete expired messages every hour"""
+    while True:
+        await asyncio.sleep(3600)
+        if db_pool:
+            async with db_pool.acquire() as conn:
+                result = await conn.execute("DELETE FROM messages WHERE expires_at < CURRENT_TIMESTAMP")
+                print(f"[🧹] Cleaned up expired messages at {datetime.now()}")
 
-def start_cleanup():
-    def cleanup_loop():
-        while True:
-            time.sleep(3600)
-            cleanup_old_messages()
-    threading.Thread(target=cleanup_loop, daemon=True).start()
-
-init_db()
-start_cleanup()
-
-# ========== CRYPTO ==========
+# ========== CRYPTOGRAPHY ==========
 def generate_salt():
     return base64.b64encode(secrets.token_bytes(32)).decode()
 
@@ -110,63 +112,62 @@ def decrypt(encrypted, password, salt):
         decrypted.append(ciphertext[i] ^ key[i % len(key)])
     return decrypted.decode()
 
-# ========== DATABASE FUNCTIONS ==========
-def save_message(ciphertext, group, sender, salt):
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute("INSERT INTO messages (ciphertext, group_name, sender, salt, created_at) VALUES (?,?,?,?,?)",
-             (ciphertext, group, sender, salt, time.time()))
-    conn.commit()
-    conn.close()
+# ========== DATABASE OPERATIONS ==========
+async def save_message(ciphertext, group, sender, salt):
+    async with db_pool.acquire() as conn:
+        await conn.execute('''
+            INSERT INTO messages (ciphertext, group_name, sender, salt)
+            VALUES ($1, $2, $3, $4)
+        ''', ciphertext, group, sender, salt)
 
-def get_messages(group):
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    cutoff = time.time() - (24 * 3600)
-    c.execute("SELECT ciphertext, sender, salt FROM messages WHERE group_name=? AND created_at > ? ORDER BY id ASC", 
-             (group, cutoff))
-    rows = c.fetchall()
-    conn.close()
-    return [{'ciphertext': r[0], 'sender': r[1], 'salt': r[2]} for r in rows]
+async def get_messages(group):
+    async with db_pool.acquire() as conn:
+        rows = await conn.fetch('''
+            SELECT ciphertext, sender, salt, created_at
+            FROM messages 
+            WHERE group_name = $1 
+                AND expires_at > CURRENT_TIMESTAMP
+            ORDER BY id ASC
+        ''', group)
+        return [{'ciphertext': r[0], 'sender': r[1], 'salt': r[2]} for r in rows]
 
-def set_user_status(username, status, group):
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute("INSERT OR REPLACE INTO users (username, status, current_group, last_seen) VALUES (?,?,?,?)",
-             (username, status, group, time.time()))
-    conn.commit()
-    conn.close()
+async def set_user_status(username, status, group):
+    async with db_pool.acquire() as conn:
+        await conn.execute('''
+            INSERT INTO users (username, status, current_group, last_seen)
+            VALUES ($1, $2, $3, CURRENT_TIMESTAMP)
+            ON CONFLICT (username) 
+            DO UPDATE SET status = $2, current_group = $3, last_seen = CURRENT_TIMESTAMP
+        ''', username, status, group)
 
-def get_online_users(group):
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    cutoff = time.time() - 120
-    c.execute("SELECT username FROM users WHERE status='online' AND current_group=? AND last_seen > ?", 
-             (group, cutoff))
-    rows = c.fetchall()
-    conn.close()
-    return [r[0] for r in rows]
+async def get_online_users(group):
+    async with db_pool.acquire() as conn:
+        rows = await conn.fetch('''
+            SELECT username FROM users 
+            WHERE status = 'online' AND current_group = $1
+                AND last_seen > CURRENT_TIMESTAMP - INTERVAL '2 minutes'
+        ''', group)
+        return [r[0] for r in rows]
 
-def get_group_info(group):
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute("SELECT salt, password_hash FROM groups WHERE group_name=?", (group,))
-    row = c.fetchone()
-    conn.close()
-    return {'salt': row[0], 'password_hash': row[1]} if row else None
+async def get_group_info(group):
+    async with db_pool.acquire() as conn:
+        row = await conn.fetchrow('''
+            SELECT salt, password_hash FROM groups WHERE group_name = $1
+        ''', group)
+        if row:
+            return {'salt': row[0], 'password_hash': row[1]}
+        return None
 
-def create_group(group, salt, password_hash, creator):
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    try:
-        c.execute("INSERT INTO groups (group_name, salt, password_hash, created_by) VALUES (?,?,?,?)",
-                 (group, salt, password_hash, creator))
-        conn.commit()
-        conn.close()
-        return True
-    except:
-        conn.close()
-        return False
+async def create_group(group, salt, password_hash, creator):
+    async with db_pool.acquire() as conn:
+        try:
+            await conn.execute('''
+                INSERT INTO groups (group_name, salt, password_hash, created_by)
+                VALUES ($1, $2, $3, $4)
+            ''', group, salt, password_hash, creator)
+            return True
+        except:
+            return False
 
 # ========== WEBSOCKET MANAGER ==========
 class ConnectionManager:
@@ -196,7 +197,7 @@ class ConnectionManager:
 
 manager = ConnectionManager()
 
-# ========== HTML - FIRST WORKING VERSION ==========
+# ========== HTML ==========
 HTML = '''<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -269,7 +270,7 @@ HTML = '''<!DOCTYPE html>
         <button onclick="connect()">▶ ENTER CHAT</button>
         <div id="loginError" class="error-message"></div>
         <div style="text-align:center;margin-top:20px;font-size:9px;color:#333;">
-            🔒 AES-256 | ⏰ Messages auto-delete after 24 hours
+            🔒 AES-256 | ⏰ Messages auto-delete after 24 hours | 💾 PostgreSQL
         </div>
     </div>
 </div>
@@ -292,7 +293,7 @@ HTML = '''<!DOCTYPE html>
                 <input type="text" id="messageInput" placeholder="Type message...">
                 <button onclick="sendMessage()">SEND</button>
             </div>
-            <div class="footer">🔐 End-to-End Encrypted | Messages self-destruct after 24 hours</div>
+            <div class="footer">🔐 End-to-End Encrypted | Messages persist for 24 hours</div>
         </div>
     </div>
 </div>
@@ -384,7 +385,7 @@ function connect(){
     ws.onmessage=async(e)=>{
         let d=JSON.parse(e.data);
         if(d.type==='error'){showError(d.message);ws.close();return;}
-        if(d.type==='ready'){groupSalt=d.salt;document.getElementById('loginScreen').style.display='none';document.getElementById('chatScreen').classList.add('active');document.getElementById('groupTitle').innerHTML='# '+d.group;addSystemMessage('🔐 Connected - Messages last 24 hours');}
+        if(d.type==='ready'){groupSalt=d.salt;document.getElementById('loginScreen').style.display='none';document.getElementById('chatScreen').classList.add('active');document.getElementById('groupTitle').innerHTML='# '+d.group;addSystemMessage('🔐 Connected - Messages persist for 24 hours');}
         else if(d.type==='message'||d.type==='history'){
             try{let dec=await decrypt(d.ciphertext,groupPassword,d.salt);addMessage(d.sender,dec,d.sender===username);}
             catch(e){addMessage(d.sender,'🔒 Encrypted',d.sender===username);}
@@ -422,13 +423,25 @@ async function sendMessage(){
 </html>'''
 
 # ========== FASTAPI ENDPOINTS ==========
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup
+    await init_db()
+    asyncio.create_task(cleanup_loop())
+    yield
+    # Shutdown
+    if db_pool:
+        await db_pool.close()
+
+app = FastAPI(title="ABAVANDIMWE", lifespan=lifespan)
+
 @app.get("/")
 async def root():
     return HTMLResponse(HTML)
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "system": "ABAVANDIMWE", "author": "Mugisha Pc"}
+    return {"status": "healthy", "database": "PostgreSQL", "auto_delete": "24 hours", "author": "Mugisha Pc"}
 
 # ========== WEBSOCKET ==========
 @app.websocket("/ws")
@@ -447,7 +460,7 @@ async def ws_endpoint(websocket: WebSocket):
                 group_name = data.get('group')
                 password = data.get('password')
                 
-                group_info = get_group_info(group_name)
+                group_info = await get_group_info(group_name)
                 if group_info:
                     if not verify_password(password, group_info['salt'], group_info['password_hash']):
                         await websocket.send_json({'type': 'error', 'message': 'Wrong password'})
@@ -457,12 +470,12 @@ async def ws_endpoint(websocket: WebSocket):
                 else:
                     salt = generate_salt()
                     pwd_hash = hash_password(password, salt)
-                    create_group(group_name, salt, pwd_hash, username)
+                    await create_group(group_name, salt, pwd_hash, username)
                 
                 await manager.add(group_name, username, websocket)
-                set_user_status(username, 'online', group_name)
+                await set_user_status(username, 'online', group_name)
                 
-                for msg in get_messages(group_name):
+                for msg in await get_messages(group_name):
                     await websocket.send_json({
                         'type': 'history',
                         'ciphertext': msg['ciphertext'],
@@ -470,7 +483,7 @@ async def ws_endpoint(websocket: WebSocket):
                         'salt': msg['salt']
                     })
                 
-                online = get_online_users(group_name)
+                online = await get_online_users(group_name)
                 await manager.broadcast(group_name, {'type': 'users', 'users': online})
                 await manager.broadcast(group_name, {'type': 'user_joined', 'user': username}, exclude=username)
                 await websocket.send_json({'type': 'ready', 'salt': salt, 'group': group_name})
@@ -479,7 +492,7 @@ async def ws_endpoint(websocket: WebSocket):
             elif msg_type == 'message':
                 cipher = data.get('ciphertext')
                 salt = data.get('salt')
-                save_message(cipher, group_name, username, salt)
+                await save_message(cipher, group_name, username, salt)
                 await manager.broadcast(group_name, {
                     'type': 'message',
                     'ciphertext': cipher,
@@ -498,8 +511,8 @@ async def ws_endpoint(websocket: WebSocket):
     finally:
         if username and group_name:
             manager.remove(group_name, username)
-            set_user_status(username, 'offline', group_name)
-            online = get_online_users(group_name)
+            await set_user_status(username, 'offline', group_name)
+            online = await get_online_users(group_name)
             await manager.broadcast(group_name, {'type': 'users', 'users': online})
             await manager.broadcast(group_name, {'type': 'user_left', 'user': username})
             print(f"[-] {username} left {group_name}")
@@ -509,23 +522,28 @@ if __name__ == "__main__":
     import uvicorn
     port = int(os.getenv('PORT', 8080))
     print("""
-╔════════════════════════════════════════════════════════════╗
-║                                                            ║
-║   █████╗ ██████╗  █████╗ ██╗   ██╗ █████╗ ███╗   ██╗    ║
-║  ██╔══██╗██╔══██╗██╔══██╗██║   ██║██╔══██╗████╗  ██║    ║
-║  ███████║██████╔╝███████║██║   ██║███████║██╔██╗ ██║    ║
-║  ██╔══██║██╔══██╗██╔══██║╚██╗ ██╔╝██╔══██║██║╚██╗██║    ║
-║  ██║  ██║██████╔╝██║  ██║ ╚████╔╝ ██║  ██║██║ ╚████║    ║
-║  ╚═╝  ╚═╝╚═════╝ ╚═╝  ╚═╝  ╚═══╝  ╚═╝  ╚═╝╚═╝  ╚═══╝    ║
-║                                                            ║
-║              ABAVANDIMWE SECURE MESSAGING                  ║
-║           Messages auto-delete after 24 hours              ║
-║                    Author: Mugisha Pc                      ║
-║                                                            ║
-╚════════════════════════════════════════════════════════════╝
+╔═══════════════════════════════════════════════════════════════════╗
+║                                                                   ║
+║   █████╗ ██████╗  █████╗ ██╗   ██╗ █████╗ ███╗   ██╗██████╗      ║
+║  ██╔══██╗██╔══██╗██╔══██╗██║   ██║██╔══██╗████╗  ██║██╔══██╗     ║
+║  ███████║██████╔╝███████║██║   ██║███████║██╔██╗ ██║██║  ██║     ║
+║  ██╔══██║██╔══██╗██╔══██║╚██╗ ██╔╝██╔══██║██║╚██╗██║██║  ██║     ║
+║  ██║  ██║██████╔╝██║  ██║ ╚████╔╝ ██║  ██║██║ ╚████║██████╔╝     ║
+║  ╚═╝  ╚═╝╚═════╝ ╚═╝  ╚═╝  ╚═══╝  ╚═╝  ╚═╝╚═╝  ╚═══╝╚═════╝      ║
+║                                                                   ║
+║              ABAVANDIMWE SECURE MESSAGING SYSTEM                 ║
+║              ✅ PostgreSQL Database (Persistent)                 ║
+║              ✅ Messages persist for 24 hours                    ║
+║              ✅ Multiple users can chat simultaneously           ║
+║              ✅ Messages survive server restarts                  ║
+║                        AUTHOR: MUGISHA PC                         ║
+║                                                                   ║
+╚═══════════════════════════════════════════════════════════════════╝
     """)
     print(f"[✓] Server on port {port}")
+    print(f"[✓] Database: PostgreSQL (Neon) - PERSISTENT")
     print(f"[✓] Messages last 24 hours then auto-delete")
+    print(f"[✓] Multiple users can chat together")
     print(f"[✓] Open: https://abavandimwe.onrender.com")
     
     uvicorn.run(app, host="0.0.0.0", port=port)
