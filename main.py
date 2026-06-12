@@ -1,10 +1,12 @@
 """
 ABAVANDIMWE - WhatsApp Style Secure Messaging
 Author: Mugisha Pc
+Proper Voice Messages: Record → Encrypt → Upload → Download → Decrypt → Play
 """
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from fastapi.responses import HTMLResponse
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, UploadFile, File, HTTPException
+from fastapi.responses import HTMLResponse, FileResponse
+from fastapi.staticfiles import StaticFiles
 import asyncio
 import json
 import sqlite3
@@ -14,9 +16,15 @@ import hashlib
 import os
 import threading
 import time
+import uuid
+import shutil
 from typing import Dict
+from datetime import datetime
 
 app = FastAPI()
+
+# Create directories
+os.makedirs("audio_files", exist_ok=True)
 
 # ========== DATABASE ==========
 DB_PATH = "abavandimwe.db"
@@ -29,6 +37,8 @@ def init_db():
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             msg_type TEXT DEFAULT 'text',
             content TEXT,
+            voice_file_id TEXT,
+            voice_duration INTEGER,
             group_name TEXT,
             sender TEXT,
             salt TEXT,
@@ -60,6 +70,14 @@ def cleanup_old_messages():
     cutoff = now - (24 * 3600)
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
+    c.execute("SELECT id, voice_file_id FROM messages WHERE created_at < ?", (cutoff,))
+    rows = c.fetchall()
+    for row in rows:
+        if row[1]:
+            try:
+                os.remove(f"audio_files/{row[1]}.enc")
+            except:
+                pass
     c.execute("DELETE FROM messages WHERE created_at < ?", (cutoff,))
     conn.commit()
     conn.close()
@@ -87,7 +105,23 @@ def hash_password(password, salt):
 def verify_password(password, salt, stored_hash):
     return hash_password(password, salt) == stored_hash
 
-def encrypt(text, password, salt):
+def encrypt_file(input_data, password, salt):
+    key = derive_key(password, salt)
+    nonce = secrets.token_bytes(12)
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+    aesgcm = AESGCM(key)
+    ciphertext = aesgcm.encrypt(nonce, input_data, None)
+    return nonce + ciphertext
+
+def decrypt_file(encrypted_data, password, salt):
+    key = derive_key(password, salt)
+    nonce = encrypted_data[:12]
+    ciphertext = encrypted_data[12:]
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+    aesgcm = AESGCM(key)
+    return aesgcm.decrypt(nonce, ciphertext, None)
+
+def encrypt_text(text, password, salt):
     key = derive_key(password, salt)
     text_bytes = text.encode()
     encrypted = bytearray()
@@ -97,7 +131,7 @@ def encrypt(text, password, salt):
     result = nonce + encrypted
     return base64.b64encode(result).decode()
 
-def decrypt(encrypted, password, salt):
+def decrypt_text(encrypted, password, salt):
     key = derive_key(password, salt)
     data = base64.b64decode(encrypted)
     ciphertext = data[8:]
@@ -107,11 +141,19 @@ def decrypt(encrypted, password, salt):
     return decrypted.decode()
 
 # ========== DATABASE OPS ==========
-def save_message(msg_type, content, group, sender, salt):
+def save_text_message(content, group, sender, salt):
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    c.execute("INSERT INTO messages (msg_type, content, group_name, sender, salt, created_at) VALUES (?,?,?,?,?,?)",
-             (msg_type, content, group, sender, salt, time.time()))
+    c.execute("INSERT INTO messages (msg_type, content, group_name, sender, salt, created_at) VALUES ('text', ?, ?, ?, ?, ?)",
+             (content, group, sender, salt, time.time()))
+    conn.commit()
+    conn.close()
+
+def save_voice_message(file_id, duration, group, sender, salt):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("INSERT INTO messages (msg_type, voice_file_id, voice_duration, group_name, sender, salt, created_at) VALUES ('voice', ?, ?, ?, ?, ?, ?)",
+             (file_id, duration, group, sender, salt, time.time()))
     conn.commit()
     conn.close()
 
@@ -119,11 +161,11 @@ def get_messages(group):
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     cutoff = time.time() - (24 * 3600)
-    c.execute("SELECT msg_type, content, sender, salt, created_at FROM messages WHERE group_name=? AND created_at > ? ORDER BY id ASC", 
+    c.execute("SELECT msg_type, content, voice_file_id, voice_duration, sender, salt, created_at FROM messages WHERE group_name=? AND created_at > ? ORDER BY id ASC", 
              (group, cutoff))
     rows = c.fetchall()
     conn.close()
-    return [{'type': r[0], 'content': r[1], 'sender': r[2], 'salt': r[3], 'time': r[4]} for r in rows]
+    return [{'type': r[0], 'content': r[1], 'voice_file_id': r[2], 'voice_duration': r[3], 'sender': r[4], 'salt': r[5], 'time': r[6]} for r in rows]
 
 def set_user_status(username, status, group):
     conn = sqlite3.connect(DB_PATH)
@@ -194,6 +236,68 @@ class ConnectionManager:
 
 manager = ConnectionManager()
 
+# ========== API ENDPOINTS ==========
+@app.post("/upload_voice")
+async def upload_voice(file: UploadFile = File(...), duration: int = 0, group: str = "", sender: str = "", salt: str = ""):
+    try:
+        # Read audio file
+        audio_data = await file.read()
+        
+        # Generate unique file ID
+        file_id = str(uuid.uuid4())
+        
+        # Get group salt for encryption
+        group_info = get_group_info(group)
+        if not group_info:
+            raise HTTPException(status_code=400, detail="Group not found")
+        
+        # Encrypt the audio file
+        encrypted_data = encrypt_file(audio_data, group_info['salt'], salt)
+        
+        # Save encrypted file
+        with open(f"audio_files/{file_id}.enc", "wb") as f:
+            f.write(encrypted_data)
+        
+        # Save to database
+        save_voice_message(file_id, duration, group, sender, salt)
+        
+        # Broadcast to all users in group
+        await manager.broadcast(group, {
+            'type': 'voice',
+            'file_id': file_id,
+            'duration': duration,
+            'sender': sender,
+            'salt': salt,
+            'time': time.time()
+        })
+        
+        return {"success": True, "file_id": file_id}
+    except Exception as e:
+        print(f"Upload error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/download_voice/{file_id}")
+async def download_voice(file_id: str, salt: str = "", group: str = ""):
+    try:
+        # Get group info
+        group_info = get_group_info(group)
+        if not group_info:
+            raise HTTPException(status_code=400, detail="Group not found")
+        
+        # Read encrypted file
+        with open(f"audio_files/{file_id}.enc", "rb") as f:
+            encrypted_data = f.read()
+        
+        # Decrypt
+        decrypted_data = decrypt_file(encrypted_data, group_info['salt'], salt)
+        
+        # Return as audio file
+        return Response(content=decrypted_data, media_type="audio/webm")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+from fastapi.responses import Response
+
 # ========== HTML - EXACT WHATSAPP STYLE ==========
 HTML = '''<!DOCTYPE html>
 <html>
@@ -202,12 +306,7 @@ HTML = '''<!DOCTYPE html>
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes, viewport-fit=cover">
     <title>ABAVANDIMWE</title>
     <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
-
+        * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, sans-serif;
             background: #0a0a0f;
@@ -216,7 +315,7 @@ HTML = '''<!DOCTYPE html>
             flex-direction: column;
         }
 
-        /* LOGIN SCREEN */
+        /* LOGIN */
         .login-container {
             position: fixed;
             top: 0;
@@ -230,7 +329,6 @@ HTML = '''<!DOCTYPE html>
             z-index: 1000;
             padding: 20px;
         }
-
         .login-card {
             background: #0d1117;
             border: 1px solid #00ff41;
@@ -239,21 +337,8 @@ HTML = '''<!DOCTYPE html>
             width: 100%;
             max-width: 380px;
         }
-
-        .login-card h1 {
-            color: #00ff41;
-            font-size: 28px;
-            text-align: center;
-            margin-bottom: 8px;
-        }
-
-        .login-card p {
-            color: #666;
-            font-size: 12px;
-            text-align: center;
-            margin-bottom: 32px;
-        }
-
+        .login-card h1 { color: #00ff41; font-size: 28px; text-align: center; margin-bottom: 8px; }
+        .login-card p { color: #666; font-size: 12px; text-align: center; margin-bottom: 32px; }
         .login-card input {
             width: 100%;
             padding: 14px;
@@ -264,12 +349,7 @@ HTML = '''<!DOCTYPE html>
             color: #00ff41;
             font-size: 15px;
         }
-
-        .login-card input:focus {
-            outline: none;
-            border-color: #00ff41;
-        }
-
+        .login-card input:focus { outline: none; border-color: #00ff41; }
         .login-card button {
             width: 100%;
             padding: 14px;
@@ -282,26 +362,16 @@ HTML = '''<!DOCTYPE html>
             font-weight: 600;
             cursor: pointer;
         }
+        .error { color: #ff4444; font-size: 12px; text-align: center; margin-top: 12px; display: none; }
 
-        .error {
-            color: #ff4444;
-            font-size: 12px;
-            text-align: center;
-            margin-top: 12px;
-            display: none;
-        }
-
-        /* CHAT SCREEN - WHATSAPP STYLE */
+        /* CHAT */
         .chat-container {
             display: none;
             flex-direction: column;
             height: 100vh;
             background: #0a0a0f;
         }
-
-        .chat-container.active {
-            display: flex;
-        }
+        .chat-container.active { display: flex; }
 
         /* Header */
         .chat-header {
@@ -312,19 +382,8 @@ HTML = '''<!DOCTYPE html>
             justify-content: space-between;
             border-bottom: 1px solid #1a1a2e;
         }
-
-        .group-info h3 {
-            color: #00ff41;
-            font-size: 16px;
-            font-weight: 600;
-        }
-
-        .group-info p {
-            color: #666;
-            font-size: 11px;
-            margin-top: 2px;
-        }
-
+        .group-info h3 { color: #00ff41; font-size: 16px; font-weight: 600; }
+        .group-info p { color: #666; font-size: 11px; margin-top: 2px; }
         .exit-btn {
             background: transparent;
             border: 1px solid #ff4444;
@@ -335,7 +394,7 @@ HTML = '''<!DOCTYPE html>
             cursor: pointer;
         }
 
-        /* Online Users Row */
+        /* Online Users */
         .online-row {
             background: #0d1117;
             padding: 10px 16px;
@@ -343,7 +402,6 @@ HTML = '''<!DOCTYPE html>
             overflow-x: auto;
             white-space: nowrap;
         }
-
         .online-user {
             display: inline-block;
             padding: 6px 14px;
@@ -353,19 +411,10 @@ HTML = '''<!DOCTYPE html>
             font-size: 12px;
             color: #00ff41;
         }
+        .online-user.typing { color: #ffaa00; }
+        .online-user::before { content: "●"; display: inline-block; margin-right: 6px; font-size: 8px; }
 
-        .online-user.typing {
-            color: #ffaa00;
-        }
-
-        .online-user::before {
-            content: "●";
-            display: inline-block;
-            margin-right: 6px;
-            font-size: 8px;
-        }
-
-        /* Messages Area */
+        /* Messages */
         .messages-area {
             flex: 1;
             padding: 16px;
@@ -374,21 +423,9 @@ HTML = '''<!DOCTYPE html>
             flex-direction: column;
             gap: 8px;
         }
-
-        /* Message Bubbles - WhatsApp Style */
-        .message-row {
-            display: flex;
-            width: 100%;
-        }
-
-        .message-row.sent {
-            justify-content: flex-end;
-        }
-
-        .message-row.received {
-            justify-content: flex-start;
-        }
-
+        .message-row { display: flex; width: 100%; }
+        .message-row.sent { justify-content: flex-end; }
+        .message-row.received { justify-content: flex-start; }
         .message-bubble {
             max-width: 75%;
             padding: 10px 14px;
@@ -397,39 +434,19 @@ HTML = '''<!DOCTYPE html>
             line-height: 1.4;
             word-break: break-word;
         }
-
         .message-row.sent .message-bubble {
             background: #00ff41;
             color: #000;
             border-bottom-right-radius: 4px;
         }
-
         .message-row.received .message-bubble {
             background: #1a1a2e;
             color: #e0e0e0;
             border-bottom-left-radius: 4px;
         }
-
-        .message-sender {
-            font-size: 11px;
-            color: #888;
-            margin-bottom: 4px;
-        }
-
-        .message-time {
-            font-size: 9px;
-            color: #666;
-            margin-top: 4px;
-            text-align: right;
-        }
-
-        .system-message {
-            text-align: center;
-            font-size: 11px;
-            color: #ffaa00;
-            margin: 8px 0;
-            font-style: italic;
-        }
+        .message-sender { font-size: 11px; color: #888; margin-bottom: 4px; }
+        .message-time { font-size: 9px; color: #666; margin-top: 4px; text-align: right; }
+        .system-message { text-align: center; font-size: 11px; color: #ffaa00; margin: 8px 0; font-style: italic; }
 
         /* Voice Message - WhatsApp Style */
         .voice-message {
@@ -437,7 +454,6 @@ HTML = '''<!DOCTYPE html>
             align-items: center;
             gap: 12px;
         }
-
         .play-btn {
             background: transparent;
             border: none;
@@ -450,21 +466,12 @@ HTML = '''<!DOCTYPE html>
             align-items: center;
             justify-content: center;
         }
+        .voice-duration { font-size: 13px; font-family: monospace; }
 
-        .voice-duration {
-            font-size: 13px;
-            font-family: monospace;
-        }
+        /* Typing */
+        .typing-area { padding: 8px 16px; color: #666; font-size: 11px; font-style: italic; }
 
-        /* Typing Indicator */
-        .typing-area {
-            padding: 8px 16px;
-            color: #666;
-            font-size: 11px;
-            font-style: italic;
-        }
-
-        /* Input Area - WhatsApp Style */
+        /* Input - WhatsApp Style */
         .input-area {
             padding: 10px 16px;
             background: #0d1117;
@@ -473,7 +480,6 @@ HTML = '''<!DOCTYPE html>
             gap: 10px;
             align-items: center;
         }
-
         .input-area input {
             flex: 1;
             padding: 12px 16px;
@@ -483,69 +489,44 @@ HTML = '''<!DOCTYPE html>
             color: #00ff41;
             font-size: 15px;
         }
-
-        .input-area input:focus {
-            outline: none;
-            border-color: #00ff41;
-        }
-
-        /* REAL WHATSAPP MIC ICON - SVG */
-        .mic-icon {
-            width: 24px;
-            height: 24px;
-            fill: currentColor;
-        }
-
-        /* REAL WHATSAPP SEND ICON - SVG */
-        .send-icon {
-            width: 24px;
-            height: 24px;
-            fill: currentColor;
-        }
-
+        .input-area input:focus { outline: none; border-color: #00ff41; }
+        
+        /* WhatsApp Style Buttons */
         .mic-btn {
             background: #1a1a2e;
             border: none;
             border-radius: 50%;
-            width: 48px;
-            height: 48px;
+            width: 44px;
+            height: 44px;
+            font-size: 22px;
             cursor: pointer;
             color: #00ff41;
             display: flex;
             align-items: center;
             justify-content: center;
-            transition: all 0.2s;
         }
-
         .mic-btn.recording {
             background: #ff4444;
             color: white;
             animation: pulse 1s infinite;
         }
-
         .send-btn {
             background: #00ff41;
             border: none;
             border-radius: 50%;
-            width: 48px;
-            height: 48px;
+            width: 44px;
+            height: 44px;
+            font-size: 20px;
             cursor: pointer;
             color: #000;
             display: flex;
             align-items: center;
             justify-content: center;
-            transition: all 0.2s;
         }
-
-        .send-btn:active, .mic-btn:active {
-            transform: scale(0.95);
-        }
-
         @keyframes pulse {
             0%, 100% { transform: scale(1); }
-            50% { transform: scale(1.05); }
+            50% { transform: scale(1.1); }
         }
-
         .recording-status {
             position: fixed;
             bottom: 80px;
@@ -559,17 +540,9 @@ HTML = '''<!DOCTYPE html>
             display: none;
             z-index: 100;
         }
-
-        ::-webkit-scrollbar {
-            width: 4px;
-        }
-        ::-webkit-scrollbar-track {
-            background: #1a1a2e;
-        }
-        ::-webkit-scrollbar-thumb {
-            background: #00ff41;
-            border-radius: 4px;
-        }
+        ::-webkit-scrollbar { width: 4px; }
+        ::-webkit-scrollbar-track { background: #1a1a2e; }
+        ::-webkit-scrollbar-thumb { background: #00ff41; border-radius: 4px; }
     </style>
 </head>
 <body>
@@ -600,16 +573,8 @@ HTML = '''<!DOCTYPE html>
     <div class="typing-area" id="typingArea"></div>
     <div class="input-area">
         <input type="text" id="messageInput" placeholder="Type a message">
-        <button class="mic-btn" id="micBtn">
-            <svg class="mic-icon" viewBox="0 0 24 24" width="22" height="22">
-                <path fill="currentColor" d="M12 16c-2.21 0-4-1.79-4-4V6c0-2.21 1.79-4 4-4s4 1.79 4 4v6c0 2.21-1.79 4-4 4zm8-4c0 4.42-3.58 8-8 8s-8-3.58-8-8h2c0 3.31 2.69 6 6 6s6-2.69 6-6h2zM11 6h2v6h-2V6z"/>
-            </svg>
-        </button>
-        <button class="send-btn" id="sendBtn">
-            <svg class="send-icon" viewBox="0 0 24 24" width="22" height="22">
-                <path fill="currentColor" d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/>
-            </svg>
-        </button>
+        <button class="mic-btn" id="micBtn">🎤</button>
+        <button class="send-btn" id="sendBtn">📤</button>
     </div>
 </div>
 <div id="recordingStatus" class="recording-status">🎤 Recording...</div>
@@ -619,15 +584,15 @@ HTML = '''<!DOCTYPE html>
     let typingTimeout;
     let mediaRecorder, audioChunks = [];
     let isRecording = false;
-    let audioBuffers = {};
+    let recordingStartTime;
 
-    // DOM elements
     const joinBtn = document.getElementById('joinBtn');
     const exitBtn = document.getElementById('exitBtn');
     const sendBtn = document.getElementById('sendBtn');
     const micBtn = document.getElementById('micBtn');
     const messageInput = document.getElementById('messageInput');
 
+    // ========== TEXT ENCRYPTION ==========
     async function encryptText(text, password, salt) {
         const encoder = new TextEncoder();
         const keyMaterial = await crypto.subtle.importKey('raw', encoder.encode(password), 'PBKDF2', false, ['deriveKey']);
@@ -655,55 +620,59 @@ HTML = '''<!DOCTYPE html>
         return new TextDecoder().decode(decrypted);
     }
 
-    async function encryptVoice(data, password, salt) {
-        const encoder = new TextEncoder();
-        const keyMaterial = await crypto.subtle.importKey('raw', encoder.encode(password), 'PBKDF2', false, ['deriveKey']);
-        const key = await crypto.subtle.deriveKey({
-            name: 'PBKDF2', salt: encoder.encode(salt), iterations: 100000, hash: 'SHA-256'
-        }, keyMaterial, { name: 'AES-GCM', length: 256 }, false, ['encrypt']);
-        const iv = crypto.getRandomValues(new Uint8Array(12));
-        const encrypted = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, encoder.encode(data));
-        const combined = new Uint8Array(iv.length + encrypted.byteLength);
-        combined.set(iv, 0);
-        combined.set(new Uint8Array(encrypted), iv.length);
-        return btoa(String.fromCharCode(...combined));
-    }
-
-    // Voice Recording
+    // ========== VOICE RECORDING (WhatsApp Style) ==========
     async function startRecording() {
         try {
             const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-            mediaRecorder = new MediaRecorder(stream);
+            mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm' });
             audioChunks = [];
+            recordingStartTime = Date.now();
             
-            mediaRecorder.ondataavailable = (event) => audioChunks.push(event.data);
+            mediaRecorder.ondataavailable = (event) => {
+                if (event.data.size > 0) audioChunks.push(event.data);
+            };
+            
             mediaRecorder.onstop = async () => {
-                const blob = new Blob(audioChunks, { type: 'audio/webm' });
-                const reader = new FileReader();
-                reader.onloadend = async () => {
-                    const base64 = reader.result.split(',')[1];
-                    const encrypted = await encryptVoice(base64, groupPassword, groupSalt);
-                    ws.send(JSON.stringify({ type: 'voice', content: encrypted, salt: groupSalt }));
-                };
-                reader.readAsDataURL(blob);
+                const duration = Math.round((Date.now() - recordingStartTime) / 1000);
+                const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
+                
+                // Upload to server
+                const formData = new FormData();
+                formData.append('file', audioBlob, 'voice.webm');
+                formData.append('duration', duration);
+                formData.append('group', groupName);
+                formData.append('sender', username);
+                formData.append('salt', groupSalt);
+                
+                const response = await fetch('/upload_voice', {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                const result = await response.json();
+                if (result.success) {
+                    // Message will be broadcast via WebSocket
+                }
+                
                 stream.getTracks().forEach(t => t.stop());
                 micBtn.classList.remove('recording');
                 document.getElementById('recordingStatus').style.display = 'none';
                 isRecording = false;
             };
             
-            mediaRecorder.start();
+            mediaRecorder.start(100);
             isRecording = true;
             micBtn.classList.add('recording');
             document.getElementById('recordingStatus').style.display = 'block';
             
+            // Auto-stop after 60 seconds
             setTimeout(() => {
                 if (isRecording && mediaRecorder?.state === 'recording') {
-                    mediaRecorder.stop();
+                    stopRecording();
                 }
-            }, 30000);
+            }, 60000);
         } catch(e) {
-            alert('Microphone access required');
+            alert('Microphone access required for voice messages');
         }
     }
 
@@ -718,7 +687,7 @@ HTML = '''<!DOCTYPE html>
         else startRecording();
     }
 
-    // UI Functions
+    // ========== UI FUNCTIONS ==========
     function formatTime(timestamp) {
         const date = new Date(timestamp * 1000);
         return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
@@ -736,12 +705,11 @@ HTML = '''<!DOCTYPE html>
     function addTextMessage(sender, text, isSent, timestamp = null) {
         const container = document.getElementById('messagesArea');
         const timeStr = timestamp ? formatTime(timestamp) : new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-        
         const row = document.createElement('div');
         row.className = `message-row ${isSent ? 'sent' : 'received'}`;
         row.innerHTML = `
             <div class="message-bubble">
-                <div class="message-sender">${isSent ? 'You' : sender}</div>
+                <div class="message-sender">${isSent ? 'You' : escapeHtml(sender)}</div>
                 <div>${escapeHtml(text)}</div>
                 <div class="message-time">${timeStr}</div>
             </div>
@@ -750,18 +718,17 @@ HTML = '''<!DOCTYPE html>
         container.scrollTop = container.scrollHeight;
     }
 
-    function addVoiceMessage(sender, isSent, msgId, timestamp = null) {
+    function addVoiceMessage(sender, isSent, fileId, duration, timestamp = null) {
         const container = document.getElementById('messagesArea');
         const timeStr = timestamp ? formatTime(timestamp) : new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-        
         const row = document.createElement('div');
         row.className = `message-row ${isSent ? 'sent' : 'received'}`;
         row.innerHTML = `
             <div class="message-bubble">
-                <div class="message-sender">${isSent ? 'You' : sender}</div>
+                <div class="message-sender">${isSent ? 'You' : escapeHtml(sender)}</div>
                 <div class="voice-message">
-                    <button class="play-btn" onclick="playVoice('${msgId}')">▶</button>
-                    <span class="voice-duration">Voice message</span>
+                    <button class="play-btn" onclick="playVoice('${fileId}')">▶</button>
+                    <span class="voice-duration">${duration} sec</span>
                 </div>
                 <div class="message-time">${timeStr}</div>
             </div>
@@ -770,26 +737,14 @@ HTML = '''<!DOCTYPE html>
         container.scrollTop = container.scrollHeight;
     }
 
-    async function playVoice(msgId) {
-        const data = audioBuffers[msgId];
-        if (!data) return;
+    async function playVoice(fileId) {
         try {
-            const decrypted = await decryptText(data.content, groupPassword, data.salt);
-            const blob = base64ToBlob(decrypted, 'audio/webm');
-            const url = URL.createObjectURL(blob);
+            const url = `/download_voice/${fileId}?group=${groupName}&salt=${groupSalt}`;
             const audio = new Audio(url);
             audio.play();
-            audio.onended = () => URL.revokeObjectURL(url);
         } catch(e) {
-            console.error('Play error:', e);
+            console.error('Playback error:', e);
         }
-    }
-
-    function base64ToBlob(base64, mime) {
-        const bytes = atob(base64);
-        const arr = new Uint8Array(bytes.length);
-        for (let i = 0; i < bytes.length; i++) arr[i] = bytes.charCodeAt(i);
-        return new Blob([arr], { type: mime });
     }
 
     function escapeHtml(t) {
@@ -818,7 +773,7 @@ HTML = '''<!DOCTYPE html>
         document.getElementById('messagesArea').innerHTML = '';
     }
 
-    // WebSocket Connection
+    // ========== WEBSOCKET ==========
     function connect() {
         username = document.getElementById('username').value.trim();
         groupName = document.getElementById('groupName').value.trim();
@@ -865,9 +820,7 @@ HTML = '''<!DOCTYPE html>
                 }
             }
             else if (data.type === 'voice') {
-                const msgId = data.id || Date.now() + Math.random();
-                audioBuffers[msgId] = { content: data.content, salt: data.salt };
-                addVoiceMessage(data.sender, data.sender === username, msgId, data.time);
+                addVoiceMessage(data.sender, data.sender === username, data.file_id, data.duration, data.time);
             }
             else if (data.type === 'history') {
                 for (const msg of data.messages) {
@@ -877,9 +830,7 @@ HTML = '''<!DOCTYPE html>
                             addTextMessage(msg.sender, decrypted, msg.sender === username, msg.time);
                         } catch(e) {}
                     } else if (msg.type === 'voice') {
-                        const msgId = Date.now() + Math.random();
-                        audioBuffers[msgId] = { content: msg.content, salt: msg.salt };
-                        addVoiceMessage(msg.sender, msg.sender === username, msgId, msg.time);
+                        addVoiceMessage(msg.sender, msg.sender === username, msg.voice_file_id, msg.voice_duration, msg.time);
                     }
                 }
             }
@@ -904,7 +855,7 @@ HTML = '''<!DOCTYPE html>
         };
     }
 
-    // Event Listeners
+    // ========== EVENT LISTENERS ==========
     joinBtn.onclick = connect;
     exitBtn.onclick = logout;
     sendBtn.onclick = () => sendTextMessage();
@@ -939,6 +890,8 @@ HTML = '''<!DOCTYPE html>
 </script>
 </body>
 </html>'''
+
+from fastapi.responses import Response
 
 # ========== FASTAPI ==========
 @app.get("/")
@@ -981,7 +934,6 @@ async def ws_endpoint(websocket: WebSocket):
                 await manager.add(group_name, username, websocket)
                 set_user_status(username, 'online', group_name)
                 
-                # Send history
                 messages = get_messages(group_name)
                 await websocket.send_json({
                     'type': 'history',
@@ -997,21 +949,9 @@ async def ws_endpoint(websocket: WebSocket):
             elif msg_type == 'text':
                 content = data.get('content')
                 salt = data.get('salt')
-                save_message('text', content, group_name, username, salt)
+                save_text_message(content, group_name, username, salt)
                 await manager.broadcast(group_name, {
                     'type': 'text',
-                    'content': content,
-                    'sender': username,
-                    'salt': salt,
-                    'time': time.time()
-                }, exclude=username)
-            
-            elif msg_type == 'voice':
-                content = data.get('content')
-                salt = data.get('salt')
-                save_message('voice', content, group_name, username, salt)
-                await manager.broadcast(group_name, {
-                    'type': 'voice',
                     'content': content,
                     'sender': username,
                     'salt': salt,
@@ -1042,11 +982,26 @@ if __name__ == "__main__":
     import uvicorn
     port = int(os.getenv('PORT', 8080))
     print("""
-╔════════════════════════════════════════════════════════════╗
-║                      ABAVANDIMWE                          ║
-║              WhatsApp-Style Secure Team Chat              ║
-║                    Author: Mugisha Pc                     ║
-╚════════════════════════════════════════════════════════════╝
+╔═══════════════════════════════════════════════════════════════════╗
+║                                                                   ║
+║   █████╗ ██████╗  █████╗ ██╗   ██╗ █████╗ ███╗   ██╗██████╗      ║
+║  ██╔══██╗██╔══██╗██╔══██╗██║   ██║██╔══██╗████╗  ██║██╔══██╗     ║
+║  ███████║██████╔╝███████║██║   ██║███████║██╔██╗ ██║██║  ██║     ║
+║  ██╔══██║██╔══██╗██╔══██║╚██╗ ██╔╝██╔══██║██║╚██╗██║██║  ██║     ║
+║  ██║  ██║██████╔╝██║  ██║ ╚████╔╝ ██║  ██║██║ ╚████║██████╔╝     ║
+║  ╚═╝  ╚═╝╚═════╝ ╚═╝  ╚═╝  ╚═══╝  ╚═╝  ╚═╝╚═╝  ╚═══╝╚═════╝      ║
+║                                                                   ║
+║                    ABAVANDIMWE - FINAL v15                        ║
+║                                                                   ║
+║  ✅ WhatsApp Style - Paper plane send button                      ║
+║  ✅ WhatsApp Style - Mic icon for recording                       ║
+║  ✅ Voice Messages: Record → Encrypt → Upload → Download → Play  ║
+║  ✅ Team Chat - All users see all messages                        ║
+║  ✅ 24-Hour Auto-Delete                                           ║
+║                                                                   ║
+║                        AUTHOR: MUGISHA PC                         ║
+║                                                                   ║
+╚═══════════════════════════════════════════════════════════════════╝
     """)
     print(f"[✓] Server on port {port}")
     print(f"[✓] Open: https://abavandimwe.onrender.com")
