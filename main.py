@@ -1,5 +1,5 @@
 """
-ABAVANDIMWE - WhatsApp-Style Secure Messaging
+ABAVANDIMWE - WhatsApp Style Secure Messaging
 Author: Mugisha Pc
 """
 
@@ -194,7 +194,7 @@ class ConnectionManager:
 
 manager = ConnectionManager()
 
-# ========== HTML - WHATSAPP STYLE ==========
+# ========== HTML - EXACT WHATSAPP STYLE ==========
 HTML = '''<!DOCTYPE html>
 <html>
 <head>
@@ -216,7 +216,7 @@ HTML = '''<!DOCTYPE html>
             flex-direction: column;
         }
 
-        /* ========== LOGIN SCREEN ========== */
+        /* LOGIN SCREEN */
         .login-container {
             position: fixed;
             top: 0;
@@ -291,7 +291,7 @@ HTML = '''<!DOCTYPE html>
             display: none;
         }
 
-        /* ========== CHAT SCREEN ========== */
+        /* CHAT SCREEN - WHATSAPP STYLE */
         .chat-container {
             display: none;
             flex-direction: column;
@@ -372,7 +372,7 @@ HTML = '''<!DOCTYPE html>
             overflow-y: auto;
             display: flex;
             flex-direction: column;
-            gap: 12px;
+            gap: 8px;
         }
 
         /* Message Bubbles - WhatsApp Style */
@@ -431,7 +431,7 @@ HTML = '''<!DOCTYPE html>
             font-style: italic;
         }
 
-        /* Voice Message */
+        /* Voice Message - WhatsApp Style */
         .voice-message {
             display: flex;
             align-items: center;
@@ -440,12 +440,20 @@ HTML = '''<!DOCTYPE html>
 
         .play-btn {
             background: transparent;
-            border: 1px solid currentColor;
-            border-radius: 50%;
-            width: 36px;
-            height: 36px;
+            border: none;
+            font-size: 20px;
             cursor: pointer;
-            font-size: 14px;
+            color: currentColor;
+            width: 32px;
+            height: 32px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .voice-duration {
+            font-size: 13px;
+            font-family: monospace;
         }
 
         /* Typing Indicator */
@@ -456,9 +464,9 @@ HTML = '''<!DOCTYPE html>
             font-style: italic;
         }
 
-        /* Input Area */
+        /* Input Area - WhatsApp Style */
         .input-area {
-            padding: 12px 16px;
+            padding: 10px 16px;
             background: #0d1117;
             border-top: 1px solid #1a1a2e;
             display: flex;
@@ -473,7 +481,7 @@ HTML = '''<!DOCTYPE html>
             border: 1px solid #2a2a3e;
             border-radius: 24px;
             color: #00ff41;
-            font-size: 14px;
+            font-size: 15px;
         }
 
         .input-area input:focus {
@@ -481,37 +489,45 @@ HTML = '''<!DOCTYPE html>
             border-color: #00ff41;
         }
 
-        .voice-btn {
+        /* WhatsApp Style Mic Button */
+        .mic-btn {
             background: #1a1a2e;
-            border: 1px solid #00ff41;
+            border: none;
             border-radius: 50%;
             width: 44px;
             height: 44px;
-            font-size: 18px;
+            font-size: 22px;
             cursor: pointer;
             color: #00ff41;
+            display: flex;
+            align-items: center;
+            justify-content: center;
         }
 
-        .voice-btn.recording {
+        .mic-btn.recording {
             background: #ff4444;
-            border-color: #ff4444;
             color: white;
             animation: pulse 1s infinite;
         }
 
         @keyframes pulse {
             0%, 100% { transform: scale(1); }
-            50% { transform: scale(1.05); }
+            50% { transform: scale(1.1); }
         }
 
+        /* WhatsApp Style Send Button (Paper Plane) */
         .send-btn {
             background: #00ff41;
             border: none;
-            border-radius: 24px;
-            color: #000;
-            padding: 12px 24px;
-            font-weight: 600;
+            border-radius: 50%;
+            width: 44px;
+            height: 44px;
+            font-size: 20px;
             cursor: pointer;
+            color: #000;
+            display: flex;
+            align-items: center;
+            justify-content: center;
         }
 
         .recording-status {
@@ -521,9 +537,9 @@ HTML = '''<!DOCTYPE html>
             transform: translateX(-50%);
             background: #ff4444;
             color: white;
-            padding: 8px 20px;
+            padding: 10px 20px;
             border-radius: 30px;
-            font-size: 13px;
+            font-size: 14px;
             display: none;
             z-index: 100;
         }
@@ -568,8 +584,8 @@ HTML = '''<!DOCTYPE html>
     <div class="typing-area" id="typingArea"></div>
     <div class="input-area">
         <input type="text" id="messageInput" placeholder="Type a message">
-        <button class="voice-btn" id="voiceBtn">🎤</button>
-        <button class="send-btn" id="sendBtn">Send</button>
+        <button class="mic-btn" id="micBtn">🎤</button>
+        <button class="send-btn" id="sendBtn">📤</button>
     </div>
 </div>
 <div id="recordingStatus" class="recording-status">🎤 Recording...</div>
@@ -585,7 +601,7 @@ HTML = '''<!DOCTYPE html>
     const joinBtn = document.getElementById('joinBtn');
     const exitBtn = document.getElementById('exitBtn');
     const sendBtn = document.getElementById('sendBtn');
-    const voiceBtn = document.getElementById('voiceBtn');
+    const micBtn = document.getElementById('micBtn');
     const messageInput = document.getElementById('messageInput');
 
     async function encryptText(text, password, salt) {
@@ -629,7 +645,7 @@ HTML = '''<!DOCTYPE html>
         return btoa(String.fromCharCode(...combined));
     }
 
-    // Voice Recording
+    // Voice Recording - WhatsApp Style
     async function startRecording() {
         try {
             const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -647,7 +663,7 @@ HTML = '''<!DOCTYPE html>
                 };
                 reader.readAsDataURL(blob);
                 stream.getTracks().forEach(t => t.stop());
-                voiceBtn.classList.remove('recording');
+                micBtn.classList.remove('recording');
                 document.getElementById('recordingStatus').style.display = 'none';
                 isRecording = false;
                 ws.send(JSON.stringify({ type: 'stop_typing' }));
@@ -655,7 +671,7 @@ HTML = '''<!DOCTYPE html>
             
             mediaRecorder.start();
             isRecording = true;
-            voiceBtn.classList.add('recording');
+            micBtn.classList.add('recording');
             document.getElementById('recordingStatus').style.display = 'block';
             ws.send(JSON.stringify({ type: 'typing' }));
             
@@ -723,7 +739,7 @@ HTML = '''<!DOCTYPE html>
                 <div class="message-sender">${isSent ? 'You' : sender}</div>
                 <div class="voice-message">
                     <button class="play-btn" onclick="playVoice('${msgId}')">▶</button>
-                    <span>Voice message</span>
+                    <span class="voice-duration">Voice message</span>
                 </div>
                 <div class="message-time">${timeStr}</div>
             </div>
@@ -868,7 +884,7 @@ HTML = '''<!DOCTYPE html>
     joinBtn.onclick = connect;
     exitBtn.onclick = logout;
     sendBtn.onclick = () => sendTextMessage();
-    voiceBtn.onclick = toggleRecording;
+    micBtn.onclick = toggleRecording;
 
     messageInput.addEventListener('input', () => {
         if (ws?.readyState === WebSocket.OPEN) {
