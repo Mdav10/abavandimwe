@@ -489,19 +489,32 @@ HTML = '''<!DOCTYPE html>
             border-color: #00ff41;
         }
 
-        /* WhatsApp Style Mic Button */
+        /* REAL WHATSAPP MIC ICON - SVG */
+        .mic-icon {
+            width: 24px;
+            height: 24px;
+            fill: currentColor;
+        }
+
+        /* REAL WHATSAPP SEND ICON - SVG */
+        .send-icon {
+            width: 24px;
+            height: 24px;
+            fill: currentColor;
+        }
+
         .mic-btn {
             background: #1a1a2e;
             border: none;
             border-radius: 50%;
-            width: 44px;
-            height: 44px;
-            font-size: 22px;
+            width: 48px;
+            height: 48px;
             cursor: pointer;
             color: #00ff41;
             display: flex;
             align-items: center;
             justify-content: center;
+            transition: all 0.2s;
         }
 
         .mic-btn.recording {
@@ -510,24 +523,27 @@ HTML = '''<!DOCTYPE html>
             animation: pulse 1s infinite;
         }
 
-        @keyframes pulse {
-            0%, 100% { transform: scale(1); }
-            50% { transform: scale(1.1); }
-        }
-
-        /* WhatsApp Style Send Button (Paper Plane) */
         .send-btn {
             background: #00ff41;
             border: none;
             border-radius: 50%;
-            width: 44px;
-            height: 44px;
-            font-size: 20px;
+            width: 48px;
+            height: 48px;
             cursor: pointer;
             color: #000;
             display: flex;
             align-items: center;
             justify-content: center;
+            transition: all 0.2s;
+        }
+
+        .send-btn:active, .mic-btn:active {
+            transform: scale(0.95);
+        }
+
+        @keyframes pulse {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.05); }
         }
 
         .recording-status {
@@ -584,8 +600,16 @@ HTML = '''<!DOCTYPE html>
     <div class="typing-area" id="typingArea"></div>
     <div class="input-area">
         <input type="text" id="messageInput" placeholder="Type a message">
-        <button class="mic-btn" id="micBtn">🎤</button>
-        <button class="send-btn" id="sendBtn">📤</button>
+        <button class="mic-btn" id="micBtn">
+            <svg class="mic-icon" viewBox="0 0 24 24" width="22" height="22">
+                <path fill="currentColor" d="M12 16c-2.21 0-4-1.79-4-4V6c0-2.21 1.79-4 4-4s4 1.79 4 4v6c0 2.21-1.79 4-4 4zm8-4c0 4.42-3.58 8-8 8s-8-3.58-8-8h2c0 3.31 2.69 6 6 6s6-2.69 6-6h2zM11 6h2v6h-2V6z"/>
+            </svg>
+        </button>
+        <button class="send-btn" id="sendBtn">
+            <svg class="send-icon" viewBox="0 0 24 24" width="22" height="22">
+                <path fill="currentColor" d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/>
+            </svg>
+        </button>
     </div>
 </div>
 <div id="recordingStatus" class="recording-status">🎤 Recording...</div>
@@ -645,7 +669,7 @@ HTML = '''<!DOCTYPE html>
         return btoa(String.fromCharCode(...combined));
     }
 
-    // Voice Recording - WhatsApp Style
+    // Voice Recording
     async function startRecording() {
         try {
             const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -666,14 +690,12 @@ HTML = '''<!DOCTYPE html>
                 micBtn.classList.remove('recording');
                 document.getElementById('recordingStatus').style.display = 'none';
                 isRecording = false;
-                ws.send(JSON.stringify({ type: 'stop_typing' }));
             };
             
             mediaRecorder.start();
             isRecording = true;
             micBtn.classList.add('recording');
             document.getElementById('recordingStatus').style.display = 'block';
-            ws.send(JSON.stringify({ type: 'typing' }));
             
             setTimeout(() => {
                 if (isRecording && mediaRecorder?.state === 'recording') {
@@ -758,7 +780,9 @@ HTML = '''<!DOCTYPE html>
             const audio = new Audio(url);
             audio.play();
             audio.onended = () => URL.revokeObjectURL(url);
-        } catch(e) {}
+        } catch(e) {
+            console.error('Play error:', e);
+        }
     }
 
     function base64ToBlob(base64, mime) {
