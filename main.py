@@ -1,7 +1,7 @@
 """
 ABAVANDIMWE - Complete Team Chat System
 Author: Mugisha Pc
-Perfect Android CSS + Voice Messages + Team Chat
+WORKING VERSION - All buttons visible, perfect layout
 """
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
@@ -210,40 +210,39 @@ class ConnectionManager:
 
 manager = ConnectionManager()
 
-# ========== HTML - PERFECT ANDROID CSS ==========
+# ========== HTML - WORKING VERSION WITH VISIBLE BUTTONS ==========
 HTML = '''<!DOCTYPE html>
-<html lang="en">
+<html>
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes, viewport-fit=cover">
-    <meta name="theme-color" content="#0a0a0f">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
     <title>ABAVANDIMWE | Team Chat</title>
     <style>
         * {
             margin: 0;
             padding: 0;
             box-sizing: border-box;
-            -webkit-tap-highlight-color: transparent;
         }
 
         body {
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, sans-serif;
             background: #0a0a0f;
             height: 100vh;
-            overflow: hidden;
+            display: flex;
+            flex-direction: column;
         }
 
         /* Login Screen */
-        .login-container {
+        .login-screen {
             position: fixed;
             top: 0;
             left: 0;
             right: 0;
             bottom: 0;
+            background: #0a0a0f;
             display: flex;
             justify-content: center;
             align-items: center;
-            background: #0a0a0f;
             z-index: 1000;
             padding: 20px;
         }
@@ -254,19 +253,19 @@ HTML = '''<!DOCTYPE html>
             border-radius: 20px;
             padding: 32px 24px;
             width: 100%;
-            max-width: 360px;
+            max-width: 380px;
         }
 
         .login-card h1 {
             color: #00ff41;
-            font-size: 26px;
+            font-size: 28px;
             text-align: center;
             margin-bottom: 8px;
         }
 
         .login-card .sub {
             color: #666;
-            font-size: 11px;
+            font-size: 12px;
             text-align: center;
             margin-bottom: 32px;
         }
@@ -296,13 +295,12 @@ HTML = '''<!DOCTYPE html>
             border-radius: 12px;
             color: #000;
             font-size: 16px;
-            font-weight: 600;
+            font-weight: bold;
             cursor: pointer;
-            transition: transform 0.2s;
         }
 
         .login-card button:active {
-            transform: scale(0.98);
+            opacity: 0.8;
         }
 
         .error {
@@ -333,13 +331,11 @@ HTML = '''<!DOCTYPE html>
             display: flex;
             justify-content: space-between;
             align-items: center;
-            flex-shrink: 0;
         }
 
         .chat-header h3 {
             color: #00ff41;
             font-size: 16px;
-            font-weight: 500;
         }
 
         .exit-btn {
@@ -348,25 +344,24 @@ HTML = '''<!DOCTYPE html>
             color: #ff4444;
             padding: 6px 14px;
             border-radius: 8px;
-            font-size: 12px;
             cursor: pointer;
+            font-size: 12px;
         }
 
-        /* Main Area */
-        .main-area {
+        /* Main Layout */
+        .main-layout {
             flex: 1;
             display: flex;
             overflow: hidden;
         }
 
-        /* Sidebar - Hidden on mobile, accessible via menu */
+        /* Sidebar - Users */
         .sidebar {
-            width: 260px;
+            width: 240px;
             background: #0d1117;
             border-right: 1px solid #1a1a2e;
             display: flex;
             flex-direction: column;
-            flex-shrink: 0;
         }
 
         .sidebar h4 {
@@ -383,20 +378,19 @@ HTML = '''<!DOCTYPE html>
         }
 
         .user {
-            padding: 10px 12px;
+            padding: 8px 12px;
             margin: 4px 0;
             background: #1a1a2e;
-            border-radius: 10px;
+            border-radius: 8px;
             color: #ccc;
             font-size: 13px;
-            display: flex;
-            align-items: center;
-            gap: 8px;
         }
 
         .user::before {
             content: "●";
             color: #00ff41;
+            display: inline-block;
+            margin-right: 8px;
             font-size: 8px;
         }
 
@@ -406,10 +400,10 @@ HTML = '''<!DOCTYPE html>
 
         .user.recording::before {
             color: #ff4444;
-            animation: pulse 1s infinite;
+            animation: blink 1s infinite;
         }
 
-        @keyframes pulse {
+        @keyframes blink {
             0%, 100% { opacity: 1; }
             50% { opacity: 0.5; }
         }
@@ -419,7 +413,6 @@ HTML = '''<!DOCTYPE html>
             flex: 1;
             display: flex;
             flex-direction: column;
-            width: 100%;
         }
 
         /* Messages */
@@ -433,15 +426,9 @@ HTML = '''<!DOCTYPE html>
         }
 
         .message {
-            max-width: 80%;
+            max-width: 75%;
             display: flex;
             flex-direction: column;
-            animation: fadeIn 0.2s ease;
-        }
-
-        @keyframes fadeIn {
-            from { opacity: 0; transform: translateY(10px); }
-            to { opacity: 1; transform: translateY(0); }
         }
 
         .message.sent {
@@ -456,20 +443,17 @@ HTML = '''<!DOCTYPE html>
             padding: 10px 14px;
             border-radius: 18px;
             font-size: 14px;
-            line-height: 1.4;
             word-break: break-word;
         }
 
         .message.sent .bubble {
             background: #00ff41;
             color: #000;
-            border-bottom-right-radius: 4px;
         }
 
         .message.received .bubble {
             background: #1a1a2e;
             color: #e0e0e0;
-            border-bottom-left-radius: 4px;
         }
 
         .sender {
@@ -494,32 +478,14 @@ HTML = '''<!DOCTYPE html>
             font-style: italic;
         }
 
-        /* Voice Message */
-        .voice-message {
-            display: flex;
-            align-items: center;
-            gap: 10px;
-        }
-
-        .play-btn {
-            background: transparent;
-            border: 1px solid currentColor;
-            border-radius: 50%;
-            width: 32px;
-            height: 32px;
-            cursor: pointer;
-            font-size: 12px;
-        }
-
-        /* Input Area */
+        /* Input Area - FIXED AT BOTTOM */
         .input-area {
-            padding: 10px 16px;
+            padding: 12px 16px;
             background: #0d1117;
             border-top: 1px solid #1a1a2e;
             display: flex;
-            gap: 8px;
+            gap: 10px;
             align-items: center;
-            flex-shrink: 0;
         }
 
         .input-area input {
@@ -543,17 +509,15 @@ HTML = '''<!DOCTYPE html>
             border-radius: 50%;
             width: 44px;
             height: 44px;
+            font-size: 20px;
             cursor: pointer;
             color: #00ff41;
-            font-size: 18px;
-            transition: all 0.2s;
         }
 
         .voice-btn.recording {
             background: #ff4444;
             border-color: #ff4444;
             color: white;
-            animation: pulse 1s infinite;
         }
 
         .send-btn {
@@ -561,13 +525,13 @@ HTML = '''<!DOCTYPE html>
             border: none;
             border-radius: 24px;
             color: #000;
-            padding: 12px 20px;
-            font-weight: 600;
+            padding: 12px 24px;
+            font-weight: bold;
             cursor: pointer;
         }
 
-        .send-btn:active {
-            transform: scale(0.98);
+        .send-btn:active, .voice-btn:active {
+            transform: scale(0.96);
         }
 
         .recording-status {
@@ -577,23 +541,20 @@ HTML = '''<!DOCTYPE html>
             transform: translateX(-50%);
             background: #ff4444;
             color: white;
-            padding: 8px 16px;
+            padding: 8px 20px;
             border-radius: 20px;
             font-size: 12px;
             display: none;
             z-index: 100;
         }
 
-        /* Mobile Responsive */
+        /* Hide sidebar on mobile */
         @media (max-width: 768px) {
             .sidebar {
                 display: none;
             }
             .message {
                 max-width: 85%;
-            }
-            .voice-btn, .send-btn {
-                padding: 10px 16px;
             }
         }
 
@@ -605,20 +566,19 @@ HTML = '''<!DOCTYPE html>
         }
         ::-webkit-scrollbar-thumb {
             background: #00ff41;
-            border-radius: 3px;
         }
     </style>
 </head>
 <body>
 
-<div id="loginScreen" class="login-container">
+<div id="loginScreen" class="login-screen">
     <div class="login-card">
         <h1>ABAVANDIMWE</h1>
         <div class="sub">Team Chat by Mugisha Pc</div>
         <input type="text" id="username" placeholder="Username">
         <input type="text" id="groupName" placeholder="Group name">
         <input type="password" id="groupPassword" placeholder="Group password">
-        <button onclick="connect()">Join Team Chat</button>
+        <button id="joinBtn">Join Team Chat</button>
         <div id="errorMsg" class="error"></div>
         <div style="text-align:center;margin-top:20px;font-size:9px;color:#333;">🔒 24h auto-delete | 🎤 Voice | 👥 Team</div>
     </div>
@@ -627,9 +587,9 @@ HTML = '''<!DOCTYPE html>
 <div id="chatScreen" class="chat-screen">
     <div class="chat-header">
         <h3 id="groupTitle">Loading...</h3>
-        <button class="exit-btn" onclick="logout()">Exit</button>
+        <button class="exit-btn" id="exitBtn">Exit</button>
     </div>
-    <div class="main-area">
+    <div class="main-layout">
         <div class="sidebar">
             <h4>TEAM ONLINE</h4>
             <div class="users-list" id="usersList"></div>
@@ -638,8 +598,8 @@ HTML = '''<!DOCTYPE html>
             <div class="messages" id="messages"></div>
             <div class="input-area">
                 <input type="text" id="messageInput" placeholder="Type a message...">
-                <button class="voice-btn" id="voiceBtn" onclick="toggleRecording()">🎤</button>
-                <button class="send-btn" onclick="sendTextMessage()">Send</button>
+                <button class="voice-btn" id="voiceBtn">🎤</button>
+                <button class="send-btn" id="sendBtn">Send</button>
             </div>
         </div>
     </div>
@@ -651,6 +611,16 @@ HTML = '''<!DOCTYPE html>
     let typingTimeout;
     let mediaRecorder, audioChunks = [];
     let isRecording = false;
+    
+    // Get DOM elements
+    const joinBtn = document.getElementById('joinBtn');
+    const exitBtn = document.getElementById('exitBtn');
+    const sendBtn = document.getElementById('sendBtn');
+    const voiceBtn = document.getElementById('voiceBtn');
+    const messageInput = document.getElementById('messageInput');
+    const usernameInput = document.getElementById('username');
+    const groupNameInput = document.getElementById('groupName');
+    const groupPasswordInput = document.getElementById('groupPassword');
     
     async function encryptText(text, password, salt) {
         const encoder = new TextEncoder();
@@ -693,61 +663,6 @@ HTML = '''<!DOCTYPE html>
         return btoa(String.fromCharCode(...combined));
     }
     
-    async function toggleRecording() {
-        if (isRecording) {
-            stopRecording();
-        } else {
-            startRecording();
-        }
-    }
-    
-    async function startRecording() {
-        try {
-            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-            mediaRecorder = new MediaRecorder(stream);
-            audioChunks = [];
-            
-            mediaRecorder.ondataavailable = (event) => {
-                audioChunks.push(event.data);
-            };
-            
-            mediaRecorder.onstop = async () => {
-                const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
-                const reader = new FileReader();
-                reader.onloadend = async () => {
-                    const base64Audio = reader.result.split(',')[1];
-                    const encryptedVoice = await encryptVoice(base64Audio, groupPassword, groupSalt);
-                    ws.send(JSON.stringify({ type: 'voice_message', voice_data: encryptedVoice, salt: groupSalt }));
-                    addSystemMessage('🎤 Voice message sent');
-                };
-                reader.readAsDataURL(audioBlob);
-                stream.getTracks().forEach(track => track.stop());
-                document.getElementById('voiceBtn').classList.remove('recording');
-                document.getElementById('recordingStatus').style.display = 'none';
-                isRecording = false;
-                ws.send(JSON.stringify({ type: 'stop_recording' }));
-            };
-            
-            mediaRecorder.start();
-            isRecording = true;
-            document.getElementById('voiceBtn').classList.add('recording');
-            document.getElementById('recordingStatus').style.display = 'block';
-            ws.send(JSON.stringify({ type: 'start_recording' }));
-            
-            setTimeout(() => {
-                if (isRecording) stopRecording();
-            }, 60000);
-        } catch(e) {
-            alert('Microphone access needed for voice messages');
-        }
-    }
-    
-    function stopRecording() {
-        if (mediaRecorder && isRecording) {
-            mediaRecorder.stop();
-        }
-    }
-    
     function addSystemMessage(text) {
         const msgsDiv = document.getElementById('messages');
         if (msgsDiv.children.length === 0 || (msgsDiv.children.length === 1 && msgsDiv.children[0].innerText.includes('Connecting'))) {
@@ -786,7 +701,11 @@ HTML = '''<!DOCTYPE html>
         msgsDiv.scrollTop = msgsDiv.scrollHeight;
     }
     
-    function escapeHtml(t) { const d = document.createElement('div'); d.textContent = t; return d.innerHTML; }
+    function escapeHtml(t) { 
+        const d = document.createElement('div'); 
+        d.textContent = t; 
+        return d.innerHTML; 
+    }
     
     function updateUsersList(users, typingUser = null, recordingUser = null) {
         const usersDiv = document.getElementById('usersList');
@@ -804,22 +723,88 @@ HTML = '''<!DOCTYPE html>
     }
     
     function logout() {
-        if (ws) ws.close();
+        if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.close();
+        }
         ws = null;
         document.getElementById('chatScreen').classList.remove('active');
         document.getElementById('loginScreen').style.display = 'flex';
         document.getElementById('messages').innerHTML = '';
-        document.getElementById('username').value = '';
-        document.getElementById('groupName').value = '';
-        document.getElementById('groupPassword').value = '';
+        usernameInput.value = '';
+        groupNameInput.value = '';
+        groupPasswordInput.value = '';
+    }
+    
+    async function startRecording() {
+        try {
+            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            mediaRecorder = new MediaRecorder(stream);
+            audioChunks = [];
+            
+            mediaRecorder.ondataavailable = (event) => {
+                audioChunks.push(event.data);
+            };
+            
+            mediaRecorder.onstop = async () => {
+                const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
+                const reader = new FileReader();
+                reader.onloadend = async () => {
+                    const base64Audio = reader.result.split(',')[1];
+                    const encryptedVoice = await encryptVoice(base64Audio, groupPassword, groupSalt);
+                    ws.send(JSON.stringify({ type: 'voice_message', voice_data: encryptedVoice, salt: groupSalt }));
+                    addSystemMessage('Voice message sent');
+                };
+                reader.readAsDataURL(audioBlob);
+                stream.getTracks().forEach(track => track.stop());
+                voiceBtn.classList.remove('recording');
+                document.getElementById('recordingStatus').style.display = 'none';
+                isRecording = false;
+                ws.send(JSON.stringify({ type: 'stop_recording' }));
+            };
+            
+            mediaRecorder.start();
+            isRecording = true;
+            voiceBtn.classList.add('recording');
+            document.getElementById('recordingStatus').style.display = 'block';
+            ws.send(JSON.stringify({ type: 'start_recording' }));
+            
+            setTimeout(() => {
+                if (isRecording) {
+                    if (mediaRecorder && mediaRecorder.state === 'recording') {
+                        mediaRecorder.stop();
+                    }
+                }
+            }, 60000);
+        } catch(e) {
+            alert('Microphone access needed for voice messages');
+        }
+    }
+    
+    function stopRecording() {
+        if (mediaRecorder && mediaRecorder.state === 'recording') {
+            mediaRecorder.stop();
+        }
+    }
+    
+    function toggleRecording() {
+        if (isRecording) {
+            stopRecording();
+        } else {
+            startRecording();
+        }
     }
     
     function connect() {
-        username = document.getElementById('username').value.trim();
-        groupName = document.getElementById('groupName').value.trim();
-        groupPassword = document.getElementById('groupPassword').value;
+        username = usernameInput.value.trim();
+        groupName = groupNameInput.value.trim();
+        groupPassword = groupPasswordInput.value;
+        
         if (!username || !groupName || !groupPassword) {
             document.getElementById('errorMsg').innerText = 'Fill all fields';
+            document.getElementById('errorMsg').style.display = 'block';
+            setTimeout(() => {
+                document.getElementById('errorMsg').style.display = 'none';
+            }, 3000);
             return;
         }
         
@@ -834,6 +819,10 @@ HTML = '''<!DOCTYPE html>
             const data = JSON.parse(e.data);
             if (data.type === 'error') {
                 document.getElementById('errorMsg').innerText = data.message;
+                document.getElementById('errorMsg').style.display = 'block';
+                setTimeout(() => {
+                    document.getElementById('errorMsg').style.display = 'none';
+                }, 3000);
                 return;
             }
             if (data.type === 'ready') {
@@ -866,22 +855,27 @@ HTML = '''<!DOCTYPE html>
                 addSystemMessage(`👋 ${data.user} left`);
             }
             else if (data.type === 'typing') {
-                updateUsersList(await getCurrentUsers(), data.user);
+                const online = await getCurrentUsers();
+                updateUsersList(online, data.user);
             }
             else if (data.type === 'stop_typing') {
-                updateUsersList(await getCurrentUsers());
+                const online = await getCurrentUsers();
+                updateUsersList(online);
             }
             else if (data.type === 'start_recording') {
-                updateUsersList(await getCurrentUsers(), null, data.user);
+                const online = await getCurrentUsers();
+                updateUsersList(online, null, data.user);
                 addSystemMessage(`🎤 ${data.user} is recording...`);
             }
             else if (data.type === 'stop_recording') {
-                updateUsersList(await getCurrentUsers());
+                const online = await getCurrentUsers();
+                updateUsersList(online);
             }
         };
         
         ws.onerror = () => {
             document.getElementById('errorMsg').innerText = 'Connection failed';
+            document.getElementById('errorMsg').style.display = 'block';
         };
     }
     
@@ -889,32 +883,42 @@ HTML = '''<!DOCTYPE html>
         return [];
     }
     
-    const msgInput = document.getElementById('messageInput');
-    if (msgInput) {
-        msgInput.addEventListener('input', () => {
-            if (ws && ws.readyState === WebSocket.OPEN) {
-                ws.send(JSON.stringify({ type: 'typing' }));
-                clearTimeout(typingTimeout);
-                typingTimeout = setTimeout(() => {
-                    if (ws && ws.readyState === WebSocket.OPEN) {
-                        ws.send(JSON.stringify({ type: 'stop_typing' }));
-                    }
-                }, 1000);
-            }
-        });
-        msgInput.addEventListener('keypress', (e) => { if (e.key === 'Enter') sendTextMessage(); });
-    }
+    // Event Listeners
+    joinBtn.onclick = connect;
+    exitBtn.onclick = logout;
+    sendBtn.onclick = sendTextMessage;
+    voiceBtn.onclick = toggleRecording;
+    
+    messageInput.addEventListener('input', () => {
+        if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ type: 'typing' }));
+            clearTimeout(typingTimeout);
+            typingTimeout = setTimeout(() => {
+                if (ws && ws.readyState === WebSocket.OPEN) {
+                    ws.send(JSON.stringify({ type: 'stop_typing' }));
+                }
+            }, 1000);
+        }
+    });
+    
+    messageInput.addEventListener('keypress', (e) => {
+        if (e.key === 'Enter') {
+            e.preventDefault();
+            sendTextMessage();
+        }
+    });
     
     async function sendTextMessage() {
-        const input = document.getElementById('messageInput');
-        const text = input.value.trim();
+        const text = messageInput.value.trim();
         if (!text || !ws || ws.readyState !== WebSocket.OPEN || !groupSalt) return;
         try {
             const ciphertext = await encryptText(text, groupPassword, groupSalt);
             ws.send(JSON.stringify({ type: 'text_message', ciphertext, salt: groupSalt }));
             addTextMessage(username, text, true);
-            input.value = '';
-        } catch(e) { console.error(e); }
+            messageInput.value = '';
+        } catch(e) {
+            console.error(e);
+        }
     }
 </script>
 </body>
@@ -1044,23 +1048,19 @@ if __name__ == "__main__":
 ║  ██║  ██║██████╔╝██║  ██║ ╚████╔╝ ██║  ██║██║ ╚████║██████╔╝     ║
 ║  ╚═╝  ╚═╝╚═════╝ ╚═╝  ╚═╝  ╚═══╝  ╚═╝  ╚═╝╚═╝  ╚═══╝╚═════╝      ║
 ║                                                                   ║
-║                    ABAVANDIMWE v12.0 - FINAL                      ║
+║                    ABAVANDIMWE v13.0 - FINAL                      ║
 ║                                                                   ║
-║  ✅ Perfect Android CSS - Clean & Responsive                      ║
+║  ✅ ALL BUTTONS VISIBLE - Type, Send, Voice, Exit                 ║
 ║  ✅ Team Chat - All users see all messages                        ║
-║  ✅ Voice Messages - Record, send, play                           ║
+║  ✅ Voice Messages - Record and send                              ║
 ║  ✅ 24h Persistence - Messages stay 24 hours                      ║
-║  ✅ Typing Indicators - See who's typing                          ║
-║  ✅ Recording Indicators - See who's recording                    ║
+║  ✅ Typing & Recording Indicators                                 ║
 ║                                                                   ║
 ║                        AUTHOR: MUGISHA PC                         ║
 ║                                                                   ║
 ╚═══════════════════════════════════════════════════════════════════╝
     """)
     print(f"[✓] Server on port {port}")
-    print(f"[✓] Messages persist 24 hours")
-    print(f"[✓] Team chat ready")
-    print(f"[✓] Voice messages ready")
     print(f"[✓] Open: https://abavandimwe.onrender.com")
     
     uvicorn.run(app, host="0.0.0.0", port=port)
