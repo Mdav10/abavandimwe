@@ -1,7 +1,7 @@
 """
-ABAVANDIMWE - Complete Team Chat System
+ABAVANDIMWE - Professional Secure Messaging System
 Author: Mugisha Pc
-WORKING VERSION - All buttons visible, perfect layout
+Complete: Text + Voice + Team Chat + 24h Auto-Delete
 """
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
@@ -15,7 +15,6 @@ import hashlib
 import os
 import threading
 import time
-from datetime import datetime
 from typing import Dict
 
 app = FastAPI()
@@ -26,20 +25,17 @@ DB_PATH = "abavandimwe.db"
 def init_db():
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    
     c.execute('''
         CREATE TABLE IF NOT EXISTS messages (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            message_type TEXT DEFAULT 'text',
-            ciphertext TEXT,
-            voice_data TEXT,
+            type TEXT DEFAULT 'text',
+            content TEXT,
             group_name TEXT,
             sender TEXT,
             salt TEXT,
             created_at REAL
         )
     ''')
-    
     c.execute('''
         CREATE TABLE IF NOT EXISTS users (
             username TEXT PRIMARY KEY,
@@ -48,7 +44,6 @@ def init_db():
             last_seen REAL
         )
     ''')
-    
     c.execute('''
         CREATE TABLE IF NOT EXISTS groups (
             group_name TEXT PRIMARY KEY,
@@ -57,7 +52,6 @@ def init_db():
             created_by TEXT
         )
     ''')
-    
     conn.commit()
     conn.close()
     print("[✓] Database ready")
@@ -84,7 +78,7 @@ def start_cleanup():
 init_db()
 start_cleanup()
 
-# ========== CRYPTOGRAPHY ==========
+# ========== CRYPTO ==========
 def generate_salt():
     return base64.b64encode(secrets.token_bytes(32)).decode()
 
@@ -116,20 +110,20 @@ def decrypt(encrypted, password, salt):
         decrypted.append(ciphertext[i] ^ key[i % len(key)])
     return decrypted.decode()
 
-# ========== DATABASE FUNCTIONS ==========
-def save_text_message(ciphertext, group, sender, salt):
+# ========== DATABASE OPS ==========
+def save_text_message(content, group, sender, salt):
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    c.execute("INSERT INTO messages (message_type, ciphertext, group_name, sender, salt, created_at) VALUES ('text', ?, ?, ?, ?, ?)",
-             (ciphertext, group, sender, salt, time.time()))
+    c.execute("INSERT INTO messages (type, content, group_name, sender, salt, created_at) VALUES ('text', ?, ?, ?, ?, ?)",
+             (content, group, sender, salt, time.time()))
     conn.commit()
     conn.close()
 
-def save_voice_message(voice_data, group, sender, salt):
+def save_voice_message(content, group, sender, salt):
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    c.execute("INSERT INTO messages (message_type, voice_data, group_name, sender, salt, created_at) VALUES ('voice', ?, ?, ?, ?, ?)",
-             (voice_data, group, sender, salt, time.time()))
+    c.execute("INSERT INTO messages (type, content, group_name, sender, salt, created_at) VALUES ('voice', ?, ?, ?, ?, ?)",
+             (content, group, sender, salt, time.time()))
     conn.commit()
     conn.close()
 
@@ -137,11 +131,11 @@ def get_messages(group):
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     cutoff = time.time() - (24 * 3600)
-    c.execute("SELECT message_type, ciphertext, voice_data, sender, salt FROM messages WHERE group_name=? AND created_at > ? ORDER BY id ASC", 
+    c.execute("SELECT type, content, sender, salt FROM messages WHERE group_name=? AND created_at > ? ORDER BY id ASC", 
              (group, cutoff))
     rows = c.fetchall()
     conn.close()
-    return [{'type': r[0], 'ciphertext': r[1], 'voice_data': r[2], 'sender': r[3], 'salt': r[4]} for r in rows]
+    return [{'type': r[0], 'content': r[1], 'sender': r[2], 'salt': r[3]} for r in rows]
 
 def set_user_status(username, status, group):
     conn = sqlite3.connect(DB_PATH)
@@ -186,6 +180,8 @@ def create_group(group, salt, password_hash, creator):
 class ConnectionManager:
     def __init__(self):
         self.connections: Dict[str, Dict[str, WebSocket]] = {}
+        self.typing: Dict[str, str] = {}
+        self.recording: Dict[str, str] = {}
     
     async def add(self, group: str, username: str, websocket: WebSocket):
         if group not in self.connections:
@@ -197,6 +193,8 @@ class ConnectionManager:
             self.connections[group].pop(username, None)
             if not self.connections[group]:
                 del self.connections[group]
+        self.typing.pop(username, None)
+        self.recording.pop(username, None)
     
     async def broadcast(self, group: str, message: dict, exclude: str = None):
         if group not in self.connections:
@@ -210,18 +208,19 @@ class ConnectionManager:
 
 manager = ConnectionManager()
 
-# ========== HTML - WORKING VERSION WITH VISIBLE BUTTONS ==========
+# ========== HTML ==========
 HTML = '''<!DOCTYPE html>
 <html>
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
-    <title>ABAVANDIMWE | Team Chat</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes, viewport-fit=cover">
+    <title>ABAVANDIMWE | Professional Team Chat</title>
     <style>
         * {
             margin: 0;
             padding: 0;
             box-sizing: border-box;
+            -webkit-tap-highlight-color: transparent;
         }
 
         body {
@@ -250,8 +249,8 @@ HTML = '''<!DOCTYPE html>
         .login-card {
             background: #0d1117;
             border: 1px solid #00ff41;
-            border-radius: 20px;
-            padding: 32px 24px;
+            border-radius: 24px;
+            padding: 40px 28px;
             width: 100%;
             max-width: 380px;
         }
@@ -261,9 +260,10 @@ HTML = '''<!DOCTYPE html>
             font-size: 28px;
             text-align: center;
             margin-bottom: 8px;
+            letter-spacing: -0.5px;
         }
 
-        .login-card .sub {
+        .login-card p {
             color: #666;
             font-size: 12px;
             text-align: center;
@@ -289,14 +289,15 @@ HTML = '''<!DOCTYPE html>
         .login-card button {
             width: 100%;
             padding: 14px;
-            margin-top: 16px;
+            margin-top: 20px;
             background: #00ff41;
             border: none;
             border-radius: 12px;
             color: #000;
             font-size: 16px;
-            font-weight: bold;
+            font-weight: 600;
             cursor: pointer;
+            transition: opacity 0.2s;
         }
 
         .login-card button:active {
@@ -326,16 +327,17 @@ HTML = '''<!DOCTYPE html>
         /* Header */
         .chat-header {
             background: #0d1117;
-            border-bottom: 1px solid #1a1a2e;
-            padding: 12px 16px;
+            padding: 14px 16px;
             display: flex;
             justify-content: space-between;
             align-items: center;
+            border-bottom: 1px solid #1a1a2e;
         }
 
         .chat-header h3 {
             color: #00ff41;
-            font-size: 16px;
+            font-size: 17px;
+            font-weight: 600;
         }
 
         .exit-btn {
@@ -344,61 +346,43 @@ HTML = '''<!DOCTYPE html>
             color: #ff4444;
             padding: 6px 14px;
             border-radius: 8px;
-            cursor: pointer;
             font-size: 12px;
+            cursor: pointer;
         }
 
-        /* Main Layout */
-        .main-layout {
-            flex: 1;
-            display: flex;
-            overflow: hidden;
-        }
-
-        /* Sidebar - Users */
-        .sidebar {
-            width: 240px;
+        /* Online Users Bar */
+        .online-bar {
             background: #0d1117;
-            border-right: 1px solid #1a1a2e;
-            display: flex;
-            flex-direction: column;
-        }
-
-        .sidebar h4 {
-            color: #888;
-            font-size: 11px;
-            padding: 12px 16px;
+            padding: 10px 16px;
             border-bottom: 1px solid #1a1a2e;
+            overflow-x: auto;
+            white-space: nowrap;
+            display: flex;
+            gap: 12px;
         }
 
-        .users-list {
-            flex: 1;
-            padding: 8px;
-            overflow-y: auto;
-        }
-
-        .user {
-            padding: 8px 12px;
-            margin: 4px 0;
+        .online-user {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 5px 12px;
             background: #1a1a2e;
-            border-radius: 8px;
-            color: #ccc;
-            font-size: 13px;
-        }
-
-        .user::before {
-            content: "●";
+            border-radius: 20px;
+            font-size: 12px;
             color: #00ff41;
-            display: inline-block;
-            margin-right: 8px;
-            font-size: 8px;
         }
 
-        .user.typing::before {
+        .online-user::before {
+            content: "●";
+            font-size: 8px;
+            color: #00ff41;
+        }
+
+        .online-user.typing::before {
             color: #ffaa00;
         }
 
-        .user.recording::before {
+        .online-user.recording::before {
             color: #ff4444;
             animation: blink 1s infinite;
         }
@@ -406,13 +390,6 @@ HTML = '''<!DOCTYPE html>
         @keyframes blink {
             0%, 100% { opacity: 1; }
             50% { opacity: 0.5; }
-        }
-
-        /* Chat Area */
-        .chat-area {
-            flex: 1;
-            display: flex;
-            flex-direction: column;
         }
 
         /* Messages */
@@ -443,6 +420,7 @@ HTML = '''<!DOCTYPE html>
             padding: 10px 14px;
             border-radius: 18px;
             font-size: 14px;
+            line-height: 1.4;
             word-break: break-word;
         }
 
@@ -478,7 +456,41 @@ HTML = '''<!DOCTYPE html>
             font-style: italic;
         }
 
-        /* Input Area - FIXED AT BOTTOM */
+        /* Voice Message */
+        .voice-message {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 6px 0;
+        }
+
+        .play-btn {
+            background: transparent;
+            border: 1px solid currentColor;
+            border-radius: 50%;
+            width: 32px;
+            height: 32px;
+            cursor: pointer;
+            font-size: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .voice-duration {
+            font-size: 12px;
+            font-family: monospace;
+        }
+
+        /* Typing Indicator */
+        .typing-indicator {
+            padding: 8px 16px;
+            color: #888;
+            font-size: 11px;
+            font-style: italic;
+        }
+
+        /* Input Area */
         .input-area {
             padding: 12px 16px;
             background: #0d1117;
@@ -509,15 +521,22 @@ HTML = '''<!DOCTYPE html>
             border-radius: 50%;
             width: 44px;
             height: 44px;
-            font-size: 20px;
+            font-size: 18px;
             cursor: pointer;
             color: #00ff41;
+            transition: all 0.2s;
         }
 
         .voice-btn.recording {
             background: #ff4444;
             border-color: #ff4444;
             color: white;
+            animation: pulse 1s infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.05); }
         }
 
         .send-btn {
@@ -526,7 +545,7 @@ HTML = '''<!DOCTYPE html>
             border-radius: 24px;
             color: #000;
             padding: 12px 24px;
-            font-weight: bold;
+            font-weight: 600;
             cursor: pointer;
         }
 
@@ -541,31 +560,23 @@ HTML = '''<!DOCTYPE html>
             transform: translateX(-50%);
             background: #ff4444;
             color: white;
-            padding: 8px 20px;
-            border-radius: 20px;
-            font-size: 12px;
+            padding: 10px 20px;
+            border-radius: 30px;
+            font-size: 14px;
             display: none;
             z-index: 100;
-        }
-
-        /* Hide sidebar on mobile */
-        @media (max-width: 768px) {
-            .sidebar {
-                display: none;
-            }
-            .message {
-                max-width: 85%;
-            }
+            white-space: nowrap;
         }
 
         ::-webkit-scrollbar {
-            width: 3px;
+            width: 4px;
         }
         ::-webkit-scrollbar-track {
             background: #1a1a2e;
         }
         ::-webkit-scrollbar-thumb {
             background: #00ff41;
+            border-radius: 4px;
         }
     </style>
 </head>
@@ -574,13 +585,13 @@ HTML = '''<!DOCTYPE html>
 <div id="loginScreen" class="login-screen">
     <div class="login-card">
         <h1>ABAVANDIMWE</h1>
-        <div class="sub">Team Chat by Mugisha Pc</div>
+        <p>Professional Team Chat by Mugisha Pc</p>
         <input type="text" id="username" placeholder="Username">
         <input type="text" id="groupName" placeholder="Group name">
         <input type="password" id="groupPassword" placeholder="Group password">
         <button id="joinBtn">Join Team Chat</button>
         <div id="errorMsg" class="error"></div>
-        <div style="text-align:center;margin-top:20px;font-size:9px;color:#333;">🔒 24h auto-delete | 🎤 Voice | 👥 Team</div>
+        <div style="text-align:center;margin-top:16px;font-size:9px;color:#333;">🔒 24h auto-delete | 🎤 Voice | 👥 Team</div>
     </div>
 </div>
 
@@ -589,19 +600,15 @@ HTML = '''<!DOCTYPE html>
         <h3 id="groupTitle">Loading...</h3>
         <button class="exit-btn" id="exitBtn">Exit</button>
     </div>
-    <div class="main-layout">
-        <div class="sidebar">
-            <h4>TEAM ONLINE</h4>
-            <div class="users-list" id="usersList"></div>
-        </div>
-        <div class="chat-area">
-            <div class="messages" id="messages"></div>
-            <div class="input-area">
-                <input type="text" id="messageInput" placeholder="Type a message...">
-                <button class="voice-btn" id="voiceBtn">🎤</button>
-                <button class="send-btn" id="sendBtn">Send</button>
-            </div>
-        </div>
+    <div class="online-bar" id="onlineBar">
+        <span style="color:#666;">Loading users...</span>
+    </div>
+    <div class="messages" id="messages"></div>
+    <div class="typing-indicator" id="typingIndicator"></div>
+    <div class="input-area">
+        <input type="text" id="messageInput" placeholder="Type a message...">
+        <button class="voice-btn" id="voiceBtn">🎤</button>
+        <button class="send-btn" id="sendBtn">Send</button>
     </div>
 </div>
 <div id="recordingStatus" class="recording-status">🎤 Recording...</div>
@@ -611,8 +618,9 @@ HTML = '''<!DOCTYPE html>
     let typingTimeout;
     let mediaRecorder, audioChunks = [];
     let isRecording = false;
-    
-    // Get DOM elements
+    let audioContext, audioBuffers = {};
+
+    // DOM Elements
     const joinBtn = document.getElementById('joinBtn');
     const exitBtn = document.getElementById('exitBtn');
     const sendBtn = document.getElementById('sendBtn');
@@ -621,7 +629,8 @@ HTML = '''<!DOCTYPE html>
     const usernameInput = document.getElementById('username');
     const groupNameInput = document.getElementById('groupName');
     const groupPasswordInput = document.getElementById('groupPassword');
-    
+
+    // Encryption
     async function encryptText(text, password, salt) {
         const encoder = new TextEncoder();
         const keyMaterial = await crypto.subtle.importKey('raw', encoder.encode(password), 'PBKDF2', false, ['deriveKey']);
@@ -635,7 +644,7 @@ HTML = '''<!DOCTYPE html>
         combined.set(new Uint8Array(encrypted), iv.length);
         return btoa(String.fromCharCode(...combined));
     }
-    
+
     async function decryptText(encrypted, password, salt) {
         const combined = Uint8Array.from(atob(encrypted), c => c.charCodeAt(0));
         const iv = combined.slice(0, 12);
@@ -648,7 +657,7 @@ HTML = '''<!DOCTYPE html>
         const decrypted = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, data);
         return new TextDecoder().decode(decrypted);
     }
-    
+
     async function encryptVoice(voiceData, password, salt) {
         const encoder = new TextEncoder();
         const keyMaterial = await crypto.subtle.importKey('raw', encoder.encode(password), 'PBKDF2', false, ['deriveKey']);
@@ -662,79 +671,8 @@ HTML = '''<!DOCTYPE html>
         combined.set(new Uint8Array(encrypted), iv.length);
         return btoa(String.fromCharCode(...combined));
     }
-    
-    function addSystemMessage(text) {
-        const msgsDiv = document.getElementById('messages');
-        if (msgsDiv.children.length === 0 || (msgsDiv.children.length === 1 && msgsDiv.children[0].innerText.includes('Connecting'))) {
-            msgsDiv.innerHTML = '';
-        }
-        const div = document.createElement('div');
-        div.className = 'system-msg';
-        div.innerText = text;
-        msgsDiv.appendChild(div);
-        msgsDiv.scrollTop = msgsDiv.scrollHeight;
-    }
-    
-    function addTextMessage(sender, text, isSent) {
-        const msgsDiv = document.getElementById('messages');
-        if (msgsDiv.children.length === 0 || (msgsDiv.children.length === 1 && msgsDiv.children[0].innerText.includes('Connecting'))) {
-            msgsDiv.innerHTML = '';
-        }
-        const div = document.createElement('div');
-        div.className = `message ${isSent ? 'sent' : 'received'}`;
-        const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-        div.innerHTML = `<div class="sender">${isSent ? 'You' : sender}</div><div class="bubble">${escapeHtml(text)}</div><div class="time">${time}</div>`;
-        msgsDiv.appendChild(div);
-        msgsDiv.scrollTop = msgsDiv.scrollHeight;
-    }
-    
-    function addVoiceMessage(sender, isSent) {
-        const msgsDiv = document.getElementById('messages');
-        if (msgsDiv.children.length === 0 || (msgsDiv.children.length === 1 && msgsDiv.children[0].innerText.includes('Connecting'))) {
-            msgsDiv.innerHTML = '';
-        }
-        const div = document.createElement('div');
-        div.className = `message ${isSent ? 'sent' : 'received'}`;
-        const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-        div.innerHTML = `<div class="sender">${isSent ? 'You' : sender}</div><div class="bubble">🎤 Voice message</div><div class="time">${time}</div>`;
-        msgsDiv.appendChild(div);
-        msgsDiv.scrollTop = msgsDiv.scrollHeight;
-    }
-    
-    function escapeHtml(t) { 
-        const d = document.createElement('div'); 
-        d.textContent = t; 
-        return d.innerHTML; 
-    }
-    
-    function updateUsersList(users, typingUser = null, recordingUser = null) {
-        const usersDiv = document.getElementById('usersList');
-        if (users.length === 0) {
-            usersDiv.innerHTML = '<div style="color:#666; padding:8px;">No one online</div>';
-        } else {
-            usersDiv.innerHTML = users.map(u => {
-                let statusClass = '';
-                let statusText = '';
-                if (typingUser === u) { statusClass = 'typing'; statusText = ' ✏️'; }
-                if (recordingUser === u) { statusClass = 'recording'; statusText = ' 🎤'; }
-                return `<div class="user ${statusClass}">${escapeHtml(u)}${statusText}</div>`;
-            }).join('');
-        }
-    }
-    
-    function logout() {
-        if (ws && ws.readyState === WebSocket.OPEN) {
-            ws.close();
-        }
-        ws = null;
-        document.getElementById('chatScreen').classList.remove('active');
-        document.getElementById('loginScreen').style.display = 'flex';
-        document.getElementById('messages').innerHTML = '';
-        usernameInput.value = '';
-        groupNameInput.value = '';
-        groupPasswordInput.value = '';
-    }
-    
+
+    // Voice Recording
     async function startRecording() {
         try {
             const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -751,7 +689,7 @@ HTML = '''<!DOCTYPE html>
                 reader.onloadend = async () => {
                     const base64Audio = reader.result.split(',')[1];
                     const encryptedVoice = await encryptVoice(base64Audio, groupPassword, groupSalt);
-                    ws.send(JSON.stringify({ type: 'voice_message', voice_data: encryptedVoice, salt: groupSalt }));
+                    ws.send(JSON.stringify({ type: 'voice_message', content: encryptedVoice, salt: groupSalt }));
                     addSystemMessage('Voice message sent');
                 };
                 reader.readAsDataURL(audioBlob);
@@ -769,23 +707,21 @@ HTML = '''<!DOCTYPE html>
             ws.send(JSON.stringify({ type: 'start_recording' }));
             
             setTimeout(() => {
-                if (isRecording) {
-                    if (mediaRecorder && mediaRecorder.state === 'recording') {
-                        mediaRecorder.stop();
-                    }
+                if (isRecording && mediaRecorder && mediaRecorder.state === 'recording') {
+                    mediaRecorder.stop();
                 }
-            }, 60000);
+            }, 30000);
         } catch(e) {
-            alert('Microphone access needed for voice messages');
+            alert('Microphone access required for voice messages');
         }
     }
-    
+
     function stopRecording() {
         if (mediaRecorder && mediaRecorder.state === 'recording') {
             mediaRecorder.stop();
         }
     }
-    
+
     function toggleRecording() {
         if (isRecording) {
             stopRecording();
@@ -793,12 +729,86 @@ HTML = '''<!DOCTYPE html>
             startRecording();
         }
     }
-    
+
+    // UI Functions
+    function addSystemMessage(text) {
+        const msgsDiv = document.getElementById('messages');
+        if (msgsDiv.children.length === 0) msgsDiv.innerHTML = '';
+        const div = document.createElement('div');
+        div.className = 'system-msg';
+        div.innerText = text;
+        msgsDiv.appendChild(div);
+        msgsDiv.scrollTop = msgsDiv.scrollHeight;
+    }
+
+    function addTextMessage(sender, text, isSent) {
+        const msgsDiv = document.getElementById('messages');
+        if (msgsDiv.children.length === 0) msgsDiv.innerHTML = '';
+        const div = document.createElement('div');
+        div.className = `message ${isSent ? 'sent' : 'received'}`;
+        const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        div.innerHTML = `<div class="sender">${isSent ? 'You' : sender}</div><div class="bubble">${escapeHtml(text)}</div><div class="time">${time}</div>`;
+        msgsDiv.appendChild(div);
+        msgsDiv.scrollTop = msgsDiv.scrollHeight;
+    }
+
+    function addVoiceMessage(sender, isSent, messageId) {
+        const msgsDiv = document.getElementById('messages');
+        if (msgsDiv.children.length === 0) msgsDiv.innerHTML = '';
+        const div = document.createElement('div');
+        div.className = `message ${isSent ? 'sent' : 'received'}`;
+        const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        div.innerHTML = `
+            <div class="sender">${isSent ? 'You' : sender}</div>
+            <div class="bubble">
+                <div class="voice-message">
+                    <button class="play-btn" onclick="playVoice('${messageId}')">▶</button>
+                    <span class="voice-duration">Voice message</span>
+                </div>
+            </div>
+            <div class="time">${time}</div>
+        `;
+        msgsDiv.appendChild(div);
+        msgsDiv.scrollTop = msgsDiv.scrollHeight;
+    }
+
+    function escapeHtml(t) {
+        const d = document.createElement('div');
+        d.textContent = t;
+        return d.innerHTML;
+    }
+
+    function updateOnlineUsers(users, typingUser = null, recordingUser = null) {
+        const bar = document.getElementById('onlineBar');
+        if (users.length === 0) {
+            bar.innerHTML = '<span style="color:#666;">No one online</span>';
+        } else {
+            bar.innerHTML = users.map(u => {
+                let statusClass = '';
+                if (typingUser === u) statusClass = 'typing';
+                if (recordingUser === u) statusClass = 'recording';
+                return `<span class="online-user ${statusClass}">${escapeHtml(u)}</span>`;
+            }).join('');
+        }
+    }
+
+    function logout() {
+        if (ws) ws.close();
+        ws = null;
+        document.getElementById('chatScreen').classList.remove('active');
+        document.getElementById('loginScreen').style.display = 'flex';
+        document.getElementById('messages').innerHTML = '';
+        usernameInput.value = '';
+        groupNameInput.value = '';
+        groupPasswordInput.value = '';
+    }
+
+    // WebSocket Connection
     function connect() {
         username = usernameInput.value.trim();
         groupName = groupNameInput.value.trim();
         groupPassword = groupPasswordInput.value;
-        
+
         if (!username || !groupName || !groupPassword) {
             document.getElementById('errorMsg').innerText = 'Fill all fields';
             document.getElementById('errorMsg').style.display = 'block';
@@ -807,24 +817,23 @@ HTML = '''<!DOCTYPE html>
             }, 3000);
             return;
         }
-        
+
         const wsUrl = `wss://${window.location.host}/ws`;
         ws = new WebSocket(wsUrl);
-        
+
         ws.onopen = () => {
             ws.send(JSON.stringify({ type: 'join', username, group: groupName, password: groupPassword }));
         };
-        
+
         ws.onmessage = async (e) => {
             const data = JSON.parse(e.data);
+            
             if (data.type === 'error') {
                 document.getElementById('errorMsg').innerText = data.message;
                 document.getElementById('errorMsg').style.display = 'block';
-                setTimeout(() => {
-                    document.getElementById('errorMsg').style.display = 'none';
-                }, 3000);
                 return;
             }
+            
             if (data.type === 'ready') {
                 groupSalt = data.salt;
                 document.getElementById('loginScreen').style.display = 'none';
@@ -832,21 +841,34 @@ HTML = '''<!DOCTYPE html>
                 document.getElementById('groupTitle').innerText = data.group;
                 addSystemMessage('You joined the team chat');
             }
-            else if (data.type === 'text_message' || data.type === 'history') {
-                if (data.ciphertext) {
-                    try {
-                        const decrypted = await decryptText(data.ciphertext, groupPassword, data.salt);
-                        addTextMessage(data.sender, decrypted, data.sender === username);
-                    } catch(e) {
-                        addTextMessage(data.sender, '🔒 Encrypted', data.sender === username);
-                    }
+            else if (data.type === 'text_message') {
+                try {
+                    const decrypted = await decryptText(data.content, groupPassword, data.salt);
+                    addTextMessage(data.sender, decrypted, data.sender === username);
+                } catch(e) {
+                    addTextMessage(data.sender, '🔒 Encrypted', data.sender === username);
                 }
             }
             else if (data.type === 'voice_message') {
-                addVoiceMessage(data.sender, data.sender === username);
+                addVoiceMessage(data.sender, data.sender === username, data.id || Date.now());
+                // Store voice data for playback
+                audioBuffers[data.id || Date.now()] = { data: data.content, salt: data.salt };
+            }
+            else if (data.type === 'history') {
+                for (const msg of data.messages) {
+                    if (msg.type === 'text') {
+                        try {
+                            const decrypted = await decryptText(msg.content, groupPassword, msg.salt);
+                            addTextMessage(msg.sender, decrypted, msg.sender === username);
+                        } catch(e) {}
+                    } else if (msg.type === 'voice') {
+                        addVoiceMessage(msg.sender, msg.sender === username, msg.id);
+                        audioBuffers[msg.id] = { data: msg.content, salt: msg.salt };
+                    }
+                }
             }
             else if (data.type === 'users') {
-                updateUsersList(data.users, data.typing_user, data.recording_user);
+                updateOnlineUsers(data.users, data.typing_user, data.recording_user);
             }
             else if (data.type === 'user_joined') {
                 addSystemMessage(`👤 ${data.user} joined`);
@@ -855,40 +877,55 @@ HTML = '''<!DOCTYPE html>
                 addSystemMessage(`👋 ${data.user} left`);
             }
             else if (data.type === 'typing') {
-                const online = await getCurrentUsers();
-                updateUsersList(online, data.user);
+                document.getElementById('typingIndicator').innerText = `${data.user} is typing...`;
             }
             else if (data.type === 'stop_typing') {
-                const online = await getCurrentUsers();
-                updateUsersList(online);
+                document.getElementById('typingIndicator').innerText = '';
             }
             else if (data.type === 'start_recording') {
-                const online = await getCurrentUsers();
-                updateUsersList(online, null, data.user);
-                addSystemMessage(`🎤 ${data.user} is recording...`);
-            }
-            else if (data.type === 'stop_recording') {
-                const online = await getCurrentUsers();
-                updateUsersList(online);
+                addSystemMessage(`🎤 ${data.user} is recording a voice message...`);
             }
         };
-        
+
         ws.onerror = () => {
             document.getElementById('errorMsg').innerText = 'Connection failed';
             document.getElementById('errorMsg').style.display = 'block';
         };
     }
-    
-    async function getCurrentUsers() {
-        return [];
+
+    // Voice Playback
+    async function playVoice(messageId) {
+        const voiceData = audioBuffers[messageId];
+        if (!voiceData) return;
+        
+        try {
+            const decryptedBase64 = await decryptText(voiceData.data, groupPassword, voiceData.salt);
+            const audioBlob = base64ToBlob(decryptedBase64, 'audio/webm');
+            const audioUrl = URL.createObjectURL(audioBlob);
+            const audio = new Audio(audioUrl);
+            audio.play();
+            audio.onended = () => URL.revokeObjectURL(audioUrl);
+        } catch(e) {
+            console.error('Playback error:', e);
+        }
     }
-    
+
+    function base64ToBlob(base64, mimeType) {
+        const byteCharacters = atob(base64);
+        const byteNumbers = new Array(byteCharacters.length);
+        for (let i = 0; i < byteCharacters.length; i++) {
+            byteNumbers[i] = byteCharacters.charCodeAt(i);
+        }
+        const byteArray = new Uint8Array(byteNumbers);
+        return new Blob([byteArray], { type: mimeType });
+    }
+
     // Event Listeners
     joinBtn.onclick = connect;
     exitBtn.onclick = logout;
     sendBtn.onclick = sendTextMessage;
     voiceBtn.onclick = toggleRecording;
-    
+
     messageInput.addEventListener('input', () => {
         if (ws && ws.readyState === WebSocket.OPEN) {
             ws.send(JSON.stringify({ type: 'typing' }));
@@ -900,20 +937,21 @@ HTML = '''<!DOCTYPE html>
             }, 1000);
         }
     });
-    
+
     messageInput.addEventListener('keypress', (e) => {
         if (e.key === 'Enter') {
             e.preventDefault();
             sendTextMessage();
         }
     });
-    
+
     async function sendTextMessage() {
         const text = messageInput.value.trim();
         if (!text || !ws || ws.readyState !== WebSocket.OPEN || !groupSalt) return;
+        
         try {
             const ciphertext = await encryptText(text, groupPassword, groupSalt);
-            ws.send(JSON.stringify({ type: 'text_message', ciphertext, salt: groupSalt }));
+            ws.send(JSON.stringify({ type: 'text_message', content: ciphertext, salt: groupSalt }));
             addTextMessage(username, text, true);
             messageInput.value = '';
         } catch(e) {
@@ -931,7 +969,7 @@ async def root():
 
 @app.get("/health")
 async def health():
-    return {"status": "healthy", "system": "ABAVANDIMWE", "features": "text+voice+team", "author": "Mugisha Pc"}
+    return {"status": "healthy", "system": "ABAVANDIMWE", "author": "Mugisha Pc"}
 
 # ========== WEBSOCKET ==========
 @app.websocket("/ws")
@@ -965,19 +1003,12 @@ async def ws_endpoint(websocket: WebSocket):
                 await manager.add(group_name, username, websocket)
                 set_user_status(username, 'online', group_name)
                 
-                for msg in get_messages(group_name):
-                    if msg['type'] == 'text':
-                        await websocket.send_json({
-                            'type': 'history',
-                            'ciphertext': msg['ciphertext'],
-                            'sender': msg['sender'],
-                            'salt': msg['salt']
-                        })
-                    else:
-                        await websocket.send_json({
-                            'type': 'voice_message',
-                            'sender': msg['sender']
-                        })
+                # Send history
+                messages = get_messages(group_name)
+                await websocket.send_json({
+                    'type': 'history',
+                    'messages': messages
+                })
                 
                 online = get_online_users(group_name)
                 await manager.broadcast(group_name, {'type': 'users', 'users': online})
@@ -986,23 +1017,25 @@ async def ws_endpoint(websocket: WebSocket):
                 print(f"[+] {username} joined {group_name}")
             
             elif msg_type == 'text_message':
-                cipher = data.get('ciphertext')
+                content = data.get('content')
                 salt = data.get('salt')
-                save_text_message(cipher, group_name, username, salt)
+                save_text_message(content, group_name, username, salt)
                 await manager.broadcast(group_name, {
                     'type': 'text_message',
-                    'ciphertext': cipher,
+                    'content': content,
                     'sender': username,
                     'salt': salt
                 }, exclude=username)
             
             elif msg_type == 'voice_message':
-                voice_data = data.get('voice_data')
+                content = data.get('content')
                 salt = data.get('salt')
-                save_voice_message(voice_data, group_name, username, salt)
+                save_voice_message(content, group_name, username, salt)
                 await manager.broadcast(group_name, {
                     'type': 'voice_message',
-                    'sender': username
+                    'content': content,
+                    'sender': username,
+                    'salt': salt
                 }, exclude=username)
             
             elif msg_type == 'typing':
@@ -1021,7 +1054,6 @@ async def ws_endpoint(websocket: WebSocket):
             elif msg_type == 'stop_recording':
                 online = get_online_users(group_name)
                 await manager.broadcast(group_name, {'type': 'users', 'users': online})
-                await manager.broadcast(group_name, {'type': 'stop_recording', 'user': username})
     
     except WebSocketDisconnect:
         pass
@@ -1048,13 +1080,14 @@ if __name__ == "__main__":
 ║  ██║  ██║██████╔╝██║  ██║ ╚████╔╝ ██║  ██║██║ ╚████║██████╔╝     ║
 ║  ╚═╝  ╚═╝╚═════╝ ╚═╝  ╚═╝  ╚═══╝  ╚═╝  ╚═╝╚═╝  ╚═══╝╚═════╝      ║
 ║                                                                   ║
-║                    ABAVANDIMWE v13.0 - FINAL                      ║
+║                    ABAVANDIMWE - FINAL v14                        ║
 ║                                                                   ║
-║  ✅ ALL BUTTONS VISIBLE - Type, Send, Voice, Exit                 ║
-║  ✅ Team Chat - All users see all messages                        ║
-║  ✅ Voice Messages - Record and send                              ║
-║  ✅ 24h Persistence - Messages stay 24 hours                      ║
-║  ✅ Typing & Recording Indicators                                 ║
+║  ✅ Professional WhatsApp-Style Design                           ║
+║  ✅ Text Messages + Voice Messages                                ║
+║  ✅ Real-time Team Chat                                           ║
+║  ✅ 24-Hour Auto-Delete                                           ║
+║  ✅ Online Users with Typing/Recording Status                     ║
+║  ✅ Mobile Optimized                                              ║
 ║                                                                   ║
 ║                        AUTHOR: MUGISHA PC                         ║
 ║                                                                   ║
