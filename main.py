@@ -202,7 +202,7 @@ HTML = '''<!DOCTYPE html>
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
-    <title>ABAVANDIMWE | Secure Chat</title>
+    <title>MugiChat | Urubuga Rwokuyaga vyizewe</title>
     <style>
         *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent;}
         body{font-family:monospace;background:#0a0a0f;height:100vh;overflow:hidden;color:#0f0;}
@@ -261,12 +261,12 @@ HTML = '''<!DOCTYPE html>
 <body>
 <div id="loginScreen" class="login-container">
     <div class="login-card">
-        <h1># ABAVANDIMWE</h1>
-        <div class="sub">Secure Encrypted Messaging by Mugisha Pc</div>
-        <input type="text" id="username" placeholder="USERNAME">
-        <input type="text" id="groupName" placeholder="GROUP NAME">
-        <input type="password" id="groupPassword" placeholder="GROUP PASSWORD">
-        <button onclick="connect()">▶ ENTER CHAT</button>
+        <h1># MugiChat</h1>
+        <div class="sub">Urubuga Rwokuyaga vyizewe Rwa Mugisha Pc</div>
+        <input type="text" id="username" placeholder="Shiramwo Izina Ryawe">
+        <input type="text" id="groupName" placeholder="Shiramwo Izina Rya Group">
+        <input type="password" id="groupPassword" placeholder="Shiramwo Kabanga yanyu">
+        <button onclick="connect()">▶ INJIRA MURI GROUP</button>
         <div id="loginError" class="error-message"></div>
         <div style="text-align:center;margin-top:20px;font-size:9px;color:#333;">
             🔒 AES-256 | ⏰ Messages auto-delete after 24 hours
@@ -277,11 +277,11 @@ HTML = '''<!DOCTYPE html>
     <div class="chat-header">
         <button class="menu-btn" onclick="toggleSidebar()">☰</button>
         <h2 id="groupTitle"># LOADING</h2>
-        <button class="logout-btn" onclick="logout()">EXIT</button>
+        <button class="logout-btn" onclick="logout()">Sohoka</button>
     </div>
     <div class="main-content">
         <div class="sidebar" id="sidebar">
-            <div class="sidebar-header"><h3>● ONLINE USERS</h3></div>
+            <div class="sidebar-header"><h3>● Abari Kumurongo</h3></div>
             <div class="users-list" id="usersList"><div class="user-item">Loading...</div></div>
         </div>
         <div class="overlay" id="overlay" onclick="toggleSidebar()"></div>
@@ -289,8 +289,8 @@ HTML = '''<!DOCTYPE html>
             <div class="messages-container" id="messages"><div style="text-align:center;">Connecting...</div></div>
             <div class="typing-indicator" id="typingIndicator"></div>
             <div class="input-area">
-                <input type="text" id="messageInput" placeholder="Type message...">
-                <button onclick="sendMessage()">SEND</button>
+                <input type="text" id="messageInput" placeholder="Andika Message hano...">
+                <button onclick="sendMessage()">Rungika</button>
             </div>
             <div class="footer">🔐 End-to-End Encrypted | Messages self-destruct after 24 hours</div>
         </div>
