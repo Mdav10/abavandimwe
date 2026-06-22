@@ -17,6 +17,7 @@ import threading
 import time
 from datetime import datetime
 from typing import Dict
+from collections import defaultdict
 
 app = FastAPI()
 
@@ -33,7 +34,8 @@ def init_db():
             group_name TEXT,
             sender TEXT,
             salt TEXT,
-            created_at REAL
+            created_at REAL,
+            expires_at REAL
         )
     ''')
     c.execute('''
@@ -49,7 +51,8 @@ def init_db():
             group_name TEXT PRIMARY KEY,
             salt TEXT,
             password_hash TEXT,
-            created_by TEXT
+            created_by TEXT,
+            created_at REAL
         )
     ''')
     conn.commit()
@@ -61,7 +64,8 @@ def cleanup_old_messages():
     cutoff = now - (24 * 3600)
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    c.execute("DELETE FROM messages WHERE created_at < ?", (cutoff,))
+    # Delete by age and also by expiry
+    c.execute("DELETE FROM messages WHERE created_at < ? OR expires_at < ?", (cutoff, now))
     deleted = c.rowcount
     conn.commit()
     conn.close()
@@ -91,31 +95,14 @@ def hash_password(password, salt):
 def verify_password(password, salt, stored_hash):
     return hash_password(password, salt) == stored_hash
 
-def encrypt(text, password, salt):
-    key = derive_key(password, salt)
-    text_bytes = text.encode()
-    encrypted = bytearray()
-    for i in range(len(text_bytes)):
-        encrypted.append(text_bytes[i] ^ key[i % len(key)])
-    nonce = secrets.token_bytes(8)
-    result = nonce + encrypted
-    return base64.b64encode(result).decode()
-
-def decrypt(encrypted, password, salt):
-    key = derive_key(password, salt)
-    data = base64.b64decode(encrypted)
-    ciphertext = data[8:]
-    decrypted = bytearray()
-    for i in range(len(ciphertext)):
-        decrypted.append(ciphertext[i] ^ key[i % len(key)])
-    return decrypted.decode()
-
 # ========== DATABASE FUNCTIONS ==========
 def save_message(ciphertext, group, sender, salt):
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    c.execute("INSERT INTO messages (ciphertext, group_name, sender, salt, created_at) VALUES (?,?,?,?,?)",
-             (ciphertext, group, sender, salt, time.time()))
+    now = time.time()
+    expiry = now + (24 * 3600)
+    c.execute("INSERT INTO messages (ciphertext, group_name, sender, salt, created_at, expires_at) VALUES (?,?,?,?,?,?)",
+             (ciphertext, group, sender, salt, now, expiry))
     conn.commit()
     conn.close()
 
@@ -123,7 +110,7 @@ def get_messages(group):
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     cutoff = time.time() - (24 * 3600)
-    c.execute("SELECT ciphertext, sender, salt FROM messages WHERE group_name=? AND created_at > ? ORDER BY id ASC", 
+    c.execute("SELECT ciphertext, sender, salt FROM messages WHERE group_name=? AND created_at > ? ORDER BY id ASC",
              (group, cutoff))
     rows = c.fetchall()
     conn.close()
@@ -141,7 +128,7 @@ def get_online_users(group):
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     cutoff = time.time() - 120
-    c.execute("SELECT username FROM users WHERE status='online' AND current_group=? AND last_seen > ?", 
+    c.execute("SELECT username FROM users WHERE status='online' AND current_group=? AND last_seen > ?",
              (group, cutoff))
     rows = c.fetchall()
     conn.close()
@@ -159,8 +146,8 @@ def create_group(group, salt, password_hash, creator):
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     try:
-        c.execute("INSERT INTO groups (group_name, salt, password_hash, created_by) VALUES (?,?,?,?)",
-                 (group, salt, password_hash, creator))
+        c.execute("INSERT INTO groups (group_name, salt, password_hash, created_by, created_at) VALUES (?,?,?,?,?)",
+                 (group, salt, password_hash, creator, time.time()))
         conn.commit()
         conn.close()
         return True
@@ -172,18 +159,18 @@ def create_group(group, salt, password_hash, creator):
 class ConnectionManager:
     def __init__(self):
         self.connections: Dict[str, Dict[str, WebSocket]] = {}
-    
+
     async def add(self, group: str, username: str, websocket: WebSocket):
         if group not in self.connections:
             self.connections[group] = {}
         self.connections[group][username] = websocket
-    
+
     def remove(self, group: str, username: str):
         if group in self.connections:
             self.connections[group].pop(username, None)
             if not self.connections[group]:
                 del self.connections[group]
-    
+
     async def broadcast(self, group: str, message: dict, exclude: str = None):
         if group not in self.connections:
             return
@@ -196,13 +183,24 @@ class ConnectionManager:
 
 manager = ConnectionManager()
 
-# ========== HTML - FIRST WORKING VERSION ==========
+# ========== RATE LIMITING ==========
+message_limits = defaultdict(list)
+
+def check_rate_limit(username):
+    now = time.time()
+    message_limits[username] = [t for t in message_limits[username] if t > now - 5]
+    if len(message_limits[username]) >= 10:
+        return False
+    message_limits[username].append(now)
+    return True
+
+# ========== HTML ==========
 HTML = '''<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
-    <title>MugiChat | Urubuga Rwokuyaga vyizewe</title>
+    <title>MugiChat | Secure Messaging</title>
     <style>
         *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent;}
         body{font-family:monospace;background:#0a0a0f;height:100vh;overflow:hidden;color:#0f0;}
@@ -212,23 +210,25 @@ HTML = '''<!DOCTYPE html>
         .sub{text-align:center;margin-bottom:32px;font-size:11px;color:#666;}
         input{width:100%;padding:14px;margin:10px 0;background:#111;border:1px solid #0f0;border-radius:12px;color:#0f0;font-family:monospace;font-size:15px;}
         input:focus{outline:none;box-shadow:0 0 10px rgba(0,255,65,0.3);}
-        button{width:100%;padding:14px;margin-top:20px;background:transparent;border:2px solid #0f0;border-radius:12px;color:#0f0;font-size:16px;font-weight:bold;cursor:pointer;}
-        button:active{background:#0f0;color:#000;transform:scale(0.98);}
+        button{width:100%;padding:14px;margin-top:20px;background:transparent;border:2px solid #0f0;border-radius:12px;color:#0f0;font-size:16px;font-weight:bold;cursor:pointer;transition:all 0.2s;}
+        button:hover{background:#0f0;color:#000;}
+        button:active{transform:scale(0.98);}
         .error-message{color:#ff4444;font-size:12px;text-align:center;margin-top:12px;display:none;}
         .chat-container{display:none;width:100%;height:100%;flex-direction:column;background:#0a0a0f;position:fixed;top:0;left:0;right:0;bottom:0;}
         .chat-container.active{display:flex;}
         .chat-header{padding:12px 16px;background:#050508;border-bottom:1px solid #0f0;display:flex;justify-content:space-between;align-items:center;gap:8px;}
         .chat-header h2{font-size:16px;flex:1;text-align:center;overflow:hidden;text-overflow:ellipsis;}
-        .online-badge{font-size:11px;padding:4px 10px;border:1px solid #0f0;border-radius:20px;}
-        .menu-btn,.logout-btn{background:transparent;border:1px solid #0f0;color:#0f0;padding:6px 12px;border-radius:8px;cursor:pointer;width:auto;margin:0;font-size:12px;}
+        .menu-btn,.logout-btn{background:transparent;border:1px solid #0f0;color:#0f0;padding:6px 12px;border-radius:8px;cursor:pointer;width:auto;margin:0;font-size:12px;transition:all 0.2s;}
+        .logout-btn:hover{border-color:#ff0041;color:#ff0041;}
         .logout-btn:active{background:#ff0041;border-color:#ff0041;color:white;}
         .main-content{flex:1;display:flex;overflow:hidden;position:relative;}
         .sidebar{width:260px;background:#050508;border-right:1px solid #0f0;display:flex;flex-direction:column;flex-shrink:0;}
         .sidebar-header{padding:16px;border-bottom:1px solid #0f0;}
         .users-list{flex:1;padding:12px;overflow-y:auto;}
-        .user-item{padding:10px 12px;margin:6px 0;border:1px solid #0f0;border-radius:10px;display:flex;align-items:center;gap:8px;}
+        .user-item{padding:10px 12px;margin:6px 0;border:1px solid #0f0;border-radius:10px;display:flex;align-items:center;gap:8px;animation:fadeIn 0.3s ease;}
         .user-item::before{content:"●";color:#0f0;font-size:10px;animation:pulse 2s infinite;}
         @keyframes pulse{0%,100%{opacity:1;}50%{opacity:0.5;}}
+        @keyframes fadeIn{from{opacity:0;transform:translateY(10px);}to{opacity:1;transform:translateY(0);}}
         @media (max-width:768px){
             .sidebar{position:fixed;left:-260px;top:0;bottom:0;z-index:20;transition:left 0.3s ease;}
             .sidebar.open{left:0;}
@@ -239,7 +239,6 @@ HTML = '''<!DOCTYPE html>
         .chat-area{flex:1;display:flex;flex-direction:column;}
         .messages-container{flex:1;padding:16px;overflow-y:auto;display:flex;flex-direction:column;gap:12px;}
         .message{max-width:85%;display:flex;flex-direction:column;animation:fadeIn 0.2s ease;}
-        @keyframes fadeIn{from{opacity:0;transform:translateY(10px);}to{opacity:1;transform:translateY(0);}}
         .message.sent{align-self:flex-end;}
         .message.received{align-self:flex-start;}
         .message-bubble{padding:10px 14px;border-radius:18px;font-size:14px;word-wrap:break-word;}
@@ -247,7 +246,7 @@ HTML = '''<!DOCTYPE html>
         .message.received .message-bubble{background:#1a1a2e;border:1px solid #0f0;border-bottom-left-radius:4px;}
         .message-sender{font-size:10px;margin-bottom:4px;opacity:0.7;padding-left:4px;}
         .message-time{font-size:9px;margin-top:4px;opacity:0.5;}
-        .system-message{text-align:center;font-size:11px;color:#ffaa00;margin:8px 0;font-style:italic;}
+        .system-message{text-align:center;font-size:11px;color:#ffaa00;margin:8px 0;font-style:italic;animation:fadeIn 0.3s ease;}
         .typing-indicator{padding:8px 16px;color:#0f0;font-style:italic;font-size:11px;min-height:36px;}
         .input-area{padding:12px 16px;background:#050508;border-top:1px solid #0f0;display:flex;gap:10px;}
         .input-area input{flex:1;margin:0;padding:12px 16px;font-size:14px;}
@@ -256,17 +255,20 @@ HTML = '''<!DOCTYPE html>
         ::-webkit-scrollbar{width:3px;}
         ::-webkit-scrollbar-track{background:#1a1a2e;}
         ::-webkit-scrollbar-thumb{background:#0f0;}
+        .connection-status{position:fixed;bottom:60px;right:16px;padding:8px 12px;background:#050508;border:1px solid #0f0;border-radius:20px;font-size:10px;z-index:10;}
+        .status-online{color:#0f0;}
+        .status-offline{color:#ff4444;}
     </style>
 </head>
 <body>
 <div id="loginScreen" class="login-container">
     <div class="login-card">
         <h1># MugiChat</h1>
-        <div class="sub">Urubuga Rwokuyaga vyizewe Rwa Mugisha Pc</div>
-        <input type="text" id="username" placeholder="Shiramwo Izina Ryawe">
-        <input type="text" id="groupName" placeholder="Shiramwo Izina Rya Group">
-        <input type="password" id="groupPassword" placeholder="Shiramwo Kabanga yanyu">
-        <button onclick="connect()">▶ INJIRA MURI GROUP</button>
+        <div class="sub">Secure Messaging by Mugisha Pc</div>
+        <input type="text" id="username" placeholder="Enter your username">
+        <input type="text" id="groupName" placeholder="Group name">
+        <input type="password" id="groupPassword" placeholder="Group password">
+        <button onclick="connect()">▶ Join Group</button>
         <div id="loginError" class="error-message"></div>
         <div style="text-align:center;margin-top:20px;font-size:9px;color:#333;">
             🔒 AES-256 | ⏰ Messages auto-delete after 24 hours
@@ -277,11 +279,11 @@ HTML = '''<!DOCTYPE html>
     <div class="chat-header">
         <button class="menu-btn" onclick="toggleSidebar()">☰</button>
         <h2 id="groupTitle"># LOADING</h2>
-        <button class="logout-btn" onclick="logout()">Sohoka</button>
+        <button class="logout-btn" onclick="logout()">Leave</button>
     </div>
     <div class="main-content">
         <div class="sidebar" id="sidebar">
-            <div class="sidebar-header"><h3>● Abari Kumurongo</h3></div>
+            <div class="sidebar-header"><h3>● Online Users</h3></div>
             <div class="users-list" id="usersList"><div class="user-item">Loading...</div></div>
         </div>
         <div class="overlay" id="overlay" onclick="toggleSidebar()"></div>
@@ -289,15 +291,16 @@ HTML = '''<!DOCTYPE html>
             <div class="messages-container" id="messages"><div style="text-align:center;">Connecting...</div></div>
             <div class="typing-indicator" id="typingIndicator"></div>
             <div class="input-area">
-                <input type="text" id="messageInput" placeholder="Andika Message hano...">
-                <button onclick="sendMessage()">Rungika</button>
+                <input type="text" id="messageInput" placeholder="Type a message...">
+                <button onclick="sendMessage()">Send</button>
             </div>
             <div class="footer">🔐 End-to-End Encrypted | Messages self-destruct after 24 hours</div>
         </div>
     </div>
+    <div class="connection-status" id="connectionStatus">🟢 Connected</div>
 </div>
 <script>
-let ws, username, groupName, groupPassword, groupSalt, typingTimeout;
+let ws, username, groupName, groupPassword, groupSalt, typingTimeout, reconnectAttempts = 0;
 
 async function encrypt(text, pwd, salt){
     const e=new TextEncoder();
@@ -337,7 +340,7 @@ function addSystemMessage(text){
     if(msgs.children.length===1 && msgs.children[0].innerText.includes('Connecting')) msgs.innerHTML='';
     let div=document.createElement('div');
     div.className='system-message';
-    div.innerHTML=text;
+    div.textContent=text;
     msgs.appendChild(div);
     msgs.scrollTop=msgs.scrollHeight;
 }
@@ -348,7 +351,7 @@ function addMessage(sender,text,isSent){
     let div=document.createElement('div');
     div.className='message '+(isSent?'sent':'received');
     let time=new Date().toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
-    div.innerHTML='<div class="message-sender">'+(isSent?'YOU':sender)+'</div><div class="message-bubble">'+escapeHtml(text)+'</div><div class="message-time">'+time+'</div>';
+    div.innerHTML='<div class="message-sender">'+(isSent?'YOU':escapeHtml(sender))+'</div><div class="message-bubble">'+escapeHtml(text)+'</div><div class="message-time">'+time+'</div>';
     msgs.appendChild(div);
     msgs.scrollTop=msgs.scrollHeight;
 }
@@ -361,6 +364,17 @@ function updateUsers(users){
     else ul.innerHTML=users.map(u=>'<div class="user-item">'+escapeHtml(u)+'</div>').join('');
 }
 
+function updateStatus(online){
+    let status = document.getElementById('connectionStatus');
+    if(online){
+        status.innerHTML='🟢 Connected';
+        status.className='connection-status status-online';
+    }else{
+        status.innerHTML='🔴 Disconnected';
+        status.className='connection-status status-offline';
+    }
+}
+
 function logout(){
     if(ws) ws.close();
     ws=null;
@@ -371,6 +385,7 @@ function logout(){
     document.getElementById('username').value='';
     document.getElementById('groupName').value='';
     document.getElementById('groupPassword').value='';
+    reconnectAttempts = 0;
 }
 
 function connect(){
@@ -378,9 +393,21 @@ function connect(){
     groupName=document.getElementById('groupName').value.trim();
     groupPassword=document.getElementById('groupPassword').value;
     if(!username||!groupName||!groupPassword){showError('Fill all fields');return;}
+    
     let url='wss://'+window.location.host+'/ws';
-    ws=new WebSocket(url);
-    ws.onopen=()=>ws.send(JSON.stringify({type:'join',username,group:groupName,password:groupPassword}));
+    try{
+        ws=new WebSocket(url);
+    }catch(e){
+        showError('Connection failed');
+        return;
+    }
+    
+    ws.onopen=()=>{
+        updateStatus(true);
+        ws.send(JSON.stringify({type:'join',username,group:groupName,password:groupPassword}));
+        reconnectAttempts = 0;
+    };
+    
     ws.onmessage=async(e)=>{
         let d=JSON.parse(e.data);
         if(d.type==='error'){showError(d.message);ws.close();return;}
@@ -394,15 +421,36 @@ function connect(){
         else if(d.type==='user_left') addSystemMessage('👋 '+d.user+' left');
         else if(d.type==='typing') document.getElementById('typingIndicator').innerHTML='✏️ '+d.user+' typing...';
         else if(d.type==='stop_typing') document.getElementById('typingIndicator').innerHTML='';
+        else if(d.type==='pong') updateStatus(true);
     };
-    ws.onerror=()=>showError('Connection failed');
+    
+    ws.onerror=()=>{
+        showError('Connection error');
+        updateStatus(false);
+    };
+    
+    ws.onclose=()=>{
+        updateStatus(false);
+        if(document.getElementById('chatScreen').classList.contains('active')){
+            addSystemMessage('⚠️ Connection lost. Reconnecting...');
+            reconnectAttempts++;
+            if(reconnectAttempts < 5){
+                setTimeout(connect, 3000);
+            }else{
+                addSystemMessage('❌ Connection failed. Please refresh.');
+            }
+        }
+    };
 }
 
 document.getElementById('messageInput')?.addEventListener('input',function(){
     if(ws&&ws.readyState===WebSocket.OPEN){
         ws.send(JSON.stringify({type:'typing'}));
         clearTimeout(typingTimeout);
-        typingTimeout=setTimeout(()=>ws.send(JSON.stringify({type:'stop_typing'})),1000);
+        typingTimeout=setTimeout(()=>{
+            if(ws&&ws.readyState===WebSocket.OPEN)
+                ws.send(JSON.stringify({type:'stop_typing'}));
+        },1000);
     }
 });
 document.getElementById('messageInput')?.addEventListener('keypress',function(e){if(e.key==='Enter')sendMessage();});
@@ -436,17 +484,29 @@ async def ws_endpoint(websocket: WebSocket):
     await websocket.accept()
     username = None
     group_name = None
-    
+    ping_task = None
+
+    async def send_ping():
+        while True:
+            await asyncio.sleep(30)
+            if username and group_name:
+                try:
+                    await websocket.send_json({'type': 'ping'})
+                except:
+                    break
+
     try:
+        ping_task = asyncio.create_task(send_ping())
+        
         while True:
             data = await websocket.receive_json()
             msg_type = data.get('type')
-            
+
             if msg_type == 'join':
                 username = data.get('username')
                 group_name = data.get('group')
                 password = data.get('password')
-                
+
                 group_info = get_group_info(group_name)
                 if group_info:
                     if not verify_password(password, group_info['salt'], group_info['password_hash']):
@@ -458,10 +518,10 @@ async def ws_endpoint(websocket: WebSocket):
                     salt = generate_salt()
                     pwd_hash = hash_password(password, salt)
                     create_group(group_name, salt, pwd_hash, username)
-                
+
                 await manager.add(group_name, username, websocket)
                 set_user_status(username, 'online', group_name)
-                
+
                 for msg in get_messages(group_name):
                     await websocket.send_json({
                         'type': 'history',
@@ -469,33 +529,44 @@ async def ws_endpoint(websocket: WebSocket):
                         'sender': msg['sender'],
                         'salt': msg['salt']
                     })
-                
+
                 online = get_online_users(group_name)
                 await manager.broadcast(group_name, {'type': 'users', 'users': online})
                 await manager.broadcast(group_name, {'type': 'user_joined', 'user': username}, exclude=username)
                 await websocket.send_json({'type': 'ready', 'salt': salt, 'group': group_name})
                 print(f"[+] {username} joined {group_name}")
-            
+
             elif msg_type == 'message':
                 cipher = data.get('ciphertext')
                 salt = data.get('salt')
-                save_message(cipher, group_name, username, salt)
-                await manager.broadcast(group_name, {
-                    'type': 'message',
-                    'ciphertext': cipher,
-                    'sender': username,
-                    'salt': salt
-                }, exclude=username)
-            
+                if username and group_name and check_rate_limit(username):
+                    save_message(cipher, group_name, username, salt)
+                    await manager.broadcast(group_name, {
+                        'type': 'message',
+                        'ciphertext': cipher,
+                        'sender': username,
+                        'salt': salt
+                    }, exclude=username)
+
             elif msg_type == 'typing':
-                await manager.broadcast(group_name, {'type': 'typing', 'user': username}, exclude=username)
-            
+                if username and group_name:
+                    await manager.broadcast(group_name, {'type': 'typing', 'user': username}, exclude=username)
+
             elif msg_type == 'stop_typing':
-                await manager.broadcast(group_name, {'type': 'stop_typing', 'user': username}, exclude=username)
-    
+                if username and group_name:
+                    await manager.broadcast(group_name, {'type': 'stop_typing', 'user': username}, exclude=username)
+
+            elif msg_type == 'ping':
+                set_user_status(username, 'online', group_name)
+                await websocket.send_json({'type': 'pong'})
+
     except WebSocketDisconnect:
         pass
+    except Exception as e:
+        print(f"[!] Error: {e}")
     finally:
+        if ping_task:
+            ping_task.cancel()
         if username and group_name:
             manager.remove(group_name, username)
             set_user_status(username, 'offline', group_name)
@@ -523,9 +594,8 @@ if __name__ == "__main__":
 ║                    Author: Mugisha Pc                      ║
 ║                                                            ║
 ╚════════════════════════════════════════════════════════════╝
-    """)
-    print(f"[✓] Server on port {port}")
-    print(f"[✓] Messages last 24 hours then auto-delete")
-    print(f"[✓] Open: https://abavandimwe.onrender.com")
-    
+""")
+    print(f"[✓] Server running on port {port}")
+    print(f"[✓] Messages expire after 24 hours")
+    print(f"[✓] Open: http://localhost:{port}")
     uvicorn.run(app, host="0.0.0.0", port=port)
