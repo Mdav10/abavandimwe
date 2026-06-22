@@ -4,9 +4,8 @@ Author: Mugisha Pc
 Messages stay for 24 hours then auto-delete
 """
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse
-from fastapi.security import HTTPBasic, HTTPBasicCredentials
 import asyncio
 import json
 import sqlite3
@@ -21,11 +20,24 @@ from typing import Dict
 from collections import defaultdict
 
 app = FastAPI()
-security = HTTPBasic()
 
 # ========== DATABASE ==========
 DB_PATH = "abavandimwe.db"
 
+# ========== CRYPTO FUNCTIONS (MOVED UP) ==========
+def generate_salt():
+    return base64.b64encode(secrets.token_bytes(32)).decode()
+
+def derive_key(password, salt):
+    return hashlib.pbkdf2_hmac('sha256', password.encode(), salt.encode(), 100000, 32)
+
+def hash_password(password, salt):
+    return base64.b64encode(derive_key(password, salt)).decode()
+
+def verify_password(password, salt, stored_hash):
+    return hash_password(password, salt) == stored_hash
+
+# ========== DATABASE INIT ==========
 def init_db():
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
@@ -84,8 +96,6 @@ def create_admin():
         print("[✓] Admin account created: Mpc")
     conn.close()
 
-init_db()
-
 # ========== CLEANUP ==========
 def cleanup_old_messages():
     now = time.time()
@@ -105,21 +115,6 @@ def start_cleanup():
             time.sleep(3600)
             cleanup_old_messages()
     threading.Thread(target=cleanup_loop, daemon=True).start()
-
-start_cleanup()
-
-# ========== CRYPTO ==========
-def generate_salt():
-    return base64.b64encode(secrets.token_bytes(32)).decode()
-
-def derive_key(password, salt):
-    return hashlib.pbkdf2_hmac('sha256', password.encode(), salt.encode(), 100000, 32)
-
-def hash_password(password, salt):
-    return base64.b64encode(derive_key(password, salt)).decode()
-
-def verify_password(password, salt, stored_hash):
-    return hash_password(password, salt) == stored_hash
 
 # ========== DATABASE FUNCTIONS ==========
 def authenticate_user(username, password):
@@ -256,6 +251,10 @@ def check_rate_limit(username):
         return False
     message_limits[username].append(now)
     return True
+
+# ========== INIT DATABASE ==========
+init_db()
+start_cleanup()
 
 # ========== HTML ==========
 HTML = '''<!DOCTYPE html>
@@ -438,19 +437,23 @@ async function login() {
     }
     
     // For regular users, check credentials
-    const response = await fetch('/login', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({username, password})
-    });
-    
-    const data = await response.json();
-    if(data.success) {
-        currentUser = {username: data.username, role: data.role};
-        document.getElementById('loginScreen').style.display = 'none';
-        showGroupSelection();
-    } else {
-        showError('Invalid credentials. Request access via WhatsApp if you need an account.');
+    try {
+        const response = await fetch('/login', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({username, password})
+        });
+        
+        const data = await response.json();
+        if(data.success) {
+            currentUser = {username: data.username, role: data.role};
+            document.getElementById('loginScreen').style.display = 'none';
+            showGroupSelection();
+        } else {
+            showError('Invalid credentials. Request access via WhatsApp if you need an account.');
+        }
+    } catch(e) {
+        showError('Connection error. Please try again.');
     }
 }
 
