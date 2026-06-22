@@ -4,8 +4,10 @@ Author: Mugisha Pc
 Messages stay for 24 hours then auto-delete
 """
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from fastapi.responses import HTMLResponse
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request, Form
+from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.templating import Jinja2Templates
+from fastapi.staticfiles import StaticFiles
 import asyncio
 import json
 import sqlite3
@@ -74,6 +76,16 @@ def init_db():
             created_at REAL
         )
     ''')
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS admin_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            admin_username TEXT,
+            action TEXT,
+            target TEXT,
+            details TEXT,
+            created_at REAL
+        )
+    ''')
     conn.commit()
     conn.close()
     print("[✓] Database ready")
@@ -95,6 +107,27 @@ def create_admin():
         conn.commit()
         print("[✓] Admin account created: Mpc")
     conn.close()
+
+def log_admin_action(admin_username, action, target, details=""):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute(
+        "INSERT INTO admin_logs (admin_username, action, target, details, created_at) VALUES (?,?,?,?,?)",
+        (admin_username, action, target, details, time.time())
+    )
+    conn.commit()
+    conn.close()
+
+def get_admin_logs(limit=50):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute(
+        "SELECT id, admin_username, action, target, details, created_at FROM admin_logs ORDER BY created_at DESC LIMIT ?",
+        (limit,)
+    )
+    rows = c.fetchall()
+    conn.close()
+    return [{'id': r[0], 'admin': r[1], 'action': r[2], 'target': r[3], 'details': r[4], 'time': r[5]} for r in rows]
 
 # ========== CLEANUP ==========
 def cleanup_old_messages():
@@ -129,7 +162,7 @@ def authenticate_user(username, password):
             return {"username": username, "role": role}
     return None
 
-def create_user(username, password):
+def create_user(username, password, role="user"):
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     try:
@@ -137,7 +170,7 @@ def create_user(username, password):
         password_hash = hash_password(password, salt)
         c.execute(
             "INSERT INTO users (username, password_hash, salt, role, created_at) VALUES (?,?,?,?,?)",
-            (username, password_hash, salt, "user", time.time())
+            (username, password_hash, salt, role, time.time())
         )
         conn.commit()
         conn.close()
@@ -145,6 +178,25 @@ def create_user(username, password):
     except:
         conn.close()
         return False
+
+def delete_user(username):
+    if username == "Mpc":
+        return False
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("DELETE FROM users WHERE username=?", (username,))
+    deleted = c.rowcount
+    conn.commit()
+    conn.close()
+    return deleted > 0
+
+def get_all_users():
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT username, role, status, current_group, last_seen, created_at FROM users ORDER BY created_at DESC")
+    rows = c.fetchall()
+    conn.close()
+    return [{'username': r[0], 'role': r[1], 'status': r[2] or 'offline', 'group': r[3], 'last_seen': r[4], 'created_at': r[5]} for r in rows]
 
 def get_user_role(username):
     conn = sqlite3.connect(DB_PATH)
@@ -173,6 +225,23 @@ def get_messages(group):
     rows = c.fetchall()
     conn.close()
     return [{'ciphertext': r[0], 'sender': r[1], 'salt': r[2]} for r in rows]
+
+def get_all_messages(limit=100):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT id, sender, group_name, created_at FROM messages ORDER BY created_at DESC LIMIT ?", (limit,))
+    rows = c.fetchall()
+    conn.close()
+    return [{'id': r[0], 'sender': r[1], 'group': r[2], 'created_at': r[3]} for r in rows]
+
+def delete_message(message_id):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("DELETE FROM messages WHERE id=?", (message_id,))
+    deleted = c.rowcount
+    conn.commit()
+    conn.close()
+    return deleted > 0
 
 def set_user_status(username, status, group):
     conn = sqlite3.connect(DB_PATH)
@@ -212,6 +281,24 @@ def create_group(group, salt, password_hash, creator):
     except:
         conn.close()
         return False
+
+def get_all_groups():
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT group_name, created_by, created_at FROM groups ORDER BY created_at DESC")
+    rows = c.fetchall()
+    conn.close()
+    return [{'name': r[0], 'created_by': r[1], 'created_at': r[2]} for r in rows]
+
+def delete_group(group_name):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("DELETE FROM groups WHERE group_name=?", (group_name,))
+    c.execute("DELETE FROM messages WHERE group_name=?", (group_name,))
+    deleted = c.rowcount
+    conn.commit()
+    conn.close()
+    return deleted > 0
 
 # ========== WEBSOCKET MANAGER ==========
 class ConnectionManager:
@@ -288,7 +375,7 @@ HTML = '''<!DOCTYPE html>
         .success-message{color:#0f0;font-size:12px;text-align:center;margin-top:12px;display:none;}
         .login-footer{text-align:center;margin-top:20px;font-size:9px;color:#333;border-top:1px solid #1a1a2e;padding-top:16px;}
         
-        /* Chat Screen - Same as before */
+        /* Chat Screen */
         .chat-container{display:none;width:100%;height:100%;flex-direction:column;background:#0a0a0f;position:fixed;top:0;left:0;right:0;bottom:0;}
         .chat-container.active{display:flex;}
         
@@ -299,6 +386,8 @@ HTML = '''<!DOCTYPE html>
         .menu-btn,.logout-btn{background:transparent;border:1px solid #0f0;color:#0f0;padding:6px 12px;border-radius:8px;cursor:pointer;width:auto;margin:0;font-size:12px;transition:all 0.3s;}
         .logout-btn:hover{border-color:#ff0041;color:#ff0041;}
         .logout-btn:active{background:#ff0041;border-color:#ff0041;color:white;}
+        .admin-btn{background:transparent;border:1px solid #ffaa00;color:#ffaa00;padding:6px 12px;border-radius:8px;cursor:pointer;width:auto;margin:0;font-size:12px;transition:all 0.3s;}
+        .admin-btn:hover{background:#ffaa00;color:#000;}
         
         .main-content{flex:1;display:flex;overflow:hidden;position:relative;}
         .sidebar{width:260px;background:#050508;border-right:1px solid #0f0;display:flex;flex-direction:column;flex-shrink:0;}
@@ -348,7 +437,31 @@ HTML = '''<!DOCTYPE html>
         .separator::before,.separator::after{content:'';flex:1;border-bottom:1px solid #1a1a2e;}
         .separator span{padding:0 10px;color:#666;font-size:10px;}
         
-        .group-inputs{display:none;}
+        /* Admin Panel */
+        .admin-panel{display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:#0a0a0f;z-index:50;padding:20px;overflow-y:auto;}
+        .admin-panel.active{display:block;}
+        .admin-panel-header{display:flex;justify-content:space-between;align-items:center;padding:16px;border-bottom:2px solid #0f0;margin-bottom:20px;}
+        .admin-panel-header h2{color:#ffaa00;}
+        .admin-content{display:grid;grid-template-columns:repeat(auto-fit, minmax(300px, 1fr));gap:20px;}
+        .admin-card{background:#050508;border:1px solid #0f0;border-radius:12px;padding:20px;}
+        .admin-card h3{color:#0f0;margin-bottom:12px;font-size:14px;}
+        .admin-card table{width:100%;font-size:11px;border-collapse:collapse;}
+        .admin-card table th{text-align:left;padding:6px;border-bottom:1px solid #1a1a2e;color:#666;}
+        .admin-card table td{padding:6px;border-bottom:1px solid #1a1a2e;}
+        .admin-card input{width:100%;padding:8px;margin:5px 0;background:#111;border:1px solid #0f0;border-radius:6px;color:#0f0;font-size:12px;}
+        .admin-card button{width:auto;padding:8px 16px;margin:5px;font-size:12px;}
+        .close-admin{background:#ff0041;border-color:#ff0041;color:white;padding:8px 16px;border-radius:8px;cursor:pointer;}
+        .close-admin:hover{background:#cc0033;}
+        .admin-stats{display:grid;grid-template-columns:repeat(auto-fit, minmax(150px, 1fr));gap:12px;margin-bottom:20px;}
+        .stat-box{background:#050508;border:1px solid #0f0;border-radius:10px;padding:16px;text-align:center;}
+        .stat-number{font-size:24px;color:#0f0;}
+        .stat-label{font-size:10px;color:#666;margin-top:4px;}
+        .admin-table-wrap{max-height:200px;overflow-y:auto;}
+        .action-btn{background:transparent;border:1px solid #ff0041;color:#ff0041;padding:4px 8px;border-radius:4px;cursor:pointer;font-size:10px;margin:0 2px;}
+        .action-btn:hover{background:#ff0041;color:white;}
+        .action-btn-green{background:transparent;border:1px solid #0f0;color:#0f0;padding:4px 8px;border-radius:4px;cursor:pointer;font-size:10px;margin:0 2px;}
+        .action-btn-green:hover{background:#0f0;color:#000;}
+        .admin-close-area{display:flex;justify-content:flex-end;gap:10px;}
     </style>
 </head>
 <body>
@@ -382,7 +495,7 @@ HTML = '''<!DOCTYPE html>
     </div>
 </div>
 
-<!-- CHAT SCREEN (Same as original) -->
+<!-- CHAT SCREEN -->
 <div id="chatScreen" class="chat-container">
     <div class="chat-header">
         <div class="chat-header-left">
@@ -390,7 +503,10 @@ HTML = '''<!DOCTYPE html>
             <span class="online-badge" id="connectionBadge">● Online</span>
         </div>
         <h2 id="groupTitle"># LOADING</h2>
-        <button class="logout-btn" onclick="logout()">Leave</button>
+        <div>
+            <button class="admin-btn" id="adminBtn" onclick="openAdmin()" style="display:none;">⚙️ Admin</button>
+            <button class="logout-btn" onclick="logout()">Leave</button>
+        </div>
     </div>
     
     <div class="main-content">
@@ -415,12 +531,87 @@ HTML = '''<!DOCTYPE html>
     <div class="connection-status status-online" id="connectionStatus">🟢 Connected</div>
 </div>
 
+<!-- ADMIN PANEL -->
+<div id="adminPanel" class="admin-panel">
+    <div class="admin-panel-header">
+        <h2>⚙️ Admin Panel</h2>
+        <div class="admin-close-area">
+            <button class="close-admin" onclick="closeAdmin()">✕ Close</button>
+        </div>
+    </div>
+    
+    <!-- Stats -->
+    <div class="admin-stats" id="adminStats">
+        <div class="stat-box"><div class="stat-number" id="statUsers">0</div><div class="stat-label">Total Users</div></div>
+        <div class="stat-box"><div class="stat-number" id="statMessages">0</div><div class="stat-label">Total Messages</div></div>
+        <div class="stat-box"><div class="stat-number" id="statGroups">0</div><div class="stat-label">Total Groups</div></div>
+        <div class="stat-box"><div class="stat-number" id="statOnline">0</div><div class="stat-label">Online Now</div></div>
+    </div>
+    
+    <div class="admin-content">
+        <!-- Users Management -->
+        <div class="admin-card">
+            <h3>👤 User Management</h3>
+            <div style="margin-bottom:12px;">
+                <input type="text" id="newUsername" placeholder="New username" style="width:100%;">
+                <input type="text" id="newPassword" placeholder="New password" style="width:100%;">
+                <select id="newRole" style="width:100%;padding:8px;background:#111;border:1px solid #0f0;border-radius:6px;color:#0f0;margin:5px 0;">
+                    <option value="user">User</option>
+                    <option value="admin">Admin</option>
+                </select>
+                <button onclick="addUser()" class="action-btn-green">➕ Add User</button>
+            </div>
+            <div class="admin-table-wrap">
+                <table>
+                    <thead><tr><th>Username</th><th>Role</th><th>Status</th><th>Action</th></tr></thead>
+                    <tbody id="usersTableBody"></tbody>
+                </table>
+            </div>
+        </div>
+        
+        <!-- Groups Management -->
+        <div class="admin-card">
+            <h3>📁 Group Management</h3>
+            <div style="margin-bottom:12px;">
+                <input type="text" id="newGroupName" placeholder="New group name" style="width:100%;">
+                <input type="text" id="newGroupPassword" placeholder="Group password" style="width:100%;">
+                <button onclick="addGroup()" class="action-btn-green">➕ Add Group</button>
+            </div>
+            <div class="admin-table-wrap">
+                <table>
+                    <thead><tr><th>Group Name</th><th>Created By</th><th>Action</th></tr></thead>
+                    <tbody id="groupsTableBody"></tbody>
+                </table>
+            </div>
+        </div>
+        
+        <!-- Messages & Logs -->
+        <div class="admin-card">
+            <h3>📨 Recent Messages</h3>
+            <div class="admin-table-wrap">
+                <table>
+                    <thead><tr><th>Sender</th><th>Group</th><th>Time</th><th>Action</th></tr></thead>
+                    <tbody id="messagesTableBody"></tbody>
+                </table>
+            </div>
+        </div>
+        
+        <div class="admin-card">
+            <h3>📋 Admin Logs</h3>
+            <div class="admin-table-wrap">
+                <table>
+                    <thead><tr><th>Admin</th><th>Action</th><th>Target</th><th>Time</th></tr></thead>
+                    <tbody id="logsTableBody"></tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+
 <script>
 // ========== GLOBALS ==========
 let ws, username, groupName, groupPassword, groupSalt, typingTimeout, reconnectAttempts = 0;
 let currentUser = null;
-
-// Default group - users will join this group automatically
 const DEFAULT_GROUP = 'Main';
 const DEFAULT_PASSWORD = 'Abavandimwe2026';
 
@@ -434,16 +625,6 @@ async function login() {
         return;
     }
     
-    // Check if it's admin
-    if(username === 'Mpc' && password === '08800Mpc!') {
-        currentUser = {username: 'Mpc', role: 'admin'};
-        document.getElementById('loginScreen').style.display = 'none';
-        document.getElementById('chatScreen').classList.add('active');
-        connectToGroup('Mpc', DEFAULT_GROUP, DEFAULT_PASSWORD);
-        return;
-    }
-    
-    // For regular users, check credentials
     try {
         const response = await fetch('/login', {
             method: 'POST',
@@ -456,6 +637,12 @@ async function login() {
             currentUser = {username: data.username, role: data.role};
             document.getElementById('loginScreen').style.display = 'none';
             document.getElementById('chatScreen').classList.add('active');
+            
+            // Show admin button if admin
+            if(data.role === 'admin') {
+                document.getElementById('adminBtn').style.display = 'inline-block';
+            }
+            
             connectToGroup(data.username, DEFAULT_GROUP, DEFAULT_PASSWORD);
         } else {
             showError('Invalid credentials. Request access via WhatsApp if you need an account.');
@@ -492,6 +679,7 @@ function showSuccess(msg) {
 // ========== WEBSOCKET CONNECTION ==========
 function connectToGroup(username, group, password) {
     document.getElementById('groupTitle').innerHTML = '# ' + group;
+    window.groupPassword = password;
     
     let url = 'wss://' + window.location.host + '/ws';
     ws = new WebSocket(url);
@@ -622,6 +810,7 @@ function logout() {
     document.getElementById('usersList').innerHTML = '<div class="user-item">Loading...</div>';
     document.getElementById('loginUsername').value = '';
     document.getElementById('loginPassword').value = '';
+    document.getElementById('adminBtn').style.display = 'none';
     reconnectAttempts = 0;
     currentUser = null;
 }
@@ -689,6 +878,206 @@ async function sendMessage() {
     }
 }
 
+// ========== ADMIN PANEL ==========
+async function openAdmin() {
+    if(currentUser.role !== 'admin') {
+        alert('Admin access required');
+        return;
+    }
+    document.getElementById('adminPanel').classList.add('active');
+    await loadAdminData();
+}
+
+function closeAdmin() {
+    document.getElementById('adminPanel').classList.remove('active');
+}
+
+async function loadAdminData() {
+    try {
+        const response = await fetch('/admin/data');
+        const data = await response.json();
+        
+        // Update stats
+        document.getElementById('statUsers').textContent = data.users.length;
+        document.getElementById('statMessages').textContent = data.messages_count;
+        document.getElementById('statGroups').textContent = data.groups.length;
+        document.getElementById('statOnline').textContent = data.online_count;
+        
+        // Update users table
+        let usersHtml = '';
+        data.users.forEach(u => {
+            usersHtml += `<tr>
+                <td>${escapeHtml(u.username)}</td>
+                <td>${u.role}</td>
+                <td>${u.status}</td>
+                <td>
+                    ${u.username !== 'Mpc' ? `<button class="action-btn" onclick="deleteUser('${u.username}')">Delete</button>` : ''}
+                </td>
+            </tr>`;
+        });
+        document.getElementById('usersTableBody').innerHTML = usersHtml;
+        
+        // Update groups table
+        let groupsHtml = '';
+        data.groups.forEach(g => {
+            groupsHtml += `<tr>
+                <td>${escapeHtml(g.name)}</td>
+                <td>${escapeHtml(g.created_by)}</td>
+                <td><button class="action-btn" onclick="deleteGroup('${g.name}')">Delete</button></td>
+            </tr>`;
+        });
+        document.getElementById('groupsTableBody').innerHTML = groupsHtml;
+        
+        // Update messages table
+        let messagesHtml = '';
+        data.messages.forEach(m => {
+            let time = new Date(m.created_at * 1000).toLocaleString();
+            messagesHtml += `<tr>
+                <td>${escapeHtml(m.sender)}</td>
+                <td>${escapeHtml(m.group)}</td>
+                <td>${time}</td>
+                <td><button class="action-btn" onclick="deleteMessage(${m.id})">Delete</button></td>
+            </tr>`;
+        });
+        document.getElementById('messagesTableBody').innerHTML = messagesHtml;
+        
+        // Update logs table
+        let logsHtml = '';
+        data.logs.forEach(l => {
+            let time = new Date(l.time * 1000).toLocaleString();
+            logsHtml += `<tr>
+                <td>${escapeHtml(l.admin)}</td>
+                <td>${escapeHtml(l.action)}</td>
+                <td>${escapeHtml(l.target)}</td>
+                <td>${time}</td>
+            </tr>`;
+        });
+        document.getElementById('logsTableBody').innerHTML = logsHtml;
+        
+    } catch(e) {
+        console.error('Failed to load admin data:', e);
+    }
+}
+
+async function addUser() {
+    const username = document.getElementById('newUsername').value.trim();
+    const password = document.getElementById('newPassword').value.trim();
+    const role = document.getElementById('newRole').value;
+    
+    if(!username || !password) {
+        alert('Please enter username and password');
+        return;
+    }
+    
+    try {
+        const response = await fetch('/admin/add_user', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({username, password, role})
+        });
+        const data = await response.json();
+        if(data.success) {
+            alert('User added successfully!');
+            document.getElementById('newUsername').value = '';
+            document.getElementById('newPassword').value = '';
+            loadAdminData();
+        } else {
+            alert(data.message || 'Failed to add user');
+        }
+    } catch(e) {
+        alert('Error adding user');
+    }
+}
+
+async function deleteUser(username) {
+    if(!confirm(`Delete user "${username}"?`)) return;
+    try {
+        const response = await fetch('/admin/delete_user', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({username})
+        });
+        const data = await response.json();
+        if(data.success) {
+            alert('User deleted successfully');
+            loadAdminData();
+        } else {
+            alert(data.message || 'Failed to delete user');
+        }
+    } catch(e) {
+        alert('Error deleting user');
+    }
+}
+
+async function addGroup() {
+    const name = document.getElementById('newGroupName').value.trim();
+    const password = document.getElementById('newGroupPassword').value.trim();
+    
+    if(!name || !password) {
+        alert('Please enter group name and password');
+        return;
+    }
+    
+    try {
+        const response = await fetch('/admin/add_group', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({name, password})
+        });
+        const data = await response.json();
+        if(data.success) {
+            alert('Group added successfully!');
+            document.getElementById('newGroupName').value = '';
+            document.getElementById('newGroupPassword').value = '';
+            loadAdminData();
+        } else {
+            alert(data.message || 'Failed to add group');
+        }
+    } catch(e) {
+        alert('Error adding group');
+    }
+}
+
+async function deleteGroup(name) {
+    if(!confirm(`Delete group "${name}"? This will delete all messages in this group.`)) return;
+    try {
+        const response = await fetch('/admin/delete_group', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({name})
+        });
+        const data = await response.json();
+        if(data.success) {
+            alert('Group deleted successfully');
+            loadAdminData();
+        } else {
+            alert(data.message || 'Failed to delete group');
+        }
+    } catch(e) {
+        alert('Error deleting group');
+    }
+}
+
+async function deleteMessage(id) {
+    if(!confirm('Delete this message?')) return;
+    try {
+        const response = await fetch('/admin/delete_message', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({id})
+        });
+        const data = await response.json();
+        if(data.success) {
+            alert('Message deleted successfully');
+            loadAdminData();
+        } else {
+            alert(data.message || 'Failed to delete message');
+        }
+    } catch(e) {
+        alert('Error deleting message');
+    }
+}
+
 // ========== KEYBOARD SHORTCUTS ==========
 document.addEventListener('keydown', function(e) {
     if(e.key === 'Enter' && document.activeElement === document.getElementById('loginUsername')) {
@@ -696,6 +1085,9 @@ document.addEventListener('keydown', function(e) {
     }
     if(e.key === 'Enter' && document.activeElement === document.getElementById('loginPassword')) {
         login();
+    }
+    if(e.key === 'Escape' && document.getElementById('adminPanel').classList.contains('active')) {
+        closeAdmin();
     }
 });
 
@@ -719,15 +1111,59 @@ async def login(username: str, password: str):
         return {"success": True, "username": user["username"], "role": user["role"]}
     return {"success": False, "message": "Invalid credentials"}
 
-@app.post("/register")
-async def register(username: str, password: str):
-    if create_user(username, password):
-        return {"success": True, "message": "User created successfully"}
+@app.get("/admin/data")
+async def admin_data():
+    users = get_all_users()
+    messages = get_all_messages()
+    groups = get_all_groups()
+    logs = get_admin_logs()
+    online_users = get_online_users("Main")
+    
+    return {
+        "users": users,
+        "messages": messages,
+        "messages_count": len(messages),
+        "groups": groups,
+        "online_count": len(online_users),
+        "logs": logs
+    }
+
+@app.post("/admin/add_user")
+async def admin_add_user(username: str, password: str, role: str = "user"):
+    if create_user(username, password, role):
+        log_admin_action("Mpc", "add_user", username, f"Role: {role}")
+        return {"success": True}
     return {"success": False, "message": "Username already exists"}
 
-@app.get("/health")
-async def health():
-    return {"status": "ok", "system": "ABAVANDIMWE", "author": "Mugisha Pc"}
+@app.post("/admin/delete_user")
+async def admin_delete_user(username: str):
+    if delete_user(username):
+        log_admin_action("Mpc", "delete_user", username)
+        return {"success": True}
+    return {"success": False, "message": "Cannot delete admin or user not found"}
+
+@app.post("/admin/add_group")
+async def admin_add_group(name: str, password: str):
+    salt = generate_salt()
+    pwd_hash = hash_password(password, salt)
+    if create_group(name, salt, pwd_hash, "Mpc"):
+        log_admin_action("Mpc", "add_group", name)
+        return {"success": True}
+    return {"success": False, "message": "Group already exists"}
+
+@app.post("/admin/delete_group")
+async def admin_delete_group(name: str):
+    if delete_group(name):
+        log_admin_action("Mpc", "delete_group", name)
+        return {"success": True}
+    return {"success": False, "message": "Group not found"}
+
+@app.post("/admin/delete_message")
+async def admin_delete_message(id: int):
+    if delete_message(id):
+        log_admin_action("Mpc", "delete_message", str(id))
+        return {"success": True}
+    return {"success": False, "message": "Message not found"}
 
 # ========== WEBSOCKET ==========
 @app.websocket("/ws")
@@ -758,7 +1194,6 @@ async def ws_endpoint(websocket: WebSocket):
                 group_name = data.get('group')
                 password = data.get('password')
 
-                # Check if user exists
                 user = authenticate_user(username, password)
                 if not user:
                     await websocket.send_json({'type': 'error', 'message': 'Invalid user credentials'})
@@ -858,4 +1293,5 @@ if __name__ == "__main__":
     print(f"[✓] Default Group: Main / Abavandimwe2026")
     print(f"[✓] Messages expire after 24 hours")
     print(f"[✓] Open: http://localhost:{port}")
+    print(f"[✓] Admin Panel: Click ⚙️ Admin button after login")
     uvicorn.run(app, host="0.0.0.0", port=port)
