@@ -24,7 +24,7 @@ app = FastAPI()
 # ========== DATABASE ==========
 DB_PATH = "abavandimwe.db"
 
-# ========== CRYPTO FUNCTIONS (MOVED UP) ==========
+# ========== CRYPTO FUNCTIONS ==========
 def generate_salt():
     return base64.b64encode(secrets.token_bytes(32)).decode()
 
@@ -288,7 +288,7 @@ HTML = '''<!DOCTYPE html>
         .success-message{color:#0f0;font-size:12px;text-align:center;margin-top:12px;display:none;}
         .login-footer{text-align:center;margin-top:20px;font-size:9px;color:#333;border-top:1px solid #1a1a2e;padding-top:16px;}
         
-        /* Chat Screen */
+        /* Chat Screen - Same as before */
         .chat-container{display:none;width:100%;height:100%;flex-direction:column;background:#0a0a0f;position:fixed;top:0;left:0;right:0;bottom:0;}
         .chat-container.active{display:flex;}
         
@@ -347,6 +347,8 @@ HTML = '''<!DOCTYPE html>
         .separator{display:flex;align-items:center;text-align:center;margin:16px 0;}
         .separator::before,.separator::after{content:'';flex:1;border-bottom:1px solid #1a1a2e;}
         .separator span{padding:0 10px;color:#666;font-size:10px;}
+        
+        .group-inputs{display:none;}
     </style>
 </head>
 <body>
@@ -358,8 +360,8 @@ HTML = '''<!DOCTYPE html>
             <div class="sub">Secure Messaging System</div>
             <div style="text-align:center;"><span class="admin-badge">🔐 Secure Access</span></div>
             
-            <input type="text" id="username" placeholder="Username">
-            <input type="password" id="password" placeholder="Password">
+            <input type="text" id="loginUsername" placeholder="Username">
+            <input type="password" id="loginPassword" placeholder="Password">
             
             <button onclick="login()">▶ Login</button>
             
@@ -380,7 +382,7 @@ HTML = '''<!DOCTYPE html>
     </div>
 </div>
 
-<!-- CHAT SCREEN -->
+<!-- CHAT SCREEN (Same as original) -->
 <div id="chatScreen" class="chat-container">
     <div class="chat-header">
         <div class="chat-header-left">
@@ -418,10 +420,14 @@ HTML = '''<!DOCTYPE html>
 let ws, username, groupName, groupPassword, groupSalt, typingTimeout, reconnectAttempts = 0;
 let currentUser = null;
 
+// Default group - users will join this group automatically
+const DEFAULT_GROUP = 'Main';
+const DEFAULT_PASSWORD = 'Abavandimwe2026';
+
 // ========== LOGIN ==========
 async function login() {
-    const username = document.getElementById('username').value.trim();
-    const password = document.getElementById('password').value;
+    const username = document.getElementById('loginUsername').value.trim();
+    const password = document.getElementById('loginPassword').value;
     
     if(!username || !password) {
         showError('Please enter username and password');
@@ -432,7 +438,8 @@ async function login() {
     if(username === 'Mpc' && password === '08800Mpc!') {
         currentUser = {username: 'Mpc', role: 'admin'};
         document.getElementById('loginScreen').style.display = 'none';
-        showGroupSelection();
+        document.getElementById('chatScreen').classList.add('active');
+        connectToGroup('Mpc', DEFAULT_GROUP, DEFAULT_PASSWORD);
         return;
     }
     
@@ -448,32 +455,14 @@ async function login() {
         if(data.success) {
             currentUser = {username: data.username, role: data.role};
             document.getElementById('loginScreen').style.display = 'none';
-            showGroupSelection();
+            document.getElementById('chatScreen').classList.add('active');
+            connectToGroup(data.username, DEFAULT_GROUP, DEFAULT_PASSWORD);
         } else {
             showError('Invalid credentials. Request access via WhatsApp if you need an account.');
         }
     } catch(e) {
         showError('Connection error. Please try again.');
     }
-}
-
-function showGroupSelection() {
-    // Prompt for group and password
-    const groupName = prompt('Enter group name:');
-    if(!groupName) {
-        logout();
-        return;
-    }
-    const groupPassword = prompt('Enter group password:');
-    if(!groupPassword) {
-        logout();
-        return;
-    }
-    
-    // Store for connection
-    window.groupName = groupName;
-    window.groupPassword = groupPassword;
-    connectToGroup(currentUser.username, groupName, groupPassword);
 }
 
 function requestAccess() {
@@ -502,7 +491,6 @@ function showSuccess(msg) {
 
 // ========== WEBSOCKET CONNECTION ==========
 function connectToGroup(username, group, password) {
-    document.getElementById('chatScreen').classList.add('active');
     document.getElementById('groupTitle').innerHTML = '# ' + group;
     
     let url = 'wss://' + window.location.host + '/ws';
@@ -632,8 +620,8 @@ function logout() {
     document.getElementById('loginScreen').style.display = 'flex';
     document.getElementById('messages').innerHTML = '<div style="text-align:center;color:#666;padding:40px 0;">Connecting...</div>';
     document.getElementById('usersList').innerHTML = '<div class="user-item">Loading...</div>';
-    document.getElementById('username').value = '';
-    document.getElementById('password').value = '';
+    document.getElementById('loginUsername').value = '';
+    document.getElementById('loginPassword').value = '';
     reconnectAttempts = 0;
     currentUser = null;
 }
@@ -688,7 +676,7 @@ async function sendMessage() {
     let text = input.value.trim();
     if(!text || !ws || ws.readyState !== WebSocket.OPEN || !groupSalt) return;
     try {
-        let cipher = await encrypt(text, window.groupPassword, groupSalt);
+        let cipher = await encrypt(text, DEFAULT_PASSWORD, groupSalt);
         ws.send(JSON.stringify({
             type:'message',
             ciphertext:cipher,
@@ -703,10 +691,10 @@ async function sendMessage() {
 
 // ========== KEYBOARD SHORTCUTS ==========
 document.addEventListener('keydown', function(e) {
-    if(e.key === 'Enter' && document.activeElement === document.getElementById('username')) {
-        document.getElementById('password').focus();
+    if(e.key === 'Enter' && document.activeElement === document.getElementById('loginUsername')) {
+        document.getElementById('loginPassword').focus();
     }
-    if(e.key === 'Enter' && document.activeElement === document.getElementById('password')) {
+    if(e.key === 'Enter' && document.activeElement === document.getElementById('loginPassword')) {
         login();
     }
 });
@@ -714,6 +702,7 @@ document.addEventListener('keydown', function(e) {
 // ========== INIT ==========
 console.log('🔐 ABAVANDIMWE Secure Messaging System');
 console.log('📱 Developed by Mugisha Pc');
+console.log('👤 Admin: Mpc / 08800Mpc!');
 </script>
 </body>
 </html>'''
@@ -866,6 +855,7 @@ if __name__ == "__main__":
 """)
     print(f"[✓] Server running on port {port}")
     print(f"[✓] Admin: Mpc / 08800Mpc!")
+    print(f"[✓] Default Group: Main / Abavandimwe2026")
     print(f"[✓] Messages expire after 24 hours")
     print(f"[✓] Open: http://localhost:{port}")
     uvicorn.run(app, host="0.0.0.0", port=port)
