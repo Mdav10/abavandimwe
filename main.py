@@ -449,6 +449,7 @@ HTML = '''<!DOCTYPE html>
         .admin-card table th{text-align:left;padding:6px;border-bottom:1px solid #1a1a2e;color:#666;}
         .admin-card table td{padding:6px;border-bottom:1px solid #1a1a2e;}
         .admin-card input{width:100%;padding:8px;margin:5px 0;background:#111;border:1px solid #0f0;border-radius:6px;color:#0f0;font-size:12px;}
+        .admin-card select{width:100%;padding:8px;margin:5px 0;background:#111;border:1px solid #0f0;border-radius:6px;color:#0f0;font-size:12px;}
         .admin-card button{width:auto;padding:8px 16px;margin:5px;font-size:12px;}
         .close-admin{background:#ff0041;border-color:#ff0041;color:white;padding:8px 16px;border-radius:8px;cursor:pointer;}
         .close-admin:hover{background:#cc0033;}
@@ -462,6 +463,7 @@ HTML = '''<!DOCTYPE html>
         .action-btn-green{background:transparent;border:1px solid #0f0;color:#0f0;padding:4px 8px;border-radius:4px;cursor:pointer;font-size:10px;margin:0 2px;}
         .action-btn-green:hover{background:#0f0;color:#000;}
         .admin-close-area{display:flex;justify-content:flex-end;gap:10px;}
+        .admin-username{color:#ffaa00;font-size:12px;margin-left:10px;}
     </style>
 </head>
 <body>
@@ -473,8 +475,8 @@ HTML = '''<!DOCTYPE html>
             <div class="sub">Secure Messaging System</div>
             <div style="text-align:center;"><span class="admin-badge">🔐 Secure Access</span></div>
             
-            <input type="text" id="loginUsername" placeholder="Username">
-            <input type="password" id="loginPassword" placeholder="Password">
+            <input type="text" id="loginUsername" placeholder="Username" value="Mpc">
+            <input type="password" id="loginPassword" placeholder="Password" value="08800Mpc!">
             
             <button onclick="login()">▶ Login</button>
             
@@ -534,7 +536,7 @@ HTML = '''<!DOCTYPE html>
 <!-- ADMIN PANEL -->
 <div id="adminPanel" class="admin-panel">
     <div class="admin-panel-header">
-        <h2>⚙️ Admin Panel</h2>
+        <h2>⚙️ Admin Panel <span class="admin-username">(Logged in as: <span id="adminUsername">Mpc</span>)</span></h2>
         <div class="admin-close-area">
             <button class="close-admin" onclick="closeAdmin()">✕ Close</button>
         </div>
@@ -641,6 +643,7 @@ async function login() {
             // Show admin button if admin
             if(data.role === 'admin') {
                 document.getElementById('adminBtn').style.display = 'inline-block';
+                document.getElementById('adminUsername').textContent = data.username;
             }
             
             connectToGroup(data.username, DEFAULT_GROUP, DEFAULT_PASSWORD);
@@ -808,8 +811,8 @@ function logout() {
     document.getElementById('loginScreen').style.display = 'flex';
     document.getElementById('messages').innerHTML = '<div style="text-align:center;color:#666;padding:40px 0;">Connecting...</div>';
     document.getElementById('usersList').innerHTML = '<div class="user-item">Loading...</div>';
-    document.getElementById('loginUsername').value = '';
-    document.getElementById('loginPassword').value = '';
+    document.getElementById('loginUsername').value = 'Mpc';
+    document.getElementById('loginPassword').value = '08800Mpc!';
     document.getElementById('adminBtn').style.display = 'none';
     reconnectAttempts = 0;
     currentUser = null;
@@ -911,7 +914,7 @@ async function loadAdminData() {
                 <td>${u.role}</td>
                 <td>${u.status}</td>
                 <td>
-                    ${u.username !== 'Mpc' ? `<button class="action-btn" onclick="deleteUser('${u.username}')">Delete</button>` : ''}
+                    ${u.username !== 'Mpc' ? `<button class="action-btn" onclick="deleteUser('${u.username}')">Delete</button>` : '⭐ Admin'}
                 </td>
             </tr>`;
         });
@@ -1091,10 +1094,12 @@ document.addEventListener('keydown', function(e) {
     }
 });
 
-// ========== INIT ==========
+// ========== AUTO-LOGIN PREVIEW ==========
+// Pre-fill admin credentials for quick access
 console.log('🔐 ABAVANDIMWE Secure Messaging System');
 console.log('📱 Developed by Mugisha Pc');
 console.log('👤 Admin: Mpc / 08800Mpc!');
+console.log('💡 Click Login or press Enter to access the chat');
 </script>
 </body>
 </html>'''
@@ -1294,4 +1299,5 @@ if __name__ == "__main__":
     print(f"[✓] Messages expire after 24 hours")
     print(f"[✓] Open: http://localhost:{port}")
     print(f"[✓] Admin Panel: Click ⚙️ Admin button after login")
+    print(f"\n💡 Quick Login: Just press Enter (credentials pre-filled)")
     uvicorn.run(app, host="0.0.0.0", port=port)
