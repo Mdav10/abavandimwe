@@ -40,17 +40,14 @@ class LoginRequest(BaseModel):
     username: str
     password: str
 
-class AddUserRequest(BaseModel):
+class CreateUserRequest(BaseModel):
     username: str
     password: str
-    role: str = "user"
+    group_name: str
+    group_password: str
 
 class DeleteUserRequest(BaseModel):
     username: str
-
-class AddGroupRequest(BaseModel):
-    name: str
-    password: str
 
 class DeleteGroupRequest(BaseModel):
     name: str
@@ -75,13 +72,15 @@ def verify_password(password, salt, stored_hash):
 def init_db():
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    # Users table with role
+    # Users table with role and group info
     c.execute('''
         CREATE TABLE IF NOT EXISTS users (
             username TEXT PRIMARY KEY,
             password_hash TEXT,
             salt TEXT,
             role TEXT DEFAULT 'user',
+            assigned_group TEXT,
+            assigned_group_password TEXT,
             status TEXT,
             current_group TEXT,
             last_seen REAL,
@@ -194,20 +193,30 @@ def authenticate_user(username, password):
             return {"username": username, "role": role}
     return None
 
-def create_user(username, password, role="user"):
+def create_user_with_group(username, password, group_name, group_password):
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     try:
+        # Create user
         salt = generate_salt()
         password_hash = hash_password(password, salt)
+        
+        # Check if group exists, if not create it
+        group_info = get_group_info(group_name)
+        if not group_info:
+            group_salt = generate_salt()
+            group_pwd_hash = hash_password(group_password, group_salt)
+            create_group(group_name, group_salt, group_pwd_hash, "admin")
+        
         c.execute(
-            "INSERT INTO users (username, password_hash, salt, role, created_at) VALUES (?,?,?,?,?)",
-            (username, password_hash, salt, role, time.time())
+            "INSERT INTO users (username, password_hash, salt, role, assigned_group, assigned_group_password, created_at) VALUES (?,?,?,?,?,?,?)",
+            (username, password_hash, salt, "user", group_name, group_password, time.time())
         )
         conn.commit()
         conn.close()
         return True
-    except:
+    except Exception as e:
+        print(f"Error creating user: {e}")
         conn.close()
         return False
 
@@ -222,13 +231,21 @@ def delete_user(username):
     conn.close()
     return deleted > 0
 
+def get_user_assigned_group(username):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT assigned_group, assigned_group_password FROM users WHERE username=?", (username,))
+    row = c.fetchone()
+    conn.close()
+    return {'group': row[0], 'password': row[1]} if row else None
+
 def get_all_users():
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    c.execute("SELECT username, role, status, current_group, last_seen, created_at FROM users ORDER BY created_at DESC")
+    c.execute("SELECT username, role, assigned_group, status, current_group, last_seen, created_at FROM users ORDER BY created_at DESC")
     rows = c.fetchall()
     conn.close()
-    return [{'username': r[0], 'role': r[1], 'status': r[2] or 'offline', 'group': r[3], 'last_seen': r[4], 'created_at': r[5]} for r in rows]
+    return [{'username': r[0], 'role': r[1], 'assigned_group': r[2], 'status': r[3] or 'offline', 'current_group': r[4], 'last_seen': r[5], 'created_at': r[6]} for r in rows]
 
 def get_user_role(username):
     conn = sqlite3.connect(DB_PATH)
@@ -393,7 +410,7 @@ HTML = '''<!DOCTYPE html>
         @keyframes glow{0%{background-position:0% 50%;}50%{background-position:100% 50%;}100%{background-position:0% 50%;}}
         .login-card-inner{background:#050508;padding:32px 24px;border-radius:22px;position:relative;}
         h1{text-align:center;margin-bottom:4px;font-size:28px;letter-spacing:2px;}
-        .sub{text-align:center;margin-bottom:32px;font-size:11px;color:#666;}
+        .sub{text-align:center;margin-bottom:12px;font-size:11px;color:#666;}
         .admin-badge{text-align:center;margin-bottom:20px;font-size:10px;color:#0f0;border:1px solid #0f0;padding:4px 12px;display:inline-block;border-radius:20px;background:rgba(0,255,0,0.05);}
         input{width:100%;padding:14px;margin:10px 0;background:#111;border:1px solid #0f0;border-radius:12px;color:#0f0;font-family:monospace;font-size:15px;transition:all 0.3s;}
         input:focus{outline:none;box-shadow:0 0 20px rgba(0,255,65,0.2);border-color:#0f0;}
@@ -418,8 +435,6 @@ HTML = '''<!DOCTYPE html>
         .menu-btn,.logout-btn{background:transparent;border:1px solid #0f0;color:#0f0;padding:6px 12px;border-radius:8px;cursor:pointer;width:auto;margin:0;font-size:12px;transition:all 0.3s;}
         .logout-btn:hover{border-color:#ff0041;color:#ff0041;}
         .logout-btn:active{background:#ff0041;border-color:#ff0041;color:white;}
-        .admin-btn{background:transparent;border:1px solid #ffaa00;color:#ffaa00;padding:6px 12px;border-radius:8px;cursor:pointer;width:auto;margin:0;font-size:12px;transition:all 0.3s;}
-        .admin-btn:hover{background:#ffaa00;color:#000;}
         
         .main-content{flex:1;display:flex;overflow:hidden;position:relative;}
         .sidebar{width:260px;background:#050508;border-right:1px solid #0f0;display:flex;flex-direction:column;flex-shrink:0;}
@@ -496,6 +511,20 @@ HTML = '''<!DOCTYPE html>
         .action-btn-green:hover{background:#0f0;color:#000;}
         .admin-close-area{display:flex;justify-content:flex-end;gap:10px;}
         .admin-username{color:#ffaa00;font-size:12px;margin-left:10px;}
+        
+        /* Gatekeeper Screen */
+        .gatekeeper-container{display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:#0a0a0f;z-index:900;padding:20px;justify-content:center;align-items:center;}
+        .gatekeeper-container.active{display:flex;}
+        .gatekeeper-card{background:#050508;border:2px solid #0f0;border-radius:24px;padding:32px 24px;width:100%;max-width:420px;}
+        .gatekeeper-card h2{text-align:center;margin-bottom:8px;font-size:24px;}
+        .gatekeeper-card .sub{text-align:center;margin-bottom:24px;font-size:11px;color:#666;}
+        
+        /* User Setup Screen */
+        .user-setup-container{display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:#0a0a0f;z-index:800;padding:20px;justify-content:center;align-items:center;}
+        .user-setup-container.active{display:flex;}
+        .user-setup-card{background:#050508;border:2px solid #0f0;border-radius:24px;padding:32px 24px;width:100%;max-width:420px;}
+        .user-setup-card h2{text-align:center;margin-bottom:8px;font-size:24px;}
+        .user-setup-card .sub{text-align:center;margin-bottom:24px;font-size:11px;color:#666;}
     </style>
 </head>
 <body>
@@ -505,7 +534,7 @@ HTML = '''<!DOCTYPE html>
         <div class="login-card-inner">
             <h1># ABAVANDIMWE</h1>
             <div class="sub">Secure Messaging System</div>
-            <div style="text-align:center;"><span class="admin-badge">🔐 Secure Access</span></div>
+            <div style="text-align:center;"><span class="admin-badge">🔐 Gatekeeper</span></div>
             
             <input type="text" id="loginUsername" placeholder="Username">
             <input type="password" id="loginPassword" placeholder="Password">
@@ -529,6 +558,121 @@ HTML = '''<!DOCTYPE html>
     </div>
 </div>
 
+<!-- ADMIN PANEL -->
+<div id="adminPanel" class="admin-panel">
+    <div class="admin-panel-header">
+        <h2>⚙️ Admin Dashboard <span class="admin-username">(Logged in as: <span id="adminUsername">Mpc</span>)</span></h2>
+        <div>
+            <button class="close-admin" onclick="logout()">🚪 Logout</button>
+        </div>
+    </div>
+    
+    <!-- Stats -->
+    <div class="admin-stats" id="adminStats">
+        <div class="stat-box"><div class="stat-number" id="statUsers">0</div><div class="stat-label">Total Users</div></div>
+        <div class="stat-box"><div class="stat-number" id="statMessages">0</div><div class="stat-label">Total Messages</div></div>
+        <div class="stat-box"><div class="stat-number" id="statGroups">0</div><div class="stat-label">Total Groups</div></div>
+        <div class="stat-box"><div class="stat-number" id="statOnline">0</div><div class="stat-label">Online Now</div></div>
+    </div>
+    
+    <div class="admin-content">
+        <!-- Create User -->
+        <div class="admin-card">
+            <h3>👤 Create User</h3>
+            <div style="margin-bottom:12px;">
+                <input type="text" id="newUsername" placeholder="Username" style="width:100%;">
+                <input type="text" id="newPassword" placeholder="Password" style="width:100%;">
+                <input type="text" id="newGroupName" placeholder="Group Name" style="width:100%;">
+                <input type="text" id="newGroupPassword" placeholder="Group Password" style="width:100%;">
+                <button onclick="createUser()" class="action-btn-green">➕ Create User</button>
+            </div>
+        </div>
+        
+        <!-- Users Management -->
+        <div class="admin-card">
+            <h3>📋 Users</h3>
+            <div class="admin-table-wrap">
+                <table>
+                    <thead><tr><th>Username</th><th>Group</th><th>Status</th><th>Action</th></tr></thead>
+                    <tbody id="usersTableBody"></tbody>
+                </table>
+            </div>
+        </div>
+        
+        <!-- Groups -->
+        <div class="admin-card">
+            <h3>📁 Groups</h3>
+            <div class="admin-table-wrap">
+                <table>
+                    <thead><tr><th>Group Name</th><th>Created By</th><th>Action</th></tr></thead>
+                    <tbody id="groupsTableBody"></tbody>
+                </table>
+            </div>
+        </div>
+        
+        <!-- Messages -->
+        <div class="admin-card">
+            <h3>📨 Recent Messages</h3>
+            <div class="admin-table-wrap">
+                <table>
+                    <thead><tr><th>Sender</th><th>Group</th><th>Time</th><th>Action</th></tr></thead>
+                    <tbody id="messagesTableBody"></tbody>
+                </table>
+            </div>
+        </div>
+        
+        <!-- Logs -->
+        <div class="admin-card">
+            <h3>📋 Admin Logs</h3>
+            <div class="admin-table-wrap">
+                <table>
+                    <thead><tr><th>Admin</th><th>Action</th><th>Target</th><th>Time</th></tr></thead>
+                    <tbody id="logsTableBody"></tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- GATEKEEPER SCREEN (User Setup - Step 1) -->
+<div id="gatekeeperScreen" class="gatekeeper-container">
+    <div class="gatekeeper-card">
+        <h2>🔐 Gatekeeper</h2>
+        <div class="sub">Enter your assigned credentials</div>
+        
+        <input type="text" id="gatekeeperUsername" placeholder="Your Username">
+        <input type="password" id="gatekeeperPassword" placeholder="Your Password">
+        
+        <button onclick="gatekeeperLogin()">▶ Verify</button>
+        
+        <div id="gatekeeperError" class="error-message"></div>
+        
+        <div class="login-footer" style="margin-top:20px;padding-top:16px;border-top:1px solid #1a1a2e;">
+            🔒 Credentials provided by admin
+        </div>
+    </div>
+</div>
+
+<!-- USER SETUP SCREEN (Step 2) -->
+<div id="userSetupScreen" class="user-setup-container">
+    <div class="user-setup-card">
+        <h2>👤 Setup Profile</h2>
+        <div class="sub">Enter your chat details</div>
+        
+        <input type="text" id="userDisplayName" placeholder="Your Display Name">
+        <input type="text" id="userGroupName" placeholder="Group Name" readonly>
+        <input type="password" id="userGroupPassword" placeholder="Group Password" readonly>
+        
+        <button onclick="enterChat()">▶ Enter Chat</button>
+        
+        <div id="setupError" class="error-message"></div>
+        
+        <div class="login-footer" style="margin-top:20px;padding-top:16px;border-top:1px solid #1a1a2e;">
+            🔐 Group credentials provided by admin
+        </div>
+    </div>
+</div>
+
 <!-- CHAT SCREEN -->
 <div id="chatScreen" class="chat-container">
     <div class="chat-header">
@@ -537,10 +681,7 @@ HTML = '''<!DOCTYPE html>
             <span class="online-badge" id="connectionBadge">● Online</span>
         </div>
         <h2 id="groupTitle"># LOADING</h2>
-        <div>
-            <button class="admin-btn" id="adminBtn" onclick="openAdmin()" style="display:none;">⚙️ Admin</button>
-            <button class="logout-btn" onclick="logout()">Leave</button>
-        </div>
+        <button class="logout-btn" onclick="logout()">Leave</button>
     </div>
     
     <div class="main-content">
@@ -565,89 +706,11 @@ HTML = '''<!DOCTYPE html>
     <div class="connection-status status-online" id="connectionStatus">🟢 Connected</div>
 </div>
 
-<!-- ADMIN PANEL -->
-<div id="adminPanel" class="admin-panel">
-    <div class="admin-panel-header">
-        <h2>⚙️ Admin Panel <span class="admin-username">(Logged in as: <span id="adminUsername">Mpc</span>)</span></h2>
-        <div class="admin-close-area">
-            <button class="close-admin" onclick="closeAdmin()">✕ Close</button>
-        </div>
-    </div>
-    
-    <!-- Stats -->
-    <div class="admin-stats" id="adminStats">
-        <div class="stat-box"><div class="stat-number" id="statUsers">0</div><div class="stat-label">Total Users</div></div>
-        <div class="stat-box"><div class="stat-number" id="statMessages">0</div><div class="stat-label">Total Messages</div></div>
-        <div class="stat-box"><div class="stat-number" id="statGroups">0</div><div class="stat-label">Total Groups</div></div>
-        <div class="stat-box"><div class="stat-number" id="statOnline">0</div><div class="stat-label">Online Now</div></div>
-    </div>
-    
-    <div class="admin-content">
-        <!-- Users Management -->
-        <div class="admin-card">
-            <h3>👤 User Management</h3>
-            <div style="margin-bottom:12px;">
-                <input type="text" id="newUsername" placeholder="New username" style="width:100%;">
-                <input type="text" id="newPassword" placeholder="New password" style="width:100%;">
-                <select id="newRole" style="width:100%;padding:8px;background:#111;border:1px solid #0f0;border-radius:6px;color:#0f0;margin:5px 0;">
-                    <option value="user">User</option>
-                    <option value="admin">Admin</option>
-                </select>
-                <button onclick="addUser()" class="action-btn-green">➕ Add User</button>
-            </div>
-            <div class="admin-table-wrap">
-                <table>
-                    <thead><tr><th>Username</th><th>Role</th><th>Status</th><th>Action</th></tr></thead>
-                    <tbody id="usersTableBody"></tbody>
-                </table>
-            </div>
-        </div>
-        
-        <!-- Groups Management -->
-        <div class="admin-card">
-            <h3>📁 Group Management</h3>
-            <div style="margin-bottom:12px;">
-                <input type="text" id="newGroupName" placeholder="New group name" style="width:100%;">
-                <input type="text" id="newGroupPassword" placeholder="Group password" style="width:100%;">
-                <button onclick="addGroup()" class="action-btn-green">➕ Add Group</button>
-            </div>
-            <div class="admin-table-wrap">
-                <table>
-                    <thead><tr><th>Group Name</th><th>Created By</th><th>Action</th></tr></thead>
-                    <tbody id="groupsTableBody"></tbody>
-                </table>
-            </div>
-        </div>
-        
-        <!-- Messages & Logs -->
-        <div class="admin-card">
-            <h3>📨 Recent Messages</h3>
-            <div class="admin-table-wrap">
-                <table>
-                    <thead><tr><th>Sender</th><th>Group</th><th>Time</th><th>Action</th></tr></thead>
-                    <tbody id="messagesTableBody"></tbody>
-                </table>
-            </div>
-        </div>
-        
-        <div class="admin-card">
-            <h3>📋 Admin Logs</h3>
-            <div class="admin-table-wrap">
-                <table>
-                    <thead><tr><th>Admin</th><th>Action</th><th>Target</th><th>Time</th></tr></thead>
-                    <tbody id="logsTableBody"></tbody>
-                </table>
-            </div>
-        </div>
-    </div>
-</div>
-
 <script>
 // ========== GLOBALS ==========
 let ws, username, groupName, groupPassword, groupSalt, typingTimeout, reconnectAttempts = 0;
 let currentUser = null;
-const DEFAULT_GROUP = 'Main';
-const DEFAULT_PASSWORD = 'Abavandimwe2026';
+let gatekeeperData = null;
 
 // ========== LOGIN ==========
 async function login() {
@@ -662,30 +725,28 @@ async function login() {
     try {
         const response = await fetch('/login', {
             method: 'POST',
-            headers: {
-                'Content-Type': 'application/json'
-            },
+            headers: {'Content-Type': 'application/json'},
             body: JSON.stringify({username, password})
         });
-        
-        if (!response.ok) {
-            throw new Error('Network response was not ok');
-        }
         
         const data = await response.json();
         
         if(data.success) {
             currentUser = {username: data.username, role: data.role};
-            document.getElementById('loginScreen').style.display = 'none';
-            document.getElementById('chatScreen').classList.add('active');
             
-            // Show admin button if admin
             if(data.role === 'admin') {
-                document.getElementById('adminBtn').style.display = 'inline-block';
+                // Admin goes to dashboard
+                document.getElementById('loginScreen').style.display = 'none';
+                document.getElementById('adminPanel').classList.add('active');
                 document.getElementById('adminUsername').textContent = data.username;
+                loadAdminData();
+            } else {
+                // User goes to gatekeeper
+                document.getElementById('loginScreen').style.display = 'none';
+                document.getElementById('gatekeeperScreen').classList.add('active');
+                document.getElementById('gatekeeperUsername').value = data.username;
+                showGatekeeperSuccess('✅ Valid credentials. Please verify to continue.');
             }
-            
-            connectToGroup(data.username, DEFAULT_GROUP, DEFAULT_PASSWORD);
         } else {
             showError(data.message || 'Invalid credentials. Request access via WhatsApp if you need an account.');
         }
@@ -695,36 +756,76 @@ async function login() {
     }
 }
 
-function requestAccess() {
-    const phone = '256762117982';
-    const message = 'Hello, I would like to get access to ABAVANDIMWE secure messaging platform. Please send me login credentials.';
-    const url = `https://wa.me/${phone}?text=${encodeURIComponent(message)}`;
-    window.open(url, '_blank');
-    showSuccess('📱 Opening WhatsApp... Please send your request.');
+// ========== GATEKEEPER ==========
+async function gatekeeperLogin() {
+    const username = document.getElementById('gatekeeperUsername').value.trim();
+    const password = document.getElementById('gatekeeperPassword').value;
+    
+    if(!username || !password) {
+        showGatekeeperError('Please enter username and password');
+        return;
+    }
+    
+    try {
+        const response = await fetch('/gatekeeper', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({username, password})
+        });
+        
+        const data = await response.json();
+        
+        if(data.success) {
+            gatekeeperData = data;
+            document.getElementById('gatekeeperScreen').classList.remove('active');
+            document.getElementById('userSetupScreen').classList.add('active');
+            
+            // Pre-fill group info
+            document.getElementById('userGroupName').value = data.assigned_group;
+            document.getElementById('userGroupPassword').value = data.assigned_group_password;
+            
+            showSetupSuccess('✅ Verified! Enter your display name to start chatting.');
+        } else {
+            showGatekeeperError(data.message || 'Invalid credentials');
+        }
+    } catch(e) {
+        console.error('Gatekeeper error:', e);
+        showGatekeeperError('Connection error. Please try again.');
+    }
 }
 
-function showError(msg) {
-    let err = document.getElementById('loginError');
-    err.textContent = msg;
-    err.style.display = 'block';
-    document.getElementById('loginSuccess').style.display = 'none';
-    setTimeout(() => err.style.display = 'none', 5000);
+// ========== ENTER CHAT ==========
+function enterChat() {
+    const displayName = document.getElementById('userDisplayName').value.trim();
+    const groupName = document.getElementById('userGroupName').value.trim();
+    const groupPassword = document.getElementById('userGroupPassword').value.trim();
+    
+    if(!displayName) {
+        showSetupError('Please enter your display name');
+        return;
+    }
+    
+    if(!groupName || !groupPassword) {
+        showSetupError('Group credentials missing. Please contact admin.');
+        return;
+    }
+    
+    // Store for chat
+    window.chatUsername = displayName;
+    window.chatGroup = groupName;
+    window.chatPassword = groupPassword;
+    
+    document.getElementById('userSetupScreen').classList.remove('active');
+    document.getElementById('chatScreen').classList.add('active');
+    
+    connectToChat(displayName, groupName, groupPassword);
 }
 
-function showSuccess(msg) {
-    let success = document.getElementById('loginSuccess');
-    success.textContent = msg;
-    success.style.display = 'block';
-    document.getElementById('loginError').style.display = 'none';
-    setTimeout(() => success.style.display = 'none', 5000);
-}
-
-// ========== WEBSOCKET CONNECTION ==========
-function connectToGroup(username, group, password) {
+// ========== CONNECT TO CHAT ==========
+function connectToChat(username, group, password) {
     document.getElementById('groupTitle').innerHTML = '# ' + group;
     window.groupPassword = password;
     
-    // Determine WebSocket protocol
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const url = protocol + '//' + window.location.host + '/ws';
     
@@ -779,7 +880,6 @@ function connectToGroup(username, group, password) {
     
     ws.onerror = function(e) {
         console.error('WebSocket error:', e);
-        showError('Connection error');
         updateStatus(false);
     };
     
@@ -789,7 +889,7 @@ function connectToGroup(username, group, password) {
             addSystemMessage('⚠️ Connection lost. Reconnecting...');
             reconnectAttempts++;
             if(reconnectAttempts < 5) {
-                setTimeout(() => connectToGroup(username, group, password), 3000);
+                setTimeout(() => connectToChat(username, group, password), 3000);
             } else {
                 addSystemMessage('❌ Connection failed. Please refresh.');
             }
@@ -852,20 +952,6 @@ function escapeHtml(t) {
     return d.innerHTML;
 }
 
-function logout() {
-    if(ws) ws.close();
-    ws = null;
-    document.getElementById('chatScreen').classList.remove('active');
-    document.getElementById('loginScreen').style.display = 'flex';
-    document.getElementById('messages').innerHTML = '<div style="text-align:center;color:#666;padding:40px 0;">Connecting...</div>';
-    document.getElementById('usersList').innerHTML = '<div class="user-item">Loading...</div>';
-    document.getElementById('loginUsername').value = '';
-    document.getElementById('loginPassword').value = '';
-    document.getElementById('adminBtn').style.display = 'none';
-    reconnectAttempts = 0;
-    currentUser = null;
-}
-
 // ========== ENCRYPTION ==========
 async function encrypt(text, pwd, salt) {
     const e = new TextEncoder();
@@ -916,50 +1002,122 @@ async function sendMessage() {
     let text = input.value.trim();
     if(!text || !ws || ws.readyState !== WebSocket.OPEN || !groupSalt) return;
     try {
-        let cipher = await encrypt(text, DEFAULT_PASSWORD, groupSalt);
+        let cipher = await encrypt(text, window.chatPassword, groupSalt);
         ws.send(JSON.stringify({
             type:'message',
             ciphertext:cipher,
             salt:groupSalt
         }));
-        addMessage(currentUser.username, text, true);
+        addMessage(window.chatUsername, text, true);
         input.value = '';
     } catch(e) {
         alert('Failed to send message');
     }
 }
 
-// ========== ADMIN PANEL ==========
-async function openAdmin() {
-    if(!currentUser || currentUser.role !== 'admin') {
-        alert('Admin access required');
-        return;
+// ========== REQUEST ACCESS ==========
+function requestAccess() {
+    const phone = '256762117982';
+    const message = 'Hello, I would like to get access to ABAVANDIMWE secure messaging platform. Please send me login credentials.';
+    const url = `https://wa.me/${phone}?text=${encodeURIComponent(message)}`;
+    window.open(url, '_blank');
+    showSuccess('📱 Opening WhatsApp... Please send your request.');
+}
+
+// ========== ERROR/SUCCESS MESSAGES ==========
+function showError(msg) {
+    let err = document.getElementById('loginError');
+    err.textContent = msg;
+    err.style.display = 'block';
+    document.getElementById('loginSuccess').style.display = 'none';
+    setTimeout(() => err.style.display = 'none', 5000);
+}
+
+function showSuccess(msg) {
+    let success = document.getElementById('loginSuccess');
+    success.textContent = msg;
+    success.style.display = 'block';
+    document.getElementById('loginError').style.display = 'none';
+    setTimeout(() => success.style.display = 'none', 5000);
+}
+
+function showGatekeeperError(msg) {
+    let err = document.getElementById('gatekeeperError');
+    err.textContent = msg;
+    err.style.display = 'block';
+    setTimeout(() => err.style.display = 'none', 5000);
+}
+
+function showGatekeeperSuccess(msg) {
+    let success = document.getElementById('gatekeeperSuccess');
+    if(!success) {
+        success = document.createElement('div');
+        success.id = 'gatekeeperSuccess';
+        success.className = 'success-message';
+        document.querySelector('.gatekeeper-card').appendChild(success);
     }
-    document.getElementById('adminPanel').classList.add('active');
-    await loadAdminData();
+    success.textContent = msg;
+    success.style.display = 'block';
+    setTimeout(() => success.style.display = 'none', 5000);
 }
 
-function closeAdmin() {
+function showSetupError(msg) {
+    let err = document.getElementById('setupError');
+    err.textContent = msg;
+    err.style.display = 'block';
+    setTimeout(() => err.style.display = 'none', 5000);
+}
+
+function showSetupSuccess(msg) {
+    let success = document.getElementById('setupSuccess');
+    if(!success) {
+        success = document.createElement('div');
+        success.id = 'setupSuccess';
+        success.className = 'success-message';
+        document.querySelector('.user-setup-card').appendChild(success);
+    }
+    success.textContent = msg;
+    success.style.display = 'block';
+    setTimeout(() => success.style.display = 'none', 5000);
+}
+
+// ========== LOGOUT ==========
+function logout() {
+    if(ws) ws.close();
+    ws = null;
+    document.getElementById('chatScreen').classList.remove('active');
     document.getElementById('adminPanel').classList.remove('active');
+    document.getElementById('gatekeeperScreen').classList.remove('active');
+    document.getElementById('userSetupScreen').classList.remove('active');
+    document.getElementById('loginScreen').style.display = 'flex';
+    document.getElementById('messages').innerHTML = '<div style="text-align:center;color:#666;padding:40px 0;">Connecting...</div>';
+    document.getElementById('usersList').innerHTML = '<div class="user-item">Loading...</div>';
+    document.getElementById('loginUsername').value = '';
+    document.getElementById('loginPassword').value = '';
+    document.getElementById('gatekeeperUsername').value = '';
+    document.getElementById('gatekeeperPassword').value = '';
+    document.getElementById('userDisplayName').value = '';
+    reconnectAttempts = 0;
+    currentUser = null;
+    gatekeeperData = null;
 }
 
+// ========== ADMIN FUNCTIONS ==========
 async function loadAdminData() {
     try {
         const response = await fetch('/admin/data');
         const data = await response.json();
         
-        // Update stats
         document.getElementById('statUsers').textContent = data.users.length;
         document.getElementById('statMessages').textContent = data.messages_count;
         document.getElementById('statGroups').textContent = data.groups.length;
         document.getElementById('statOnline').textContent = data.online_count;
         
-        // Update users table
         let usersHtml = '';
         data.users.forEach(u => {
             usersHtml += `<tr>
                 <td>${escapeHtml(u.username)}</td>
-                <td>${u.role}</td>
+                <td>${escapeHtml(u.assigned_group || 'None')}</td>
                 <td>${u.status}</td>
                 <td>
                     ${u.username !== 'Mpc' ? `<button class="action-btn" onclick="deleteUser('${u.username}')">Delete</button>` : '⭐ Admin'}
@@ -968,7 +1126,6 @@ async function loadAdminData() {
         });
         document.getElementById('usersTableBody').innerHTML = usersHtml;
         
-        // Update groups table
         let groupsHtml = '';
         data.groups.forEach(g => {
             groupsHtml += `<tr>
@@ -979,7 +1136,6 @@ async function loadAdminData() {
         });
         document.getElementById('groupsTableBody').innerHTML = groupsHtml;
         
-        // Update messages table
         let messagesHtml = '';
         data.messages.forEach(m => {
             let time = new Date(m.created_at * 1000).toLocaleString();
@@ -992,7 +1148,6 @@ async function loadAdminData() {
         });
         document.getElementById('messagesTableBody').innerHTML = messagesHtml;
         
-        // Update logs table
         let logsHtml = '';
         data.logs.forEach(l => {
             let time = new Date(l.time * 1000).toLocaleString();
@@ -1010,33 +1165,36 @@ async function loadAdminData() {
     }
 }
 
-async function addUser() {
+async function createUser() {
     const username = document.getElementById('newUsername').value.trim();
     const password = document.getElementById('newPassword').value.trim();
-    const role = document.getElementById('newRole').value;
+    const group_name = document.getElementById('newGroupName').value.trim();
+    const group_password = document.getElementById('newGroupPassword').value.trim();
     
-    if(!username || !password) {
-        alert('Please enter username and password');
+    if(!username || !password || !group_name || !group_password) {
+        alert('Please fill all fields');
         return;
     }
     
     try {
-        const response = await fetch('/admin/add_user', {
+        const response = await fetch('/admin/create_user', {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({username, password, role})
+            body: JSON.stringify({username, password, group_name, group_password})
         });
         const data = await response.json();
         if(data.success) {
-            alert('User added successfully!');
+            alert('User created successfully!');
             document.getElementById('newUsername').value = '';
             document.getElementById('newPassword').value = '';
+            document.getElementById('newGroupName').value = '';
+            document.getElementById('newGroupPassword').value = '';
             loadAdminData();
         } else {
-            alert(data.message || 'Failed to add user');
+            alert(data.message || 'Failed to create user');
         }
     } catch(e) {
-        alert('Error adding user');
+        alert('Error creating user');
     }
 }
 
@@ -1057,35 +1215,6 @@ async function deleteUser(username) {
         }
     } catch(e) {
         alert('Error deleting user');
-    }
-}
-
-async function addGroup() {
-    const name = document.getElementById('newGroupName').value.trim();
-    const password = document.getElementById('newGroupPassword').value.trim();
-    
-    if(!name || !password) {
-        alert('Please enter group name and password');
-        return;
-    }
-    
-    try {
-        const response = await fetch('/admin/add_group', {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({name, password})
-        });
-        const data = await response.json();
-        if(data.success) {
-            alert('Group added successfully!');
-            document.getElementById('newGroupName').value = '';
-            document.getElementById('newGroupPassword').value = '';
-            loadAdminData();
-        } else {
-            alert(data.message || 'Failed to add group');
-        }
-    } catch(e) {
-        alert('Error adding group');
     }
 }
 
@@ -1137,8 +1266,11 @@ document.addEventListener('keydown', function(e) {
     if(e.key === 'Enter' && document.activeElement === document.getElementById('loginPassword')) {
         login();
     }
-    if(e.key === 'Escape' && document.getElementById('adminPanel').classList.contains('active')) {
-        closeAdmin();
+    if(e.key === 'Enter' && document.activeElement === document.getElementById('gatekeeperPassword')) {
+        gatekeeperLogin();
+    }
+    if(e.key === 'Enter' && document.activeElement === document.getElementById('userDisplayName')) {
+        enterChat();
     }
 });
 
@@ -1146,7 +1278,6 @@ document.addEventListener('keydown', function(e) {
 console.log('🔐 ABAVANDIMWE Secure Messaging System');
 console.log('📱 Developed by Mugisha Pc');
 console.log('👤 Admin: Mpc / 08800Mpc!');
-console.log('💡 Enter credentials and click Login');
 </script>
 </body>
 </html>'''
@@ -1166,6 +1297,35 @@ async def login(login_data: LoginRequest):
         content={"success": False, "message": "Invalid credentials"}
     )
 
+@app.post("/gatekeeper")
+async def gatekeeper(login_data: LoginRequest):
+    user = authenticate_user(login_data.username, login_data.password)
+    if not user:
+        return JSONResponse(
+            status_code=401,
+            content={"success": False, "message": "Invalid credentials"}
+        )
+    
+    if user["role"] == "admin":
+        return JSONResponse(
+            status_code=403,
+            content={"success": False, "message": "Admin cannot access chat"}
+        )
+    
+    assigned = get_user_assigned_group(login_data.username)
+    if not assigned:
+        return JSONResponse(
+            status_code=404,
+            content={"success": False, "message": "No group assigned to this user"}
+        )
+    
+    return {
+        "success": True,
+        "username": login_data.username,
+        "assigned_group": assigned['group'],
+        "assigned_group_password": assigned['password']
+    }
+
 @app.get("/admin/data")
 async def admin_data():
     users = get_all_users()
@@ -1183,10 +1343,10 @@ async def admin_data():
         "logs": logs
     }
 
-@app.post("/admin/add_user")
-async def admin_add_user(data: AddUserRequest):
-    if create_user(data.username, data.password, data.role):
-        log_admin_action("Mpc", "add_user", data.username, f"Role: {data.role}")
+@app.post("/admin/create_user")
+async def admin_create_user(data: CreateUserRequest):
+    if create_user_with_group(data.username, data.password, data.group_name, data.group_password):
+        log_admin_action("Mpc", "create_user", data.username, f"Group: {data.group_name}")
         return {"success": True}
     return {"success": False, "message": "Username already exists"}
 
@@ -1196,15 +1356,6 @@ async def admin_delete_user(data: DeleteUserRequest):
         log_admin_action("Mpc", "delete_user", data.username)
         return {"success": True}
     return {"success": False, "message": "Cannot delete admin or user not found"}
-
-@app.post("/admin/add_group")
-async def admin_add_group(data: AddGroupRequest):
-    salt = generate_salt()
-    pwd_hash = hash_password(data.password, salt)
-    if create_group(data.name, salt, pwd_hash, "Mpc"):
-        log_admin_action("Mpc", "add_group", data.name)
-        return {"success": True}
-    return {"success": False, "message": "Group already exists"}
 
 @app.post("/admin/delete_group")
 async def admin_delete_group(data: DeleteGroupRequest):
@@ -1249,12 +1400,7 @@ async def ws_endpoint(websocket: WebSocket):
                 group_name = data.get('group')
                 password = data.get('password')
 
-                user = authenticate_user(username, password)
-                if not user:
-                    await websocket.send_json({'type': 'error', 'message': 'Invalid user credentials'})
-                    await websocket.close()
-                    return
-
+                # Verify group password
                 group_info = get_group_info(group_name)
                 if group_info:
                     if not verify_password(password, group_info['salt'], group_info['password_hash']):
@@ -1265,7 +1411,7 @@ async def ws_endpoint(websocket: WebSocket):
                 else:
                     salt = generate_salt()
                     pwd_hash = hash_password(password, salt)
-                    create_group(group_name, salt, pwd_hash, username)
+                    create_group(group_name, salt, pwd_hash, "system")
 
                 await manager.add(group_name, username, websocket)
                 set_user_status(username, 'online', group_name)
@@ -1345,9 +1491,11 @@ if __name__ == "__main__":
 """)
     print(f"[✓] Server running on port {port}")
     print(f"[✓] Admin: Mpc / 08800Mpc!")
-    print(f"[✓] Default Group: Main / Abavandimwe2026")
     print(f"[✓] Messages expire after 24 hours")
     print(f"[✓] Open: http://localhost:{port}")
-    print(f"[✓] Admin Panel: Click ⚙️ Admin button after login")
-    print(f"\n💡 Login with: Mpc / 08800Mpc!")
+    print(f"\n📋 Flow:")
+    print(f"   1. Admin logs in → Dashboard only")
+    print(f"   2. Admin creates users with group credentials")
+    print(f"   3. User logs in → Gatekeeper verification")
+    print(f"   4. User enters display name → Chat access")
     uvicorn.run(app, host="0.0.0.0", port=port)
