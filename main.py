@@ -4,10 +4,9 @@ Author: Mugisha Pc
 Messages stay for 24 hours then auto-delete
 """
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request, Form
-from fastapi.responses import HTMLResponse, RedirectResponse
-from fastapi.templating import Jinja2Templates
-from fastapi.staticfiles import StaticFiles
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request
+from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.middleware.cors import CORSMiddleware
 import asyncio
 import json
 import sqlite3
@@ -20,11 +19,44 @@ import time
 from datetime import datetime
 from typing import Dict
 from collections import defaultdict
+from pydantic import BaseModel
 
 app = FastAPI()
 
+# Enable CORS
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 # ========== DATABASE ==========
 DB_PATH = "abavandimwe.db"
+
+# ========== PYDANTIC MODELS ==========
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+
+class AddUserRequest(BaseModel):
+    username: str
+    password: str
+    role: str = "user"
+
+class DeleteUserRequest(BaseModel):
+    username: str
+
+class AddGroupRequest(BaseModel):
+    name: str
+    password: str
+
+class DeleteGroupRequest(BaseModel):
+    name: str
+
+class DeleteMessageRequest(BaseModel):
+    id: int
 
 # ========== CRYPTO FUNCTIONS ==========
 def generate_salt():
@@ -475,8 +507,8 @@ HTML = '''<!DOCTYPE html>
             <div class="sub">Secure Messaging System</div>
             <div style="text-align:center;"><span class="admin-badge">🔐 Secure Access</span></div>
             
-            <input type="text" id="loginUsername" placeholder="Username" value="Mpc">
-            <input type="password" id="loginPassword" placeholder="Password" value="08800Mpc!">
+            <input type="text" id="loginUsername" placeholder="Username">
+            <input type="password" id="loginPassword" placeholder="Password">
             
             <button onclick="login()">▶ Login</button>
             
@@ -630,11 +662,18 @@ async function login() {
     try {
         const response = await fetch('/login', {
             method: 'POST',
-            headers: {'Content-Type': 'application/json'},
+            headers: {
+                'Content-Type': 'application/json'
+            },
             body: JSON.stringify({username, password})
         });
         
+        if (!response.ok) {
+            throw new Error('Network response was not ok');
+        }
+        
         const data = await response.json();
+        
         if(data.success) {
             currentUser = {username: data.username, role: data.role};
             document.getElementById('loginScreen').style.display = 'none';
@@ -648,9 +687,10 @@ async function login() {
             
             connectToGroup(data.username, DEFAULT_GROUP, DEFAULT_PASSWORD);
         } else {
-            showError('Invalid credentials. Request access via WhatsApp if you need an account.');
+            showError(data.message || 'Invalid credentials. Request access via WhatsApp if you need an account.');
         }
     } catch(e) {
+        console.error('Login error:', e);
         showError('Connection error. Please try again.');
     }
 }
@@ -684,7 +724,10 @@ function connectToGroup(username, group, password) {
     document.getElementById('groupTitle').innerHTML = '# ' + group;
     window.groupPassword = password;
     
-    let url = 'wss://' + window.location.host + '/ws';
+    // Determine WebSocket protocol
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const url = protocol + '//' + window.location.host + '/ws';
+    
     ws = new WebSocket(url);
     
     ws.onopen = function() {
@@ -699,38 +742,43 @@ function connectToGroup(username, group, password) {
     };
     
     ws.onmessage = async function(e) {
-        let d = JSON.parse(e.data);
-        if(d.type === 'error') {
-            showError(d.message);
-            ws.close();
-            return;
-        }
-        if(d.type === 'ready') {
-            groupSalt = d.salt;
-            addSystemMessage('🔐 Connected - Messages last 24 hours');
-        } else if(d.type === 'message' || d.type === 'history') {
-            try {
-                let dec = await decrypt(d.ciphertext, password, d.salt);
-                addMessage(d.sender, dec, d.sender === username);
-            } catch(e) {
-                addMessage(d.sender, '🔒 Encrypted', d.sender === username);
+        try {
+            let d = JSON.parse(e.data);
+            if(d.type === 'error') {
+                showError(d.message);
+                ws.close();
+                return;
             }
-        } else if(d.type === 'users') {
-            updateUsers(d.users);
-        } else if(d.type === 'user_joined') {
-            addSystemMessage('👤 ' + d.user + ' joined');
-        } else if(d.type === 'user_left') {
-            addSystemMessage('👋 ' + d.user + ' left');
-        } else if(d.type === 'typing') {
-            document.getElementById('typingIndicator').innerHTML = '✏️ ' + d.user + ' typing...';
-        } else if(d.type === 'stop_typing') {
-            document.getElementById('typingIndicator').innerHTML = '';
-        } else if(d.type === 'pong') {
-            updateStatus(true);
+            if(d.type === 'ready') {
+                groupSalt = d.salt;
+                addSystemMessage('🔐 Connected - Messages last 24 hours');
+            } else if(d.type === 'message' || d.type === 'history') {
+                try {
+                    let dec = await decrypt(d.ciphertext, password, d.salt);
+                    addMessage(d.sender, dec, d.sender === username);
+                } catch(e) {
+                    addMessage(d.sender, '🔒 Encrypted', d.sender === username);
+                }
+            } else if(d.type === 'users') {
+                updateUsers(d.users);
+            } else if(d.type === 'user_joined') {
+                addSystemMessage('👤 ' + d.user + ' joined');
+            } else if(d.type === 'user_left') {
+                addSystemMessage('👋 ' + d.user + ' left');
+            } else if(d.type === 'typing') {
+                document.getElementById('typingIndicator').innerHTML = '✏️ ' + d.user + ' typing...';
+            } else if(d.type === 'stop_typing') {
+                document.getElementById('typingIndicator').innerHTML = '';
+            } else if(d.type === 'pong') {
+                updateStatus(true);
+            }
+        } catch(e) {
+            console.error('Error processing message:', e);
         }
     };
     
-    ws.onerror = function() {
+    ws.onerror = function(e) {
+        console.error('WebSocket error:', e);
         showError('Connection error');
         updateStatus(false);
     };
@@ -811,8 +859,8 @@ function logout() {
     document.getElementById('loginScreen').style.display = 'flex';
     document.getElementById('messages').innerHTML = '<div style="text-align:center;color:#666;padding:40px 0;">Connecting...</div>';
     document.getElementById('usersList').innerHTML = '<div class="user-item">Loading...</div>';
-    document.getElementById('loginUsername').value = 'Mpc';
-    document.getElementById('loginPassword').value = '08800Mpc!';
+    document.getElementById('loginUsername').value = '';
+    document.getElementById('loginPassword').value = '';
     document.getElementById('adminBtn').style.display = 'none';
     reconnectAttempts = 0;
     currentUser = null;
@@ -883,7 +931,7 @@ async function sendMessage() {
 
 // ========== ADMIN PANEL ==========
 async function openAdmin() {
-    if(currentUser.role !== 'admin') {
+    if(!currentUser || currentUser.role !== 'admin') {
         alert('Admin access required');
         return;
     }
@@ -1094,12 +1142,11 @@ document.addEventListener('keydown', function(e) {
     }
 });
 
-// ========== AUTO-LOGIN PREVIEW ==========
-// Pre-fill admin credentials for quick access
+// ========== INIT ==========
 console.log('🔐 ABAVANDIMWE Secure Messaging System');
 console.log('📱 Developed by Mugisha Pc');
 console.log('👤 Admin: Mpc / 08800Mpc!');
-console.log('💡 Click Login or press Enter to access the chat');
+console.log('💡 Enter credentials and click Login');
 </script>
 </body>
 </html>'''
@@ -1110,11 +1157,14 @@ async def root():
     return HTMLResponse(HTML)
 
 @app.post("/login")
-async def login(username: str, password: str):
-    user = authenticate_user(username, password)
+async def login(login_data: LoginRequest):
+    user = authenticate_user(login_data.username, login_data.password)
     if user:
         return {"success": True, "username": user["username"], "role": user["role"]}
-    return {"success": False, "message": "Invalid credentials"}
+    return JSONResponse(
+        status_code=401,
+        content={"success": False, "message": "Invalid credentials"}
+    )
 
 @app.get("/admin/data")
 async def admin_data():
@@ -1134,39 +1184,39 @@ async def admin_data():
     }
 
 @app.post("/admin/add_user")
-async def admin_add_user(username: str, password: str, role: str = "user"):
-    if create_user(username, password, role):
-        log_admin_action("Mpc", "add_user", username, f"Role: {role}")
+async def admin_add_user(data: AddUserRequest):
+    if create_user(data.username, data.password, data.role):
+        log_admin_action("Mpc", "add_user", data.username, f"Role: {data.role}")
         return {"success": True}
     return {"success": False, "message": "Username already exists"}
 
 @app.post("/admin/delete_user")
-async def admin_delete_user(username: str):
-    if delete_user(username):
-        log_admin_action("Mpc", "delete_user", username)
+async def admin_delete_user(data: DeleteUserRequest):
+    if delete_user(data.username):
+        log_admin_action("Mpc", "delete_user", data.username)
         return {"success": True}
     return {"success": False, "message": "Cannot delete admin or user not found"}
 
 @app.post("/admin/add_group")
-async def admin_add_group(name: str, password: str):
+async def admin_add_group(data: AddGroupRequest):
     salt = generate_salt()
-    pwd_hash = hash_password(password, salt)
-    if create_group(name, salt, pwd_hash, "Mpc"):
-        log_admin_action("Mpc", "add_group", name)
+    pwd_hash = hash_password(data.password, salt)
+    if create_group(data.name, salt, pwd_hash, "Mpc"):
+        log_admin_action("Mpc", "add_group", data.name)
         return {"success": True}
     return {"success": False, "message": "Group already exists"}
 
 @app.post("/admin/delete_group")
-async def admin_delete_group(name: str):
-    if delete_group(name):
-        log_admin_action("Mpc", "delete_group", name)
+async def admin_delete_group(data: DeleteGroupRequest):
+    if delete_group(data.name):
+        log_admin_action("Mpc", "delete_group", data.name)
         return {"success": True}
     return {"success": False, "message": "Group not found"}
 
 @app.post("/admin/delete_message")
-async def admin_delete_message(id: int):
-    if delete_message(id):
-        log_admin_action("Mpc", "delete_message", str(id))
+async def admin_delete_message(data: DeleteMessageRequest):
+    if delete_message(data.id):
+        log_admin_action("Mpc", "delete_message", str(data.id))
         return {"success": True}
     return {"success": False, "message": "Message not found"}
 
@@ -1299,5 +1349,5 @@ if __name__ == "__main__":
     print(f"[✓] Messages expire after 24 hours")
     print(f"[✓] Open: http://localhost:{port}")
     print(f"[✓] Admin Panel: Click ⚙️ Admin button after login")
-    print(f"\n💡 Quick Login: Just press Enter (credentials pre-filled)")
+    print(f"\n💡 Login with: Mpc / 08800Mpc!")
     uvicorn.run(app, host="0.0.0.0", port=port)
