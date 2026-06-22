@@ -543,10 +543,10 @@ HTML = '''<!DOCTYPE html>
             <div class="sub">Secure Messaging System</div>
             <div style="text-align:center;"><span class="admin-badge">🔐 Gatekeeper</span></div>
             
-            <input type="text" id="loginUsername" placeholder="Username">
-            <input type="password" id="loginPassword" placeholder="Password">
+            <input type="text" id="loginUsername" placeholder="Username" autocomplete="username">
+            <input type="password" id="loginPassword" placeholder="Password" autocomplete="current-password">
             
-            <button onclick="login()">▶ Login</button>
+            <button id="loginBtn">▶ Login</button>
             
             <div class="separator"><span>OR</span></div>
             
@@ -653,7 +653,7 @@ HTML = '''<!DOCTYPE html>
         <input type="text" id="gatekeeperUsername" placeholder="Username" readonly>
         <input type="password" id="gatekeeperPassword" placeholder="Password">
         
-        <button onclick="gatekeeperLogin()">▶ Verify</button>
+        <button id="gatekeeperBtn">▶ Verify</button>
         
         <div id="gatekeeperError" class="error-message"></div>
         
@@ -673,7 +673,7 @@ HTML = '''<!DOCTYPE html>
         <input type="text" id="userGroupName" placeholder="Group Name" readonly>
         <input type="password" id="userGroupPassword" placeholder="Group Password" readonly>
         
-        <button onclick="enterChat()">▶ Enter Chat</button>
+        <button id="enterChatBtn">▶ Enter Chat</button>
         
         <div id="setupError" class="error-message"></div>
         <div id="setupSuccess" class="success-message"></div>
@@ -724,6 +724,24 @@ let currentUser = null;
 let gatekeeperData = null;
 
 // ========== LOGIN ==========
+document.addEventListener('DOMContentLoaded', function() {
+    // Login button
+    document.getElementById('loginBtn').addEventListener('click', login);
+    document.getElementById('gatekeeperBtn').addEventListener('click', gatekeeperLogin);
+    document.getElementById('enterChatBtn').addEventListener('click', enterChat);
+    
+    // Enter key support
+    document.getElementById('loginPassword').addEventListener('keypress', function(e) {
+        if(e.key === 'Enter') login();
+    });
+    document.getElementById('gatekeeperPassword').addEventListener('keypress', function(e) {
+        if(e.key === 'Enter') gatekeeperLogin();
+    });
+    document.getElementById('userDisplayName').addEventListener('keypress', function(e) {
+        if(e.key === 'Enter') enterChat();
+    });
+});
+
 async function login() {
     const username = document.getElementById('loginUsername').value.trim();
     const password = document.getElementById('loginPassword').value;
@@ -758,15 +776,16 @@ async function login() {
                 document.getElementById('gatekeeperUsername').value = data.username;
                 document.getElementById('gatekeeperPassword').value = '';
                 
-                // Check if user has a display name already (has logged in before)
+                // Check if user has a display name already
                 if(data.display_name) {
-                    document.getElementById('gatekeeperSuccess')?.remove();
-                    const success = document.createElement('div');
-                    success.id = 'gatekeeperSuccess';
-                    success.className = 'success-message';
-                    success.textContent = '✅ Welcome back ' + data.display_name + '! Enter your password to continue.';
-                    document.querySelector('.gatekeeper-card').appendChild(success);
-                    success.style.display = 'block';
+                    const successDiv = document.createElement('div');
+                    successDiv.id = 'gatekeeperSuccess';
+                    successDiv.className = 'success-message';
+                    successDiv.textContent = '✅ Welcome back ' + data.display_name + '! Enter your password to continue.';
+                    const existing = document.getElementById('gatekeeperSuccess');
+                    if(existing) existing.remove();
+                    document.querySelector('.gatekeeper-card').appendChild(successDiv);
+                    successDiv.style.display = 'block';
                 }
             }
         } else {
@@ -1125,7 +1144,8 @@ function logout() {
     document.getElementById('userDisplayName').value = '';
     document.getElementById('userGroupName').value = '';
     document.getElementById('userGroupPassword').value = '';
-    document.getElementById('gatekeeperSuccess')?.remove();
+    const existing = document.getElementById('gatekeeperSuccess');
+    if(existing) existing.remove();
     document.getElementById('setupSuccess').style.display = 'none';
     reconnectAttempts = 0;
     currentUser = null;
@@ -1215,7 +1235,7 @@ async function createUser() {
         });
         const data = await response.json();
         if(data.success) {
-            alert('✅ User created successfully!\n\nUsername: ' + username + '\nPassword: ' + password + '\nGroup: ' + group_name + '\nGroup Password: ' + group_password);
+            alert('✅ User created successfully!\\n\\nUsername: ' + username + '\\nPassword: ' + password + '\\nGroup: ' + group_name + '\\nGroup Password: ' + group_password);
             document.getElementById('newUsername').value = '';
             document.getElementById('newPassword').value = '';
             document.getElementById('newGroupName').value = '';
@@ -1288,22 +1308,6 @@ async function deleteMessage(id) {
         alert('Error deleting message');
     }
 }
-
-// ========== KEYBOARD SHORTCUTS ==========
-document.addEventListener('keydown', function(e) {
-    if(e.key === 'Enter' && document.activeElement === document.getElementById('loginUsername')) {
-        document.getElementById('loginPassword').focus();
-    }
-    if(e.key === 'Enter' && document.activeElement === document.getElementById('loginPassword')) {
-        login();
-    }
-    if(e.key === 'Enter' && document.activeElement === document.getElementById('gatekeeperPassword')) {
-        gatekeeperLogin();
-    }
-    if(e.key === 'Enter' && document.activeElement === document.getElementById('userDisplayName')) {
-        enterChat();
-    }
-});
 
 // ========== INIT ==========
 console.log('🔐 ABAVANDIMWE Secure Messaging System');
