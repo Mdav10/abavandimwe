@@ -81,6 +81,7 @@ def init_db():
             role TEXT DEFAULT 'user',
             assigned_group TEXT,
             assigned_group_password TEXT,
+            display_name TEXT,
             status TEXT,
             current_group TEXT,
             last_seen REAL,
@@ -184,13 +185,19 @@ def start_cleanup():
 def authenticate_user(username, password):
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    c.execute("SELECT password_hash, salt, role FROM users WHERE username=?", (username,))
+    c.execute("SELECT password_hash, salt, role, assigned_group, assigned_group_password, display_name FROM users WHERE username=?", (username,))
     row = c.fetchone()
     conn.close()
     if row:
-        stored_hash, salt, role = row
+        stored_hash, salt, role, assigned_group, assigned_group_password, display_name = row
         if verify_password(password, salt, stored_hash):
-            return {"username": username, "role": role}
+            return {
+                "username": username, 
+                "role": role,
+                "assigned_group": assigned_group,
+                "assigned_group_password": assigned_group_password,
+                "display_name": display_name
+            }
     return None
 
 def create_user_with_group(username, password, group_name, group_password):
@@ -220,6 +227,13 @@ def create_user_with_group(username, password, group_name, group_password):
         conn.close()
         return False
 
+def save_user_display_name(username, display_name):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("UPDATE users SET display_name=? WHERE username=?", (display_name, username))
+    conn.commit()
+    conn.close()
+
 def delete_user(username):
     if username == "Mpc":
         return False
@@ -231,21 +245,13 @@ def delete_user(username):
     conn.close()
     return deleted > 0
 
-def get_user_assigned_group(username):
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute("SELECT assigned_group, assigned_group_password FROM users WHERE username=?", (username,))
-    row = c.fetchone()
-    conn.close()
-    return {'group': row[0], 'password': row[1]} if row else None
-
 def get_all_users():
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    c.execute("SELECT username, role, assigned_group, status, current_group, last_seen, created_at FROM users ORDER BY created_at DESC")
+    c.execute("SELECT username, role, assigned_group, display_name, status, current_group, last_seen, created_at FROM users ORDER BY created_at DESC")
     rows = c.fetchall()
     conn.close()
-    return [{'username': r[0], 'role': r[1], 'assigned_group': r[2], 'status': r[3] or 'offline', 'current_group': r[4], 'last_seen': r[5], 'created_at': r[6]} for r in rows]
+    return [{'username': r[0], 'role': r[1], 'assigned_group': r[2], 'display_name': r[3] or r[0], 'status': r[4] or 'offline', 'current_group': r[5], 'last_seen': r[6], 'created_at': r[7]} for r in rows]
 
 def get_user_role(username):
     conn = sqlite3.connect(DB_PATH)
@@ -295,8 +301,8 @@ def delete_message(message_id):
 def set_user_status(username, status, group):
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    c.execute("INSERT OR REPLACE INTO users (username, status, current_group, last_seen) VALUES (?,?,?,?)",
-             (username, status, group, time.time()))
+    c.execute("UPDATE users SET status=?, current_group=?, last_seen=? WHERE username=?",
+             (status, group, time.time(), username))
     conn.commit()
     conn.close()
 
@@ -525,6 +531,7 @@ HTML = '''<!DOCTYPE html>
         .user-setup-card{background:#050508;border:2px solid #0f0;border-radius:24px;padding:32px 24px;width:100%;max-width:420px;}
         .user-setup-card h2{text-align:center;margin-bottom:8px;font-size:24px;}
         .user-setup-card .sub{text-align:center;margin-bottom:24px;font-size:11px;color:#666;}
+        .user-setup-card input[readonly]{opacity:0.7;cursor:not-allowed;}
     </style>
 </head>
 <body>
@@ -586,6 +593,9 @@ HTML = '''<!DOCTYPE html>
                 <input type="text" id="newGroupPassword" placeholder="Group Password" style="width:100%;">
                 <button onclick="createUser()" class="action-btn-green">➕ Create User</button>
             </div>
+            <div style="font-size:10px;color:#666;margin-top:8px;">
+                💡 Users will use these credentials to login and access their assigned group
+            </div>
         </div>
         
         <!-- Users Management -->
@@ -593,7 +603,7 @@ HTML = '''<!DOCTYPE html>
             <h3>📋 Users</h3>
             <div class="admin-table-wrap">
                 <table>
-                    <thead><tr><th>Username</th><th>Group</th><th>Status</th><th>Action</th></tr></thead>
+                    <thead><tr><th>Username</th><th>Group</th><th>Display Name</th><th>Status</th><th>Action</th></tr></thead>
                     <tbody id="usersTableBody"></tbody>
                 </table>
             </div>
@@ -634,14 +644,14 @@ HTML = '''<!DOCTYPE html>
     </div>
 </div>
 
-<!-- GATEKEEPER SCREEN (User Setup - Step 1) -->
+<!-- GATEKEEPER SCREEN -->
 <div id="gatekeeperScreen" class="gatekeeper-container">
     <div class="gatekeeper-card">
         <h2>🔐 Gatekeeper</h2>
-        <div class="sub">Enter your assigned credentials</div>
+        <div class="sub">Verify your credentials to access your group</div>
         
-        <input type="text" id="gatekeeperUsername" placeholder="Your Username">
-        <input type="password" id="gatekeeperPassword" placeholder="Your Password">
+        <input type="text" id="gatekeeperUsername" placeholder="Username" readonly>
+        <input type="password" id="gatekeeperPassword" placeholder="Password">
         
         <button onclick="gatekeeperLogin()">▶ Verify</button>
         
@@ -653,22 +663,23 @@ HTML = '''<!DOCTYPE html>
     </div>
 </div>
 
-<!-- USER SETUP SCREEN (Step 2) -->
+<!-- USER SETUP SCREEN -->
 <div id="userSetupScreen" class="user-setup-container">
     <div class="user-setup-card">
         <h2>👤 Setup Profile</h2>
-        <div class="sub">Enter your chat details</div>
+        <div class="sub">Enter your display name to start chatting</div>
         
-        <input type="text" id="userDisplayName" placeholder="Your Display Name">
+        <input type="text" id="userDisplayName" placeholder="Your Display Name (e.g., John Doe)">
         <input type="text" id="userGroupName" placeholder="Group Name" readonly>
         <input type="password" id="userGroupPassword" placeholder="Group Password" readonly>
         
         <button onclick="enterChat()">▶ Enter Chat</button>
         
         <div id="setupError" class="error-message"></div>
+        <div id="setupSuccess" class="success-message"></div>
         
         <div class="login-footer" style="margin-top:20px;padding-top:16px;border-top:1px solid #1a1a2e;">
-            🔐 Group credentials provided by admin
+            🔐 You'll be able to see messages from others in your group
         </div>
     </div>
 </div>
@@ -741,11 +752,22 @@ async function login() {
                 document.getElementById('adminUsername').textContent = data.username;
                 loadAdminData();
             } else {
-                // User goes to gatekeeper
+                // User goes to gatekeeper with pre-filled username
                 document.getElementById('loginScreen').style.display = 'none';
                 document.getElementById('gatekeeperScreen').classList.add('active');
                 document.getElementById('gatekeeperUsername').value = data.username;
-                showGatekeeperSuccess('✅ Valid credentials. Please verify to continue.');
+                document.getElementById('gatekeeperPassword').value = '';
+                
+                // Check if user has a display name already (has logged in before)
+                if(data.display_name) {
+                    document.getElementById('gatekeeperSuccess')?.remove();
+                    const success = document.createElement('div');
+                    success.id = 'gatekeeperSuccess';
+                    success.className = 'success-message';
+                    success.textContent = '✅ Welcome back ' + data.display_name + '! Enter your password to continue.';
+                    document.querySelector('.gatekeeper-card').appendChild(success);
+                    success.style.display = 'block';
+                }
             }
         } else {
             showError(data.message || 'Invalid credentials. Request access via WhatsApp if you need an account.');
@@ -762,7 +784,7 @@ async function gatekeeperLogin() {
     const password = document.getElementById('gatekeeperPassword').value;
     
     if(!username || !password) {
-        showGatekeeperError('Please enter username and password');
+        showGatekeeperError('Please enter your password');
         return;
     }
     
@@ -784,7 +806,14 @@ async function gatekeeperLogin() {
             document.getElementById('userGroupName').value = data.assigned_group;
             document.getElementById('userGroupPassword').value = data.assigned_group_password;
             
-            showSetupSuccess('✅ Verified! Enter your display name to start chatting.');
+            // If user has a display name, pre-fill it
+            if(data.display_name) {
+                document.getElementById('userDisplayName').value = data.display_name;
+                showSetupSuccess('✅ Welcome back! Your display name is saved.');
+            } else {
+                document.getElementById('userDisplayName').value = '';
+                showSetupSuccess('✅ Verified! Enter your display name to start chatting.');
+            }
         } else {
             showGatekeeperError(data.message || 'Invalid credentials');
         }
@@ -795,7 +824,7 @@ async function gatekeeperLogin() {
 }
 
 // ========== ENTER CHAT ==========
-function enterChat() {
+async function enterChat() {
     const displayName = document.getElementById('userDisplayName').value.trim();
     const groupName = document.getElementById('userGroupName').value.trim();
     const groupPassword = document.getElementById('userGroupPassword').value.trim();
@@ -808,6 +837,20 @@ function enterChat() {
     if(!groupName || !groupPassword) {
         showSetupError('Group credentials missing. Please contact admin.');
         return;
+    }
+    
+    // Save display name to database
+    try {
+        await fetch('/save_display_name', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+                username: gatekeeperData.username,
+                display_name: displayName
+            })
+        });
+    } catch(e) {
+        console.error('Failed to save display name:', e);
     }
     
     // Store for chat
@@ -1048,36 +1091,19 @@ function showGatekeeperError(msg) {
     setTimeout(() => err.style.display = 'none', 5000);
 }
 
-function showGatekeeperSuccess(msg) {
-    let success = document.getElementById('gatekeeperSuccess');
-    if(!success) {
-        success = document.createElement('div');
-        success.id = 'gatekeeperSuccess';
-        success.className = 'success-message';
-        document.querySelector('.gatekeeper-card').appendChild(success);
-    }
-    success.textContent = msg;
-    success.style.display = 'block';
-    setTimeout(() => success.style.display = 'none', 5000);
-}
-
 function showSetupError(msg) {
     let err = document.getElementById('setupError');
     err.textContent = msg;
     err.style.display = 'block';
+    document.getElementById('setupSuccess').style.display = 'none';
     setTimeout(() => err.style.display = 'none', 5000);
 }
 
 function showSetupSuccess(msg) {
     let success = document.getElementById('setupSuccess');
-    if(!success) {
-        success = document.createElement('div');
-        success.id = 'setupSuccess';
-        success.className = 'success-message';
-        document.querySelector('.user-setup-card').appendChild(success);
-    }
     success.textContent = msg;
     success.style.display = 'block';
+    document.getElementById('setupError').style.display = 'none';
     setTimeout(() => success.style.display = 'none', 5000);
 }
 
@@ -1097,6 +1123,10 @@ function logout() {
     document.getElementById('gatekeeperUsername').value = '';
     document.getElementById('gatekeeperPassword').value = '';
     document.getElementById('userDisplayName').value = '';
+    document.getElementById('userGroupName').value = '';
+    document.getElementById('userGroupPassword').value = '';
+    document.getElementById('gatekeeperSuccess')?.remove();
+    document.getElementById('setupSuccess').style.display = 'none';
     reconnectAttempts = 0;
     currentUser = null;
     gatekeeperData = null;
@@ -1118,6 +1148,7 @@ async function loadAdminData() {
             usersHtml += `<tr>
                 <td>${escapeHtml(u.username)}</td>
                 <td>${escapeHtml(u.assigned_group || 'None')}</td>
+                <td>${escapeHtml(u.display_name || u.username)}</td>
                 <td>${u.status}</td>
                 <td>
                     ${u.username !== 'Mpc' ? `<button class="action-btn" onclick="deleteUser('${u.username}')">Delete</button>` : '⭐ Admin'}
@@ -1184,7 +1215,7 @@ async function createUser() {
         });
         const data = await response.json();
         if(data.success) {
-            alert('User created successfully!');
+            alert('✅ User created successfully!\n\nUsername: ' + username + '\nPassword: ' + password + '\nGroup: ' + group_name + '\nGroup Password: ' + group_password);
             document.getElementById('newUsername').value = '';
             document.getElementById('newPassword').value = '';
             document.getElementById('newGroupName').value = '';
@@ -1278,6 +1309,7 @@ document.addEventListener('keydown', function(e) {
 console.log('🔐 ABAVANDIMWE Secure Messaging System');
 console.log('📱 Developed by Mugisha Pc');
 console.log('👤 Admin: Mpc / 08800Mpc!');
+console.log('💡 Users: Login with credentials from admin');
 </script>
 </body>
 </html>'''
@@ -1291,7 +1323,12 @@ async def root():
 async def login(login_data: LoginRequest):
     user = authenticate_user(login_data.username, login_data.password)
     if user:
-        return {"success": True, "username": user["username"], "role": user["role"]}
+        return {
+            "success": True, 
+            "username": user["username"], 
+            "role": user["role"],
+            "display_name": user.get("display_name")
+        }
     return JSONResponse(
         status_code=401,
         content={"success": False, "message": "Invalid credentials"}
@@ -1312,8 +1349,12 @@ async def gatekeeper(login_data: LoginRequest):
             content={"success": False, "message": "Admin cannot access chat"}
         )
     
-    assigned = get_user_assigned_group(login_data.username)
-    if not assigned:
+    assigned = {
+        'group': user["assigned_group"],
+        'password': user["assigned_group_password"]
+    }
+    
+    if not assigned['group']:
         return JSONResponse(
             status_code=404,
             content={"success": False, "message": "No group assigned to this user"}
@@ -1323,8 +1364,14 @@ async def gatekeeper(login_data: LoginRequest):
         "success": True,
         "username": login_data.username,
         "assigned_group": assigned['group'],
-        "assigned_group_password": assigned['password']
+        "assigned_group_password": assigned['password'],
+        "display_name": user.get("display_name")
     }
+
+@app.post("/save_display_name")
+async def save_display_name(username: str, display_name: str):
+    save_user_display_name(username, display_name)
+    return {"success": True}
 
 @app.get("/admin/data")
 async def admin_data():
@@ -1416,6 +1463,7 @@ async def ws_endpoint(websocket: WebSocket):
                 await manager.add(group_name, username, websocket)
                 set_user_status(username, 'online', group_name)
 
+                # Send message history
                 for msg in get_messages(group_name):
                     await websocket.send_json({
                         'type': 'history',
@@ -1496,6 +1544,8 @@ if __name__ == "__main__":
     print(f"\n📋 Flow:")
     print(f"   1. Admin logs in → Dashboard only")
     print(f"   2. Admin creates users with group credentials")
-    print(f"   3. User logs in → Gatekeeper verification")
-    print(f"   4. User enters display name → Chat access")
+    print(f"   3. User logs in → Gatekeeper (username pre-filled)")
+    print(f"   4. User enters password → Setup screen (group pre-filled)")
+    print(f"   5. User sets display name → Chat access")
+    print(f"   6. Next login: Display name remembered, group pre-filled")
     uvicorn.run(app, host="0.0.0.0", port=port)
