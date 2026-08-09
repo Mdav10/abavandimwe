@@ -4,9 +4,12 @@ Author: Mugisha Pc
 Messages stay for 24 hours then auto-delete
 """
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request, Depends, HTTPException
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi_sessions.backends.implementations import InMemoryBackend
+from fastapi_sessions.session_verifier import SessionVerifier
+from fastapi_sessions.frontends.implementations import SessionCookie, CookieParameters
 import asyncio
 import json
 import sqlite3
@@ -17,23 +20,80 @@ import os
 import threading
 import time
 from datetime import datetime
-from typing import Dict
+from typing import Dict, Optional
 from collections import defaultdict
 from pydantic import BaseModel
+from argon2 import PasswordHasher
+from argon2.exceptions import VerificationError
 
 app = FastAPI()
 
-# Enable CORS
+# ========== SECURITY CONFIG ==========
+ADMIN_USERNAME = "Mpc"
+ADMIN_PASSWORD_HASH = None
+
+# Session configuration
+cookie_params = CookieParameters(
+    max_age=3600 * 24 * 7,  # 7 days
+    path="/",
+    secure=True,
+    httponly=True,
+    samesite="lax"
+)
+
+# ========== CORS CONFIG ==========
+ALLOWED_ORIGINS = [
+    "https://abavandimwe.onrender.com",
+    "https://abavandimwe-production.up.railway.app",
+    "http://localhost:8080",
+    "http://localhost:8000",
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
+# ========== SESSION MANAGEMENT ==========
+class SessionData(BaseModel):
+    username: str
+    role: str
+    assigned_group: Optional[str] = None
+
+class BasicVerifier(SessionVerifier):
+    def __init__(self, identifier: str, backend: InMemoryBackend, auth_http_exception: HTTPException):
+        self.identifier = identifier
+        self.backend = backend
+        self.auth_http_exception = auth_http_exception
+
+    async def verify(self, session_id: str) -> SessionData:
+        if not session_id:
+            raise self.auth_http_exception
+        session = await self.backend.read(session_id)
+        if not session:
+            raise self.auth_http_exception
+        return SessionData(**session)
+
+backend = InMemoryBackend[SessionData]()
+verifier = BasicVerifier(
+    identifier="abavandimwe_session",
+    backend=backend,
+    auth_http_exception=HTTPException(status_code=401, detail="Invalid session")
+)
+cookie = SessionCookie(
+    cookie_name="abavandimwe_session",
+    identifier="abavandimwe_session",
+    auto_error=True,
+    secret_key=secrets.token_urlsafe(32),
+    cookie_params=cookie_params,
+)
+
 # ========== DATABASE ==========
 DB_PATH = "abavandimwe.db"
+ph = PasswordHasher()
 
 # ========== PYDANTIC MODELS ==========
 class LoginRequest(BaseModel):
@@ -55,6 +115,10 @@ class DeleteGroupRequest(BaseModel):
 class DeleteMessageRequest(BaseModel):
     id: int
 
+class SaveDisplayNameRequest(BaseModel):
+    username: str
+    display_name: str
+
 # ========== CRYPTO FUNCTIONS ==========
 def generate_salt():
     return base64.b64encode(secrets.token_bytes(32)).decode()
@@ -62,17 +126,40 @@ def generate_salt():
 def derive_key(password, salt):
     return hashlib.pbkdf2_hmac('sha256', password.encode(), salt.encode(), 100000, 32)
 
-def hash_password(password, salt):
-    return base64.b64encode(derive_key(password, salt)).decode()
+def hash_password_argon2(password):
+    return ph.hash(password)
 
-def verify_password(password, salt, stored_hash):
-    return hash_password(password, salt) == stored_hash
+def verify_password_argon2(password, hashed):
+    try:
+        ph.verify(hashed, password)
+        return True
+    except VerificationError:
+        return False
+
+def encrypt(text, password, salt):
+    key = derive_key(password, salt)
+    text_bytes = text.encode()
+    encrypted = bytearray()
+    for i in range(len(text_bytes)):
+        encrypted.append(text_bytes[i] ^ key[i % len(key)])
+    nonce = secrets.token_bytes(8)
+    result = nonce + encrypted
+    return base64.b64encode(result).decode()
+
+def decrypt(encrypted, password, salt):
+    key = derive_key(password, salt)
+    data = base64.b64decode(encrypted)
+    ciphertext = data[8:]
+    decrypted = bytearray()
+    for i in range(len(ciphertext)):
+        decrypted.append(ciphertext[i] ^ key[i % len(key)])
+    return decrypted.decode()
 
 # ========== DATABASE INIT ==========
 def init_db():
+    global ADMIN_PASSWORD_HASH
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    # Users table with role and group info
     c.execute('''
         CREATE TABLE IF NOT EXISTS users (
             username TEXT PRIMARY KEY,
@@ -80,12 +167,13 @@ def init_db():
             salt TEXT,
             role TEXT DEFAULT 'user',
             assigned_group TEXT,
-            assigned_group_password TEXT,
             display_name TEXT,
             status TEXT,
             current_group TEXT,
             last_seen REAL,
-            created_at REAL
+            created_at REAL,
+            login_attempts INTEGER DEFAULT 0,
+            locked_until REAL
         )
     ''')
     c.execute('''
@@ -121,24 +209,29 @@ def init_db():
     conn.commit()
     conn.close()
     print("[✓] Database ready")
-    
-    # Create default admin if not exists
     create_admin()
 
 def create_admin():
+    global ADMIN_PASSWORD_HASH
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    c.execute("SELECT username FROM users WHERE username='Mpc'")
+    c.execute("SELECT username FROM users WHERE username=?", (ADMIN_USERNAME,))
     if not c.fetchone():
-        salt = generate_salt()
-        password_hash = hash_password("08800Mpc!", salt)
+        admin_password = "ChangeMeNow123!"
+        ADMIN_PASSWORD_HASH = hash_password_argon2(admin_password)
         c.execute(
             "INSERT INTO users (username, password_hash, salt, role, created_at) VALUES (?,?,?,?,?)",
-            ("Mpc", password_hash, salt, "admin", time.time())
+            (ADMIN_USERNAME, ADMIN_PASSWORD_HASH, "admin_salt", "admin", time.time())
         )
         conn.commit()
-        print("[✓] Admin account created: Mpc")
+        print(f"[!] ADMIN PASSWORD: {admin_password}")
+        print(f"[!] CHANGE THIS PASSWORD IMMEDIATELY!")
+    else:
+        c.execute("SELECT password_hash FROM users WHERE username=?", (ADMIN_USERNAME,))
+        row = c.fetchone()
+        ADMIN_PASSWORD_HASH = row[0]
     conn.close()
+    print("[✓] Admin account ready")
 
 def log_admin_action(admin_username, action, target, details=""):
     conn = sqlite3.connect(DB_PATH)
@@ -161,7 +254,6 @@ def get_admin_logs(limit=50):
     conn.close()
     return [{'id': r[0], 'admin': r[1], 'action': r[2], 'target': r[3], 'details': r[4], 'time': r[5]} for r in rows]
 
-# ========== CLEANUP ==========
 def cleanup_old_messages():
     now = time.time()
     cutoff = now - (24 * 3600)
@@ -185,39 +277,62 @@ def start_cleanup():
 def authenticate_user(username, password):
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    c.execute("SELECT password_hash, salt, role, assigned_group, assigned_group_password, display_name FROM users WHERE username=?", (username,))
+    c.execute("SELECT password_hash, role, assigned_group, display_name, login_attempts, locked_until FROM users WHERE username=?", (username,))
     row = c.fetchone()
     conn.close()
-    if row:
-        stored_hash, salt, role, assigned_group, assigned_group_password, display_name = row
-        if verify_password(password, salt, stored_hash):
-            return {
-                "username": username, 
-                "role": role,
-                "assigned_group": assigned_group,
-                "assigned_group_password": assigned_group_password,
-                "display_name": display_name
-            }
-    return None
+    
+    if not row:
+        return None
+    
+    stored_hash, role, assigned_group, display_name, attempts, locked_until = row
+    
+    if locked_until and locked_until > time.time():
+        return {"error": "Account locked. Try again later."}
+    
+    if verify_password_argon2(password, stored_hash):
+        reset_login_attempts(username)
+        return {
+            "username": username, 
+            "role": role,
+            "assigned_group": assigned_group,
+            "display_name": display_name
+        }
+    else:
+        increment_login_attempts(username)
+        return None
+
+def increment_login_attempts(username):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("UPDATE users SET login_attempts = login_attempts + 1 WHERE username=?", (username,))
+    c.execute("UPDATE users SET locked_until = ? WHERE username=? AND login_attempts >= 5", 
+             (time.time() + 900, username))
+    conn.commit()
+    conn.close()
+
+def reset_login_attempts(username):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("UPDATE users SET login_attempts = 0, locked_until = NULL WHERE username=?", (username,))
+    conn.commit()
+    conn.close()
 
 def create_user_with_group(username, password, group_name, group_password):
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     try:
-        # Create user
         salt = generate_salt()
-        password_hash = hash_password(password, salt)
+        password_hash = hash_password_argon2(password)
         
-        # Check if group exists, if not create it
         group_info = get_group_info(group_name)
         if not group_info:
             group_salt = generate_salt()
-            group_pwd_hash = hash_password(group_password, group_salt)
+            group_pwd_hash = hash_password_argon2(group_password)
             create_group(group_name, group_salt, group_pwd_hash, "admin")
         
         c.execute(
-            "INSERT INTO users (username, password_hash, salt, role, assigned_group, assigned_group_password, created_at) VALUES (?,?,?,?,?,?,?)",
-            (username, password_hash, salt, "user", group_name, group_password, time.time())
+            "INSERT INTO users (username, password_hash, salt, role, assigned_group, created_at) VALUES (?,?,?,?,?,?)",
+            (username, password_hash, salt, "user", group_name, time.time())
         )
         conn.commit()
         conn.close()
@@ -235,7 +350,7 @@ def save_user_display_name(username, display_name):
     conn.close()
 
 def delete_user(username):
-    if username == "Mpc":
+    if username == ADMIN_USERNAME:
         return False
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
@@ -257,6 +372,14 @@ def get_user_role(username):
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute("SELECT role FROM users WHERE username=?", (username,))
+    row = c.fetchone()
+    conn.close()
+    return row[0] if row else None
+
+def get_user_assigned_group(username):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT assigned_group FROM users WHERE username=?", (username,))
     row = c.fetchone()
     conn.close()
     return row[0] if row else None
@@ -355,6 +478,12 @@ def delete_group(group_name):
     conn.close()
     return deleted > 0
 
+def verify_group_password(password, group_name):
+    group_info = get_group_info(group_name)
+    if not group_info:
+        return False
+    return verify_password_argon2(password, group_info['password_hash'])
+
 # ========== WEBSOCKET MANAGER ==========
 class ConnectionManager:
     def __init__(self):
@@ -384,7 +513,16 @@ class ConnectionManager:
 manager = ConnectionManager()
 
 # ========== RATE LIMITING ==========
+login_attempts = defaultdict(list)
 message_limits = defaultdict(list)
+
+def check_login_rate_limit(username):
+    now = time.time()
+    login_attempts[username] = [t for t in login_attempts[username] if t > now - 300]
+    if len(login_attempts[username]) >= 5:
+        return False
+    login_attempts[username].append(now)
+    return True
 
 def check_rate_limit(username):
     now = time.time()
@@ -398,6 +536,17 @@ def check_rate_limit(username):
 init_db()
 start_cleanup()
 
+# ========== ADMIN DEPENDENCY ==========
+async def require_admin(session_id: str = Depends(cookie)):
+    session = await verifier.verify(session_id)
+    if session.role != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required")
+    return session
+
+async def require_auth(session_id: str = Depends(cookie)):
+    session = await verifier.verify(session_id)
+    return session
+
 # ========== HTML ==========
 HTML = '''<!DOCTYPE html>
 <html lang="en">
@@ -409,7 +558,6 @@ HTML = '''<!DOCTYPE html>
         *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent;}
         body{font-family:monospace;background:#0a0a0f;height:100vh;overflow:hidden;color:#0f0;}
         
-        /* Login Screen */
         .login-container{position:fixed;top:0;left:0;right:0;bottom:0;display:flex;justify-content:center;align-items:center;background:#0a0a0f;z-index:1000;padding:20px;}
         .login-card{background:#050508;border:2px solid #0f0;border-radius:24px;padding:32px 24px;width:100%;max-width:420px;position:relative;overflow:hidden;}
         .login-card::before{content:'';position:absolute;top:-2px;left:-2px;right:-2px;bottom:-2px;background:linear-gradient(45deg,#0f0,transparent,#0f0);background-size:400%;z-index:-1;animation:glow 3s linear infinite;}
@@ -421,7 +569,7 @@ HTML = '''<!DOCTYPE html>
         input{width:100%;padding:14px;margin:10px 0;background:#111;border:1px solid #0f0;border-radius:12px;color:#0f0;font-family:monospace;font-size:15px;transition:all 0.3s;}
         input:focus{outline:none;box-shadow:0 0 20px rgba(0,255,65,0.2);border-color:#0f0;}
         input::placeholder{color:#444;}
-        button{width:100%;padding:14px;margin-top:20px;background:transparent;border:2px solid #0f0;border-radius:12px;color:#0f0;font-size:16px;font-weight:bold;cursor:pointer;transition:all 0.3s;position:relative;overflow:hidden;}
+        button{width:100%;padding:14px;margin-top:20px;background:transparent;border:2px solid #0f0;border-radius:12px;color:#0f0;font-size:16px;font-weight:bold;cursor:pointer;transition:all 0.3s;}
         button:hover{background:#0f0;color:#000;transform:translateY(-2px);box-shadow:0 5px 20px rgba(0,255,65,0.3);}
         button:active{transform:scale(0.98);}
         .btn-whatsapp{background:#25D366;border-color:#25D366;color:white;margin-top:12px;}
@@ -430,7 +578,6 @@ HTML = '''<!DOCTYPE html>
         .success-message{color:#0f0;font-size:12px;text-align:center;margin-top:12px;display:none;}
         .login-footer{text-align:center;margin-top:20px;font-size:9px;color:#333;border-top:1px solid #1a1a2e;padding-top:16px;}
         
-        /* Chat Screen */
         .chat-container{display:none;width:100%;height:100%;flex-direction:column;background:#0a0a0f;position:fixed;top:0;left:0;right:0;bottom:0;}
         .chat-container.active{display:flex;}
         
@@ -490,7 +637,6 @@ HTML = '''<!DOCTYPE html>
         .separator::before,.separator::after{content:'';flex:1;border-bottom:1px solid #1a1a2e;}
         .separator span{padding:0 10px;color:#666;font-size:10px;}
         
-        /* Admin Panel */
         .admin-panel{display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:#0a0a0f;z-index:50;padding:20px;overflow-y:auto;}
         .admin-panel.active{display:block;}
         .admin-panel-header{display:flex;justify-content:space-between;align-items:center;padding:16px;border-bottom:2px solid #0f0;margin-bottom:20px;}
@@ -518,14 +664,12 @@ HTML = '''<!DOCTYPE html>
         .admin-close-area{display:flex;justify-content:flex-end;gap:10px;}
         .admin-username{color:#ffaa00;font-size:12px;margin-left:10px;}
         
-        /* Gatekeeper Screen */
         .gatekeeper-container{display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:#0a0a0f;z-index:900;padding:20px;justify-content:center;align-items:center;}
         .gatekeeper-container.active{display:flex;}
         .gatekeeper-card{background:#050508;border:2px solid #0f0;border-radius:24px;padding:32px 24px;width:100%;max-width:420px;}
         .gatekeeper-card h2{text-align:center;margin-bottom:8px;font-size:24px;}
         .gatekeeper-card .sub{text-align:center;margin-bottom:24px;font-size:11px;color:#666;}
         
-        /* User Setup Screen */
         .user-setup-container{display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:#0a0a0f;z-index:800;padding:20px;justify-content:center;align-items:center;}
         .user-setup-container.active{display:flex;}
         .user-setup-card{background:#050508;border:2px solid #0f0;border-radius:24px;padding:32px 24px;width:100%;max-width:420px;}
@@ -535,7 +679,6 @@ HTML = '''<!DOCTYPE html>
     </style>
 </head>
 <body>
-<!-- LOGIN SCREEN -->
 <div id="loginScreen" class="login-container">
     <div class="login-card">
         <div class="login-card-inner">
@@ -565,7 +708,6 @@ HTML = '''<!DOCTYPE html>
     </div>
 </div>
 
-<!-- ADMIN PANEL -->
 <div id="adminPanel" class="admin-panel">
     <div class="admin-panel-header">
         <h2>⚙️ Admin Dashboard <span class="admin-username">(Logged in as: <span id="adminUsername">Mpc</span>)</span></h2>
@@ -574,7 +716,6 @@ HTML = '''<!DOCTYPE html>
         </div>
     </div>
     
-    <!-- Stats -->
     <div class="admin-stats" id="adminStats">
         <div class="stat-box"><div class="stat-number" id="statUsers">0</div><div class="stat-label">Total Users</div></div>
         <div class="stat-box"><div class="stat-number" id="statMessages">0</div><div class="stat-label">Total Messages</div></div>
@@ -583,7 +724,6 @@ HTML = '''<!DOCTYPE html>
     </div>
     
     <div class="admin-content">
-        <!-- Create User -->
         <div class="admin-card">
             <h3>👤 Create User</h3>
             <div style="margin-bottom:12px;">
@@ -594,11 +734,10 @@ HTML = '''<!DOCTYPE html>
                 <button onclick="createUser()" class="action-btn-green">➕ Create User</button>
             </div>
             <div style="font-size:10px;color:#666;margin-top:8px;">
-                💡 Users will use these credentials to login and access their assigned group
+                💡 Users will use these credentials to login
             </div>
         </div>
         
-        <!-- Users Management -->
         <div class="admin-card">
             <h3>📋 Users</h3>
             <div class="admin-table-wrap">
@@ -609,7 +748,6 @@ HTML = '''<!DOCTYPE html>
             </div>
         </div>
         
-        <!-- Groups -->
         <div class="admin-card">
             <h3>📁 Groups</h3>
             <div class="admin-table-wrap">
@@ -620,7 +758,6 @@ HTML = '''<!DOCTYPE html>
             </div>
         </div>
         
-        <!-- Messages -->
         <div class="admin-card">
             <h3>📨 Recent Messages</h3>
             <div class="admin-table-wrap">
@@ -631,7 +768,6 @@ HTML = '''<!DOCTYPE html>
             </div>
         </div>
         
-        <!-- Logs -->
         <div class="admin-card">
             <h3>📋 Admin Logs</h3>
             <div class="admin-table-wrap">
@@ -644,7 +780,6 @@ HTML = '''<!DOCTYPE html>
     </div>
 </div>
 
-<!-- GATEKEEPER SCREEN -->
 <div id="gatekeeperScreen" class="gatekeeper-container">
     <div class="gatekeeper-card">
         <h2>🔐 Gatekeeper</h2>
@@ -663,7 +798,6 @@ HTML = '''<!DOCTYPE html>
     </div>
 </div>
 
-<!-- USER SETUP SCREEN -->
 <div id="userSetupScreen" class="user-setup-container">
     <div class="user-setup-card">
         <h2>👤 Setup Profile</h2>
@@ -684,7 +818,6 @@ HTML = '''<!DOCTYPE html>
     </div>
 </div>
 
-<!-- CHAT SCREEN -->
 <div id="chatScreen" class="chat-container">
     <div class="chat-header">
         <div class="chat-header-left">
@@ -718,19 +851,15 @@ HTML = '''<!DOCTYPE html>
 </div>
 
 <script>
-// ========== GLOBALS ==========
 let ws, username, groupName, groupPassword, groupSalt, typingTimeout, reconnectAttempts = 0;
 let currentUser = null;
 let gatekeeperData = null;
 
-// ========== LOGIN ==========
 document.addEventListener('DOMContentLoaded', function() {
-    // Login button
     document.getElementById('loginBtn').addEventListener('click', login);
     document.getElementById('gatekeeperBtn').addEventListener('click', gatekeeperLogin);
     document.getElementById('enterChatBtn').addEventListener('click', enterChat);
     
-    // Enter key support
     document.getElementById('loginPassword').addEventListener('keypress', function(e) {
         if(e.key === 'Enter') login();
     });
@@ -764,19 +893,16 @@ async function login() {
             currentUser = {username: data.username, role: data.role};
             
             if(data.role === 'admin') {
-                // Admin goes to dashboard
                 document.getElementById('loginScreen').style.display = 'none';
                 document.getElementById('adminPanel').classList.add('active');
                 document.getElementById('adminUsername').textContent = data.username;
                 loadAdminData();
             } else {
-                // User goes to gatekeeper with pre-filled username
                 document.getElementById('loginScreen').style.display = 'none';
                 document.getElementById('gatekeeperScreen').classList.add('active');
                 document.getElementById('gatekeeperUsername').value = data.username;
                 document.getElementById('gatekeeperPassword').value = '';
                 
-                // Check if user has a display name already
                 if(data.display_name) {
                     const successDiv = document.createElement('div');
                     successDiv.id = 'gatekeeperSuccess';
@@ -797,7 +923,6 @@ async function login() {
     }
 }
 
-// ========== GATEKEEPER ==========
 async function gatekeeperLogin() {
     const username = document.getElementById('gatekeeperUsername').value.trim();
     const password = document.getElementById('gatekeeperPassword').value;
@@ -821,11 +946,9 @@ async function gatekeeperLogin() {
             document.getElementById('gatekeeperScreen').classList.remove('active');
             document.getElementById('userSetupScreen').classList.add('active');
             
-            // Pre-fill group info
             document.getElementById('userGroupName').value = data.assigned_group;
-            document.getElementById('userGroupPassword').value = data.assigned_group_password;
+            document.getElementById('userGroupPassword').value = '';
             
-            // If user has a display name, pre-fill it
             if(data.display_name) {
                 document.getElementById('userDisplayName').value = data.display_name;
                 showSetupSuccess('✅ Welcome back! Your display name is saved.');
@@ -842,23 +965,20 @@ async function gatekeeperLogin() {
     }
 }
 
-// ========== ENTER CHAT ==========
 async function enterChat() {
     const displayName = document.getElementById('userDisplayName').value.trim();
     const groupName = document.getElementById('userGroupName').value.trim();
-    const groupPassword = document.getElementById('userGroupPassword').value.trim();
     
     if(!displayName) {
         showSetupError('Please enter your display name');
         return;
     }
     
-    if(!groupName || !groupPassword) {
-        showSetupError('Group credentials missing. Please contact admin.');
+    if(!groupName) {
+        showSetupError('Group missing. Please contact admin.');
         return;
     }
     
-    // Save display name to database
     try {
         await fetch('/save_display_name', {
             method: 'POST',
@@ -872,21 +992,17 @@ async function enterChat() {
         console.error('Failed to save display name:', e);
     }
     
-    // Store for chat
     window.chatUsername = displayName;
     window.chatGroup = groupName;
-    window.chatPassword = groupPassword;
     
     document.getElementById('userSetupScreen').classList.remove('active');
     document.getElementById('chatScreen').classList.add('active');
     
-    connectToChat(displayName, groupName, groupPassword);
+    connectToChat(displayName, groupName);
 }
 
-// ========== CONNECT TO CHAT ==========
-function connectToChat(username, group, password) {
+function connectToChat(username, group) {
     document.getElementById('groupTitle').innerHTML = '# ' + group;
-    window.groupPassword = password;
     
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const url = protocol + '//' + window.location.host + '/ws';
@@ -898,8 +1014,7 @@ function connectToChat(username, group, password) {
         ws.send(JSON.stringify({
             type: 'join',
             username: username,
-            group: group,
-            password: password
+            group: group
         }));
         reconnectAttempts = 0;
     };
@@ -917,7 +1032,7 @@ function connectToChat(username, group, password) {
                 addSystemMessage('🔐 Connected - Messages last 24 hours');
             } else if(d.type === 'message' || d.type === 'history') {
                 try {
-                    let dec = await decrypt(d.ciphertext, password, d.salt);
+                    let dec = await decrypt(d.ciphertext, window.groupPassword, d.salt);
                     addMessage(d.sender, dec, d.sender === username);
                 } catch(e) {
                     addMessage(d.sender, '🔒 Encrypted', d.sender === username);
@@ -951,7 +1066,7 @@ function connectToChat(username, group, password) {
             addSystemMessage('⚠️ Connection lost. Reconnecting...');
             reconnectAttempts++;
             if(reconnectAttempts < 5) {
-                setTimeout(() => connectToChat(username, group, password), 3000);
+                setTimeout(() => connectToChat(username, group), 3000);
             } else {
                 addSystemMessage('❌ Connection failed. Please refresh.');
             }
@@ -959,7 +1074,6 @@ function connectToChat(username, group, password) {
     };
 }
 
-// ========== UI FUNCTIONS ==========
 function toggleSidebar() {
     document.getElementById('sidebar').classList.toggle('open');
     document.getElementById('overlay').classList.toggle('active');
@@ -1014,7 +1128,6 @@ function escapeHtml(t) {
     return d.innerHTML;
 }
 
-// ========== ENCRYPTION ==========
 async function encrypt(text, pwd, salt) {
     const e = new TextEncoder();
     const km = await crypto.subtle.importKey('raw', e.encode(pwd), 'PBKDF2', false, ['deriveKey']);
@@ -1043,7 +1156,6 @@ async function decrypt(enc, pwd, salt) {
     return new TextDecoder().decode(dec);
 }
 
-// ========== MESSAGING ==========
 document.getElementById('messageInput')?.addEventListener('input', function() {
     if(ws && ws.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify({type:'typing'}));
@@ -1064,7 +1176,7 @@ async function sendMessage() {
     let text = input.value.trim();
     if(!text || !ws || ws.readyState !== WebSocket.OPEN || !groupSalt) return;
     try {
-        let cipher = await encrypt(text, window.chatPassword, groupSalt);
+        let cipher = await encrypt(text, window.groupPassword, groupSalt);
         ws.send(JSON.stringify({
             type:'message',
             ciphertext:cipher,
@@ -1077,7 +1189,6 @@ async function sendMessage() {
     }
 }
 
-// ========== REQUEST ACCESS ==========
 function requestAccess() {
     const phone = '256762117982';
     const message = 'Hello, I would like to get access to ABAVANDIMWE secure messaging platform. Please send me login credentials.';
@@ -1086,7 +1197,6 @@ function requestAccess() {
     showSuccess('📱 Opening WhatsApp... Please send your request.');
 }
 
-// ========== ERROR/SUCCESS MESSAGES ==========
 function showError(msg) {
     let err = document.getElementById('loginError');
     err.textContent = msg;
@@ -1126,10 +1236,14 @@ function showSetupSuccess(msg) {
     setTimeout(() => success.style.display = 'none', 5000);
 }
 
-// ========== LOGOUT ==========
-function logout() {
+async function logout() {
     if(ws) ws.close();
     ws = null;
+    
+    try {
+        await fetch('/logout', {method: 'POST'});
+    } catch(e) {}
+    
     document.getElementById('chatScreen').classList.remove('active');
     document.getElementById('adminPanel').classList.remove('active');
     document.getElementById('gatekeeperScreen').classList.remove('active');
@@ -1144,15 +1258,13 @@ function logout() {
     document.getElementById('userDisplayName').value = '';
     document.getElementById('userGroupName').value = '';
     document.getElementById('userGroupPassword').value = '';
-    const existing = document.getElementById('gatekeeperSuccess');
-    if(existing) existing.remove();
+    document.getElementById('gatekeeperSuccess')?.remove();
     document.getElementById('setupSuccess').style.display = 'none';
     reconnectAttempts = 0;
     currentUser = null;
     gatekeeperData = null;
 }
 
-// ========== ADMIN FUNCTIONS ==========
 async function loadAdminData() {
     try {
         const response = await fetch('/admin/data');
@@ -1235,7 +1347,7 @@ async function createUser() {
         });
         const data = await response.json();
         if(data.success) {
-            alert('✅ User created successfully!\\n\\nUsername: ' + username + '\\nPassword: ' + password + '\\nGroup: ' + group_name + '\\nGroup Password: ' + group_password);
+            alert('✅ User created successfully!\\n\\nUsername: ' + username + '\\nPassword: ' + password + '\\nGroup: ' + group_name);
             document.getElementById('newUsername').value = '';
             document.getElementById('newPassword').value = '';
             document.getElementById('newGroupName').value = '';
@@ -1309,11 +1421,8 @@ async function deleteMessage(id) {
     }
 }
 
-// ========== INIT ==========
 console.log('🔐 ABAVANDIMWE Secure Messaging System');
 console.log('📱 Developed by Mugisha Pc');
-console.log('👤 Admin: Mpc / 08800Mpc!');
-console.log('💡 Users: Login with credentials from admin');
 </script>
 </body>
 </html>'''
@@ -1324,27 +1433,76 @@ async def root():
     return HTMLResponse(HTML)
 
 @app.post("/login")
-async def login(login_data: LoginRequest):
-    user = authenticate_user(login_data.username, login_data.password)
-    if user:
-        return {
+async def login(request: Request, login_data: LoginRequest):
+    if not check_login_rate_limit(login_data.username):
+        return JSONResponse(
+            status_code=429,
+            content={"success": False, "message": "Too many login attempts. Please wait 5 minutes."}
+        )
+    
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT password_hash, role, assigned_group, display_name, login_attempts, locked_until FROM users WHERE username=?", (login_data.username,))
+    row = c.fetchone()
+    conn.close()
+    
+    if not row:
+        return JSONResponse(
+            status_code=401,
+            content={"success": False, "message": "Invalid credentials"}
+        )
+    
+    stored_hash, role, assigned_group, display_name, attempts, locked_until = row
+    
+    if locked_until and locked_until > time.time():
+        return JSONResponse(
+            status_code=429,
+            content={"success": False, "message": "Account locked. Please try again later."}
+        )
+    
+    if verify_password_argon2(login_data.password, stored_hash):
+        reset_login_attempts(login_data.username)
+        
+        session_data = SessionData(
+            username=login_data.username,
+            role=role,
+            assigned_group=assigned_group
+        )
+        
+        response = JSONResponse({
             "success": True, 
-            "username": user["username"], 
-            "role": user["role"],
-            "display_name": user.get("display_name")
-        }
-    return JSONResponse(
-        status_code=401,
-        content={"success": False, "message": "Invalid credentials"}
-    )
+            "username": login_data.username, 
+            "role": role,
+            "display_name": display_name
+        })
+        await cookie.attach_to_response(response, session_id=secrets.token_urlsafe(32), data=session_data.dict())
+        return response
+    else:
+        increment_login_attempts(login_data.username)
+        return JSONResponse(
+            status_code=401,
+            content={"success": False, "message": "Invalid credentials"}
+        )
 
 @app.post("/gatekeeper")
 async def gatekeeper(login_data: LoginRequest):
+    if not check_login_rate_limit(login_data.username):
+        return JSONResponse(
+            status_code=429,
+            content={"success": False, "message": "Too many attempts. Please wait 5 minutes."}
+        )
+    
     user = authenticate_user(login_data.username, login_data.password)
     if not user:
         return JSONResponse(
             status_code=401,
             content={"success": False, "message": "Invalid credentials"}
+        )
+    
+    if "error" in user:
+        return JSONResponse(
+            status_code=429,
+            content={"success": False, "message": user["error"]}
         )
     
     if user["role"] == "admin":
@@ -1353,12 +1511,8 @@ async def gatekeeper(login_data: LoginRequest):
             content={"success": False, "message": "Admin cannot access chat"}
         )
     
-    assigned = {
-        'group': user["assigned_group"],
-        'password': user["assigned_group_password"]
-    }
-    
-    if not assigned['group']:
+    assigned_group = user["assigned_group"]
+    if not assigned_group:
         return JSONResponse(
             status_code=404,
             content={"success": False, "message": "No group assigned to this user"}
@@ -1367,18 +1521,20 @@ async def gatekeeper(login_data: LoginRequest):
     return {
         "success": True,
         "username": login_data.username,
-        "assigned_group": assigned['group'],
-        "assigned_group_password": assigned['password'],
+        "assigned_group": assigned_group,
         "display_name": user.get("display_name")
     }
 
 @app.post("/save_display_name")
-async def save_display_name(username: str, display_name: str):
-    save_user_display_name(username, display_name)
+async def save_display_name(data: SaveDisplayNameRequest, session: SessionData = Depends(require_auth)):
+    if session.username != data.username:
+        raise HTTPException(status_code=403, detail="Cannot modify other users")
+    
+    save_user_display_name(data.username, data.display_name)
     return {"success": True}
 
 @app.get("/admin/data")
-async def admin_data():
+async def admin_data(session: SessionData = Depends(require_admin)):
     users = get_all_users()
     messages = get_all_messages()
     groups = get_all_groups()
@@ -1395,94 +1551,108 @@ async def admin_data():
     }
 
 @app.post("/admin/create_user")
-async def admin_create_user(data: CreateUserRequest):
+async def admin_create_user(data: CreateUserRequest, session: SessionData = Depends(require_admin)):
     if create_user_with_group(data.username, data.password, data.group_name, data.group_password):
-        log_admin_action("Mpc", "create_user", data.username, f"Group: {data.group_name}")
+        log_admin_action(session.username, "create_user", data.username, f"Group: {data.group_name}")
         return {"success": True}
     return {"success": False, "message": "Username already exists"}
 
 @app.post("/admin/delete_user")
-async def admin_delete_user(data: DeleteUserRequest):
+async def admin_delete_user(data: DeleteUserRequest, session: SessionData = Depends(require_admin)):
     if delete_user(data.username):
-        log_admin_action("Mpc", "delete_user", data.username)
+        log_admin_action(session.username, "delete_user", data.username)
         return {"success": True}
     return {"success": False, "message": "Cannot delete admin or user not found"}
 
 @app.post("/admin/delete_group")
-async def admin_delete_group(data: DeleteGroupRequest):
+async def admin_delete_group(data: DeleteGroupRequest, session: SessionData = Depends(require_admin)):
     if delete_group(data.name):
-        log_admin_action("Mpc", "delete_group", data.name)
+        log_admin_action(session.username, "delete_group", data.name)
         return {"success": True}
     return {"success": False, "message": "Group not found"}
 
 @app.post("/admin/delete_message")
-async def admin_delete_message(data: DeleteMessageRequest):
+async def admin_delete_message(data: DeleteMessageRequest, session: SessionData = Depends(require_admin)):
     if delete_message(data.id):
-        log_admin_action("Mpc", "delete_message", str(data.id))
+        log_admin_action(session.username, "delete_message", str(data.id))
         return {"success": True}
     return {"success": False, "message": "Message not found"}
+
+@app.post("/logout")
+async def logout(request: Request):
+    response = JSONResponse({"success": True})
+    response.delete_cookie("abavandimwe_session")
+    return response
+
+@app.get("/health")
+async def health():
+    return {"status": "ok", "system": "ABAVANDIMWE", "author": "Mugisha Pc"}
 
 # ========== WEBSOCKET ==========
 @app.websocket("/ws")
 async def ws_endpoint(websocket: WebSocket):
     await websocket.accept()
-    username = None
-    group_name = None
-    ping_task = None
-
-    async def send_ping():
-        while True:
-            await asyncio.sleep(30)
-            if username and group_name:
-                try:
-                    await websocket.send_json({'type': 'ping'})
-                except:
-                    break
-
+    
+    # Get session from cookie
+    cookie_header = websocket.headers.get("cookie", "")
+    session_id = None
+    for item in cookie_header.split(";"):
+        item = item.strip()
+        if item.startswith("abavandimwe_session="):
+            session_id = item.split("=")[1]
+            break
+    
+    if not session_id:
+        await websocket.send_json({'type': 'error', 'message': 'No session found'})
+        await websocket.close()
+        return
+    
+    # Verify session
     try:
-        ping_task = asyncio.create_task(send_ping())
+        session = await verifier.verify(session_id)
+        username = session.username
+        assigned_group = session.assigned_group
         
+        if not assigned_group:
+            await websocket.send_json({'type': 'error', 'message': 'No group assigned'})
+            await websocket.close()
+            return
+        
+        group_name = assigned_group
+        group_info = get_group_info(group_name)
+        
+        if not group_info:
+            await websocket.send_json({'type': 'error', 'message': 'Group not found'})
+            await websocket.close()
+            return
+        
+        group_salt = group_info['salt']
+        
+        # Add to manager
+        await manager.add(group_name, username, websocket)
+        set_user_status(username, 'online', group_name)
+        
+        # Send message history
+        for msg in get_messages(group_name):
+            await websocket.send_json({
+                'type': 'history',
+                'ciphertext': msg['ciphertext'],
+                'sender': msg['sender'],
+                'salt': msg['salt']
+            })
+        
+        online = get_online_users(group_name)
+        await manager.broadcast(group_name, {'type': 'users', 'users': online})
+        await manager.broadcast(group_name, {'type': 'user_joined', 'user': username}, exclude=username)
+        await websocket.send_json({'type': 'ready', 'salt': group_salt, 'group': group_name})
+        print(f"[+] {username} joined {group_name}")
+        
+        # Message loop
         while True:
             data = await websocket.receive_json()
             msg_type = data.get('type')
-
-            if msg_type == 'join':
-                username = data.get('username')
-                group_name = data.get('group')
-                password = data.get('password')
-
-                # Verify group password
-                group_info = get_group_info(group_name)
-                if group_info:
-                    if not verify_password(password, group_info['salt'], group_info['password_hash']):
-                        await websocket.send_json({'type': 'error', 'message': 'Wrong group password'})
-                        await websocket.close()
-                        return
-                    salt = group_info['salt']
-                else:
-                    salt = generate_salt()
-                    pwd_hash = hash_password(password, salt)
-                    create_group(group_name, salt, pwd_hash, "system")
-
-                await manager.add(group_name, username, websocket)
-                set_user_status(username, 'online', group_name)
-
-                # Send message history
-                for msg in get_messages(group_name):
-                    await websocket.send_json({
-                        'type': 'history',
-                        'ciphertext': msg['ciphertext'],
-                        'sender': msg['sender'],
-                        'salt': msg['salt']
-                    })
-
-                online = get_online_users(group_name)
-                await manager.broadcast(group_name, {'type': 'users', 'users': online})
-                await manager.broadcast(group_name, {'type': 'user_joined', 'user': username}, exclude=username)
-                await websocket.send_json({'type': 'ready', 'salt': salt, 'group': group_name})
-                print(f"[+] {username} joined {group_name}")
-
-            elif msg_type == 'message':
+            
+            if msg_type == 'message':
                 cipher = data.get('ciphertext')
                 salt = data.get('salt')
                 if username and group_name and check_rate_limit(username):
@@ -1493,26 +1663,26 @@ async def ws_endpoint(websocket: WebSocket):
                         'sender': username,
                         'salt': salt
                     }, exclude=username)
-
+            
             elif msg_type == 'typing':
                 if username and group_name:
                     await manager.broadcast(group_name, {'type': 'typing', 'user': username}, exclude=username)
-
+            
             elif msg_type == 'stop_typing':
                 if username and group_name:
                     await manager.broadcast(group_name, {'type': 'stop_typing', 'user': username}, exclude=username)
-
+            
             elif msg_type == 'ping':
                 set_user_status(username, 'online', group_name)
                 await websocket.send_json({'type': 'pong'})
-
-    except WebSocketDisconnect:
-        pass
+    
     except Exception as e:
-        print(f"[!] Error: {e}")
+        print(f"[!] WebSocket error: {e}")
+        await websocket.send_json({'type': 'error', 'message': 'Authentication failed'})
+        await websocket.close()
+        return
+    
     finally:
-        if ping_task:
-            ping_task.cancel()
         if username and group_name:
             manager.remove(group_name, username)
             set_user_status(username, 'offline', group_name)
@@ -1542,14 +1712,18 @@ if __name__ == "__main__":
 ╚════════════════════════════════════════════════════════════╝
 """)
     print(f"[✓] Server running on port {port}")
-    print(f"[✓] Admin: Mpc / 08800Mpc!")
+    print(f"[✓] Admin: Mpc / ChangeMeNow123!")
+    print(f"[!] CHANGE THE ADMIN PASSWORD IMMEDIATELY!")
     print(f"[✓] Messages expire after 24 hours")
     print(f"[✓] Open: http://localhost:{port}")
-    print(f"\n📋 Flow:")
-    print(f"   1. Admin logs in → Dashboard only")
-    print(f"   2. Admin creates users with group credentials")
-    print(f"   3. User logs in → Gatekeeper (username pre-filled)")
-    print(f"   4. User enters password → Setup screen (group pre-filled)")
-    print(f"   5. User sets display name → Chat access")
-    print(f"   6. Next login: Display name remembered, group pre-filled")
+    print(f"\n📋 Security Features:")
+    print(f"   ✅ Argon2id password hashing")
+    print(f"   ✅ Server-side sessions")
+    print(f"   ✅ Login rate limiting")
+    print(f"   ✅ Account lockout after 5 attempts")
+    print(f"   ✅ CORS restricted to allowed origins")
+    print(f"   ✅ WebSocket authentication via session")
+    print(f"   ✅ Admin-only endpoints protected")
+    print(f"   ✅ No group creation in WebSocket")
+    print(f"   ✅ Group passwords stored hashed")
     uvicorn.run(app, host="0.0.0.0", port=port)
