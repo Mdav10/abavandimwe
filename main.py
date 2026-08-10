@@ -219,7 +219,7 @@ def create_admin():
     c = conn.cursor()
     c.execute("SELECT username FROM users WHERE username=?", (ADMIN_USERNAME,))
     if not c.fetchone():
-        admin_password = "ChangeMeNow123!"
+        admin_password = "Mpc@Secure+_+"
         ADMIN_PASSWORD_HASH = hash_password_argon2(admin_password)
         c.execute(
             "INSERT INTO users (username, password_hash, salt, role, created_at) VALUES (?,?,?,?,?)",
