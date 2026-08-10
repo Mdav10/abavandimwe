@@ -1,13 +1,14 @@
 services:
   - type: web
     name: abavandimwe
-    runtime: python
-    repo: https://github.com/Mdav10/abavandimwe
-    plan: free
-    region: frankfurt
+    env: python
     buildCommand: pip install -r requirements.txt
-    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    startCommand: python main.py
     envVars:
+      - key: DATABASE_URL
+        value: postgresql://neondb_owner:npg_CmR51yqfMxNZ@ep-plain-salad-axxvh942-pooler.c-4.us-east-2.aws.neon.tech/neondb?sslmode=require
       - key: PORT
-        value: 8080
-    autoDeploy: true
+        value: 10000
+      - key: PYTHON_VERSION
+        value: 3.11.0
+    plan: free
