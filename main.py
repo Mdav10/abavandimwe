@@ -1076,9 +1076,15 @@ function connectToChat(username, group) {
             } else if(d.type === 'message' || d.type === 'history') {
                 try {
                     let dec = await decrypt(d.ciphertext, window.groupPassword, d.salt);
-                    addMessage(d.sender, dec, d.sender === username, d.timestamp);
+                    // Only show messages from other users
+                    // Self messages are shown immediately in sendMessage()
+                    if (d.sender !== window.chatUsername) {
+                        addMessage(d.sender, dec, false, d.timestamp);
+                    }
                 } catch(e) {
-                    addMessage(d.sender, '🔒 Encrypted', d.sender === username, d.timestamp);
+                    if (d.sender !== window.chatUsername) {
+                        addMessage(d.sender, '🔒 Encrypted', false, d.timestamp);
+                    }
                 }
             } else if(d.type === 'users') {
                 updateUsers(d.users);
@@ -1222,18 +1228,26 @@ document.getElementById('messageInput')?.addEventListener('keypress', function(e
     if(e.key === 'Enter') sendMessage();
 });
 
+// ========== FIXED: Send Message ==========
 async function sendMessage() {
     let input = document.getElementById('messageInput');
     let text = input.value.trim();
     if(!text || !ws || ws.readyState !== WebSocket.OPEN || !groupSalt) return;
     try {
         let cipher = await encrypt(text, window.groupPassword, groupSalt);
+        let timestamp = Date.now() / 1000;
+        
+        // Show message immediately on client side
+        addMessage(window.chatUsername, text, true, timestamp);
+        input.value = '';
+        
+        // Send to server (server will NOT broadcast back to sender)
         ws.send(JSON.stringify({
             type:'message',
             ciphertext:cipher,
-            salt:groupSalt
+            salt:groupSalt,
+            timestamp: timestamp
         }));
-        input.value = '';
     } catch(e) {
         alert('Failed to send message');
     }
@@ -1710,7 +1724,7 @@ async def ws_endpoint(websocket: WebSocket):
             'ciphertext': msg['ciphertext'],
             'sender': msg['sender'],
             'salt': msg['salt'],
-            'timestamp': msg['created_at']  # Send the actual timestamp
+            'timestamp': msg['created_at']
         })
     
     online = await get_online_users(group_name)
