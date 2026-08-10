@@ -2,7 +2,7 @@
 ABAVANDIMWE - Secure Messaging System
 Author: Mugisha Pc
 Messages stay for 24 hours then auto-delete
-Database: PostgreSQL (Neon) with asyncpg
+Database: PostgreSQL (Neon)
 """
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request, Depends, HTTPException
@@ -26,6 +26,11 @@ import asyncpg
 
 app = FastAPI()
 
+# ========== SECURITY CONFIG ==========
+ADMIN_USERNAME = "Mpc"
+ADMIN_PASSWORD = os.getenv('ADMIN_PASSWORD', 'Mpc@Secure+_+')
+ADMIN_PASSWORD_HASH = None
+
 # ========== DATABASE CONFIG ==========
 DATABASE_URL = os.getenv('DATABASE_URL', 'postgresql://neondb_owner:npg_CmR51yqfMxNZ@ep-plain-salad-axxvh942-pooler.c-4.us-east-2.aws.neon.tech/neondb?sslmode=require')
 
@@ -42,18 +47,9 @@ async def init_db_pool():
     )
     return db_pool
 
-async def get_db():
-    async with db_pool.acquire() as conn:
-        yield conn
-
-# ========== SECURITY CONFIG ==========
-ADMIN_USERNAME = "Mpc"
-ADMIN_PASSWORD = os.getenv('ADMIN_PASSWORD', 'Mpc@Secure+_+')
-ADMIN_PASSWORD_HASH = None
-
 # ========== SESSION MANAGEMENT ==========
 sessions: Dict[str, Dict] = {}
-SESSION_TIMEOUT = 3600 * 24 * 7
+SESSION_TIMEOUT = 3600 * 24 * 7  # 7 days
 
 def create_session(username: str, role: str, assigned_group: str = None) -> str:
     session_id = secrets.token_urlsafe(32)
@@ -182,9 +178,16 @@ async def init_db():
     pool = await init_db_pool()
     
     async with pool.acquire() as conn:
-        # Create tables
+        # RECREATE TABLES WITH CORRECT SCHEMA
+        # This ensures your database has the right structure
+        await conn.execute('DROP TABLE IF EXISTS admin_logs CASCADE')
+        await conn.execute('DROP TABLE IF EXISTS messages CASCADE')
+        await conn.execute('DROP TABLE IF EXISTS users CASCADE')
+        await conn.execute('DROP TABLE IF EXISTS groups CASCADE')
+        
+        # Create users table
         await conn.execute('''
-            CREATE TABLE IF NOT EXISTS users (
+            CREATE TABLE users (
                 username TEXT PRIMARY KEY,
                 password_hash TEXT NOT NULL,
                 salt TEXT,
@@ -200,8 +203,9 @@ async def init_db():
             )
         ''')
         
+        # Create messages table
         await conn.execute('''
-            CREATE TABLE IF NOT EXISTS messages (
+            CREATE TABLE messages (
                 id SERIAL PRIMARY KEY,
                 ciphertext TEXT NOT NULL,
                 group_name TEXT NOT NULL,
@@ -212,8 +216,9 @@ async def init_db():
             )
         ''')
         
+        # Create groups table
         await conn.execute('''
-            CREATE TABLE IF NOT EXISTS groups (
+            CREATE TABLE groups (
                 group_name TEXT PRIMARY KEY,
                 salt TEXT NOT NULL,
                 password_hash TEXT NOT NULL,
@@ -222,8 +227,9 @@ async def init_db():
             )
         ''')
         
+        # Create admin logs table
         await conn.execute('''
-            CREATE TABLE IF NOT EXISTS admin_logs (
+            CREATE TABLE admin_logs (
                 id SERIAL PRIMARY KEY,
                 admin_username TEXT NOT NULL,
                 action TEXT NOT NULL,
@@ -233,7 +239,7 @@ async def init_db():
             )
         ''')
         
-        print("[✓] PostgreSQL database ready")
+        print("[✓] PostgreSQL tables created successfully")
         
         # Create admin if not exists
         row = await conn.fetchrow("SELECT username FROM users WHERE username = $1", ADMIN_USERNAME)
@@ -245,13 +251,12 @@ async def init_db():
             )
             print(f"[✓] Admin created: {ADMIN_USERNAME}")
             print(f"[✓] Admin Password: {ADMIN_PASSWORD}")
-            print(f"⚠️  Keep this password safe!")
         else:
             row = await conn.fetchrow("SELECT password_hash FROM users WHERE username = $1", ADMIN_USERNAME)
             ADMIN_PASSWORD_HASH = row[0]
-    
-    print("[✓] Admin account ready")
-    return pool
+        
+        print("[✓] Admin account ready")
+        return pool
 
 # ========== DATABASE FUNCTIONS ==========
 async def log_admin_action(admin_username, action, target, details=""):
@@ -274,7 +279,7 @@ async def cleanup_old_messages():
     cutoff = now - (24 * 3600)
     async with db_pool.acquire() as conn:
         result = await conn.execute("DELETE FROM messages WHERE created_at < $1 OR expires_at < $2", cutoff, now)
-        deleted = result.split()[1]
+        deleted = result.split()[1] if result else 0
         if int(deleted) > 0:
             print(f"[🧹] Deleted {deleted} old messages")
 
@@ -518,7 +523,7 @@ async def startup():
     await init_db()
     start_cleanup()
 
-# ========== HTML ==========
+# ========== FULL HTML ==========
 HTML = '''<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -1587,8 +1592,7 @@ async def ws_endpoint(websocket: WebSocket):
         item = item.strip()
         if item.startswith("abavandimwe_session="):
             session_id = item.split("=")[1]
-            break
-    
+            break    
     if not session_id:
         await websocket.send_json({'type': 'error', 'message': 'No session found'})
         await websocket.close()
@@ -1700,16 +1704,12 @@ if __name__ == "__main__":
 """)
     print(f"[✓] Server running on port {port}")
     print(f"[✓] Admin: {ADMIN_USERNAME} / {ADMIN_PASSWORD}")
-    print(f"[✓] Database: PostgreSQL (Neon) with asyncpg")
+    print(f"[✓] Database: PostgreSQL (Neon)")
     print(f"[✓] Messages expire after 24 hours")
     print(f"[✓] Open: http://localhost:{port}")
-    print(f"\n📋 Security Features:")
-    print(f"   ✅ Argon2id password hashing")
-    print(f"   ✅ Server-side sessions")
-    print(f"   ✅ Login rate limiting")
-    print(f"   ✅ Account lockout after 5 attempts")
-    print(f"   ✅ CORS restricted to allowed origins")
-    print(f"   ✅ WebSocket authentication via session")
-    print(f"   ✅ Admin-only endpoints protected")
-    print(f"   ✅ PostgreSQL with asyncpg")
+    print(f"\n📋 Data Persistence:")
+    print(f"   ✅ Users: FOREVER")
+    print(f"   ✅ Groups: FOREVER")
+    print(f"   ✅ Admin Logs: FOREVER")
+    print(f"   ⏰ Messages: 24 hours only")
     uvicorn.run(app, host="0.0.0.0", port=port)
