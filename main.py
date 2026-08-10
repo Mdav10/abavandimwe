@@ -2,6 +2,7 @@
 ABAVANDIMWE - Secure Messaging System
 Author: Mugisha Pc
 Messages stay for 24 hours then auto-delete
+Database: PostgreSQL (Neon)
 """
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request, Depends, HTTPException
@@ -9,28 +10,48 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 import asyncio
 import json
-import sqlite3
+import os
 import secrets
 import base64
 import hashlib
-import os
 import threading
 import time
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Dict, Optional
 from collections import defaultdict
 from pydantic import BaseModel
 from argon2 import PasswordHasher
 from argon2.exceptions import VerificationError
+import psycopg2
+from psycopg2.extras import RealDictCursor
+from psycopg2.pool import SimpleConnectionPool
 
 app = FastAPI()
 
+# ========== DATABASE CONFIG ==========
+DATABASE_URL = os.getenv('DATABASE_URL', 'postgresql://neondb_owner:npg_CmR51yqfMxNZ@ep-plain-salad-axxvh942-pooler.c-4.us-east-2.aws.neon.tech/neondb?sslmode=require')
+
+# Connection pool for better performance
+db_pool = SimpleConnectionPool(
+    minconn=1,
+    maxconn=10,
+    dsn=DATABASE_URL
+)
+
+def get_db_connection():
+    """Get a connection from the pool"""
+    return db_pool.getconn()
+
+def return_db_connection(conn):
+    """Return connection to the pool"""
+    db_pool.putconn(conn)
+
 # ========== SECURITY CONFIG ==========
 ADMIN_USERNAME = "Mpc"
+ADMIN_PASSWORD = "Mpc@Secure+_+"  # Your new admin password
 ADMIN_PASSWORD_HASH = None
 
-# ========== SESSION MANAGEMENT (Manual) ==========
-# Store sessions in memory (for production, use Redis or database)
+# ========== SESSION MANAGEMENT ==========
 sessions: Dict[str, Dict] = {}
 SESSION_TIMEOUT = 3600 * 24 * 7  # 7 days
 
@@ -93,10 +114,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ========== DATABASE ==========
-DB_PATH = "abavandimwe.db"
-ph = PasswordHasher()
-
 # ========== PYDANTIC MODELS ==========
 class LoginRequest(BaseModel):
     username: str
@@ -122,6 +139,8 @@ class SaveDisplayNameRequest(BaseModel):
     display_name: str
 
 # ========== CRYPTO FUNCTIONS ==========
+ph = PasswordHasher()
+
 def generate_salt():
     return base64.b64encode(secrets.token_bytes(32)).decode()
 
@@ -160,111 +179,114 @@ def decrypt(encrypted, password, salt):
 # ========== DATABASE INIT ==========
 def init_db():
     global ADMIN_PASSWORD_HASH
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_db_connection()
     c = conn.cursor()
+    
+    # Create tables
     c.execute('''
         CREATE TABLE IF NOT EXISTS users (
             username TEXT PRIMARY KEY,
-            password_hash TEXT,
+            password_hash TEXT NOT NULL,
             salt TEXT,
             role TEXT DEFAULT 'user',
             assigned_group TEXT,
             display_name TEXT,
             status TEXT,
             current_group TEXT,
-            last_seen REAL,
-            created_at REAL,
+            last_seen DOUBLE PRECISION,
+            created_at DOUBLE PRECISION,
             login_attempts INTEGER DEFAULT 0,
-            locked_until REAL
+            locked_until DOUBLE PRECISION
         )
     ''')
+    
     c.execute('''
         CREATE TABLE IF NOT EXISTS messages (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            ciphertext TEXT,
-            group_name TEXT,
-            sender TEXT,
-            salt TEXT,
-            created_at REAL,
-            expires_at REAL
+            id SERIAL PRIMARY KEY,
+            ciphertext TEXT NOT NULL,
+            group_name TEXT NOT NULL,
+            sender TEXT NOT NULL,
+            salt TEXT NOT NULL,
+            created_at DOUBLE PRECISION NOT NULL,
+            expires_at DOUBLE PRECISION NOT NULL
         )
     ''')
+    
     c.execute('''
         CREATE TABLE IF NOT EXISTS groups (
             group_name TEXT PRIMARY KEY,
-            salt TEXT,
-            password_hash TEXT,
-            created_by TEXT,
-            created_at REAL
+            salt TEXT NOT NULL,
+            password_hash TEXT NOT NULL,
+            created_by TEXT NOT NULL,
+            created_at DOUBLE PRECISION NOT NULL
         )
     ''')
+    
     c.execute('''
         CREATE TABLE IF NOT EXISTS admin_logs (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            admin_username TEXT,
-            action TEXT,
+            id SERIAL PRIMARY KEY,
+            admin_username TEXT NOT NULL,
+            action TEXT NOT NULL,
             target TEXT,
             details TEXT,
-            created_at REAL
+            created_at DOUBLE PRECISION NOT NULL
         )
     ''')
+    
     conn.commit()
-    conn.close()
-    print("[✓] Database ready")
-    create_admin()
-
-def create_admin():
-    global ADMIN_PASSWORD_HASH
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute("SELECT username FROM users WHERE username=?", (ADMIN_USERNAME,))
+    print("[✓] PostgreSQL database ready")
+    
+    # Create admin if not exists
+    c.execute("SELECT username FROM users WHERE username = %s", (ADMIN_USERNAME,))
     if not c.fetchone():
-        admin_password = "Mpc@Secure+_+"
-        ADMIN_PASSWORD_HASH = hash_password_argon2(admin_password)
+        ADMIN_PASSWORD_HASH = hash_password_argon2(ADMIN_PASSWORD)
         c.execute(
-            "INSERT INTO users (username, password_hash, salt, role, created_at) VALUES (?,?,?,?,?)",
+            "INSERT INTO users (username, password_hash, salt, role, created_at) VALUES (%s, %s, %s, %s, %s)",
             (ADMIN_USERNAME, ADMIN_PASSWORD_HASH, "admin_salt", "admin", time.time())
         )
         conn.commit()
-        print(f"[!] ADMIN PASSWORD: {admin_password}")
-        print(f"[!] CHANGE THIS PASSWORD IMMEDIATELY!")
+        print(f"[✓] Admin created: {ADMIN_USERNAME}")
+        print(f"[✓] Admin Password: {ADMIN_PASSWORD}")
+        print(f"⚠️  Keep this password safe!")
     else:
-        c.execute("SELECT password_hash FROM users WHERE username=?", (ADMIN_USERNAME,))
+        c.execute("SELECT password_hash FROM users WHERE username = %s", (ADMIN_USERNAME,))
         row = c.fetchone()
         ADMIN_PASSWORD_HASH = row[0]
-    conn.close()
+    
+    return_db_connection(conn)
     print("[✓] Admin account ready")
 
+# ========== DATABASE FUNCTIONS ==========
 def log_admin_action(admin_username, action, target, details=""):
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_db_connection()
     c = conn.cursor()
     c.execute(
-        "INSERT INTO admin_logs (admin_username, action, target, details, created_at) VALUES (?,?,?,?,?)",
+        "INSERT INTO admin_logs (admin_username, action, target, details, created_at) VALUES (%s, %s, %s, %s, %s)",
         (admin_username, action, target, details, time.time())
     )
     conn.commit()
-    conn.close()
+    return_db_connection(conn)
 
 def get_admin_logs(limit=50):
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
+    conn = get_db_connection()
+    c = conn.cursor(cursor_factory=RealDictCursor)
     c.execute(
-        "SELECT id, admin_username, action, target, details, created_at FROM admin_logs ORDER BY created_at DESC LIMIT ?",
+        "SELECT id, admin_username, action, target, details, created_at FROM admin_logs ORDER BY created_at DESC LIMIT %s",
         (limit,)
     )
     rows = c.fetchall()
-    conn.close()
-    return [{'id': r[0], 'admin': r[1], 'action': r[2], 'target': r[3], 'details': r[4], 'time': r[5]} for r in rows]
+    return_db_connection(conn)
+    return [dict(row) for row in rows]
 
 def cleanup_old_messages():
     now = time.time()
     cutoff = now - (24 * 3600)
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_db_connection()
     c = conn.cursor()
-    c.execute("DELETE FROM messages WHERE created_at < ? OR expires_at < ?", (cutoff, now))
+    c.execute("DELETE FROM messages WHERE created_at < %s OR expires_at < %s", (cutoff, now))
     deleted = c.rowcount
     conn.commit()
-    conn.close()
+    return_db_connection(conn)
     if deleted > 0:
         print(f"[🧹] Deleted {deleted} old messages")
 
@@ -275,18 +297,25 @@ def start_cleanup():
             cleanup_old_messages()
     threading.Thread(target=cleanup_loop, daemon=True).start()
 
-# ========== DATABASE FUNCTIONS ==========
 def authenticate_user(username, password):
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute("SELECT password_hash, role, assigned_group, display_name, login_attempts, locked_until FROM users WHERE username=?", (username,))
+    conn = get_db_connection()
+    c = conn.cursor(cursor_factory=RealDictCursor)
+    c.execute(
+        "SELECT password_hash, role, assigned_group, display_name, login_attempts, locked_until FROM users WHERE username = %s",
+        (username,)
+    )
     row = c.fetchone()
-    conn.close()
+    return_db_connection(conn)
     
     if not row:
         return None
     
-    stored_hash, role, assigned_group, display_name, attempts, locked_until = row
+    stored_hash = row['password_hash']
+    role = row['role']
+    assigned_group = row['assigned_group']
+    display_name = row['display_name']
+    attempts = row['login_attempts']
+    locked_until = row['locked_until']
     
     if locked_until and locked_until > time.time():
         return {"error": "Account locked. Try again later."}
@@ -304,180 +333,206 @@ def authenticate_user(username, password):
         return None
 
 def increment_login_attempts(username):
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_db_connection()
     c = conn.cursor()
-    c.execute("UPDATE users SET login_attempts = login_attempts + 1 WHERE username=?", (username,))
-    c.execute("UPDATE users SET locked_until = ? WHERE username=? AND login_attempts >= 5", 
-             (time.time() + 900, username))
+    c.execute("UPDATE users SET login_attempts = login_attempts + 1 WHERE username = %s", (username,))
+    c.execute(
+        "UPDATE users SET locked_until = %s WHERE username = %s AND login_attempts >= 5",
+        (time.time() + 900, username)
+    )
     conn.commit()
-    conn.close()
+    return_db_connection(conn)
 
 def reset_login_attempts(username):
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_db_connection()
     c = conn.cursor()
-    c.execute("UPDATE users SET login_attempts = 0, locked_until = NULL WHERE username=?", (username,))
+    c.execute("UPDATE users SET login_attempts = 0, locked_until = NULL WHERE username = %s", (username,))
     conn.commit()
-    conn.close()
+    return_db_connection(conn)
 
 def create_user_with_group(username, password, group_name, group_password):
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_db_connection()
     c = conn.cursor()
     try:
         salt = generate_salt()
         password_hash = hash_password_argon2(password)
         
-        group_info = get_group_info(group_name)
-        if not group_info:
+        # Check if group exists
+        c.execute("SELECT group_name FROM groups WHERE group_name = %s", (group_name,))
+        if not c.fetchone():
             group_salt = generate_salt()
             group_pwd_hash = hash_password_argon2(group_password)
-            create_group(group_name, group_salt, group_pwd_hash, "admin")
+            c.execute(
+                "INSERT INTO groups (group_name, salt, password_hash, created_by, created_at) VALUES (%s, %s, %s, %s, %s)",
+                (group_name, group_salt, group_pwd_hash, "admin", time.time())
+            )
         
         c.execute(
-            "INSERT INTO users (username, password_hash, salt, role, assigned_group, created_at) VALUES (?,?,?,?,?,?)",
+            "INSERT INTO users (username, password_hash, salt, role, assigned_group, created_at) VALUES (%s, %s, %s, %s, %s, %s)",
             (username, password_hash, salt, "user", group_name, time.time())
         )
         conn.commit()
-        conn.close()
+        return_db_connection(conn)
         return True
     except Exception as e:
         print(f"Error creating user: {e}")
-        conn.close()
+        conn.rollback()
+        return_db_connection(conn)
         return False
 
 def save_user_display_name(username, display_name):
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_db_connection()
     c = conn.cursor()
-    c.execute("UPDATE users SET display_name=? WHERE username=?", (display_name, username))
+    c.execute("UPDATE users SET display_name = %s WHERE username = %s", (display_name, username))
     conn.commit()
-    conn.close()
+    return_db_connection(conn)
 
 def delete_user(username):
     if username == ADMIN_USERNAME:
         return False
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_db_connection()
     c = conn.cursor()
-    c.execute("DELETE FROM users WHERE username=?", (username,))
+    c.execute("DELETE FROM users WHERE username = %s", (username,))
     deleted = c.rowcount
     conn.commit()
-    conn.close()
+    return_db_connection(conn)
     return deleted > 0
 
 def get_all_users():
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute("SELECT username, role, assigned_group, display_name, status, current_group, last_seen, created_at FROM users ORDER BY created_at DESC")
+    conn = get_db_connection()
+    c = conn.cursor(cursor_factory=RealDictCursor)
+    c.execute("""
+        SELECT username, role, assigned_group, display_name, status, 
+               current_group, last_seen, created_at 
+        FROM users 
+        ORDER BY created_at DESC
+    """)
     rows = c.fetchall()
-    conn.close()
-    return [{'username': r[0], 'role': r[1], 'assigned_group': r[2], 'display_name': r[3] or r[0], 'status': r[4] or 'offline', 'current_group': r[5], 'last_seen': r[6], 'created_at': r[7]} for r in rows]
+    return_db_connection(conn)
+    return [dict(row) for row in rows]
 
 def get_user_role(username):
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_db_connection()
     c = conn.cursor()
-    c.execute("SELECT role FROM users WHERE username=?", (username,))
+    c.execute("SELECT role FROM users WHERE username = %s", (username,))
     row = c.fetchone()
-    conn.close()
+    return_db_connection(conn)
     return row[0] if row else None
 
 def get_user_assigned_group(username):
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_db_connection()
     c = conn.cursor()
-    c.execute("SELECT assigned_group FROM users WHERE username=?", (username,))
+    c.execute("SELECT assigned_group FROM users WHERE username = %s", (username,))
     row = c.fetchone()
-    conn.close()
+    return_db_connection(conn)
     return row[0] if row else None
 
 def save_message(ciphertext, group, sender, salt):
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_db_connection()
     c = conn.cursor()
     now = time.time()
     expiry = now + (24 * 3600)
-    c.execute("INSERT INTO messages (ciphertext, group_name, sender, salt, created_at, expires_at) VALUES (?,?,?,?,?,?)",
-             (ciphertext, group, sender, salt, now, expiry))
+    c.execute(
+        "INSERT INTO messages (ciphertext, group_name, sender, salt, created_at, expires_at) VALUES (%s, %s, %s, %s, %s, %s)",
+        (ciphertext, group, sender, salt, now, expiry)
+    )
     conn.commit()
-    conn.close()
+    return_db_connection(conn)
 
 def get_messages(group):
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
+    conn = get_db_connection()
+    c = conn.cursor(cursor_factory=RealDictCursor)
     cutoff = time.time() - (24 * 3600)
-    c.execute("SELECT ciphertext, sender, salt FROM messages WHERE group_name=? AND created_at > ? ORDER BY id ASC",
-             (group, cutoff))
+    c.execute(
+        "SELECT ciphertext, sender, salt FROM messages WHERE group_name = %s AND created_at > %s ORDER BY id ASC",
+        (group, cutoff)
+    )
     rows = c.fetchall()
-    conn.close()
-    return [{'ciphertext': r[0], 'sender': r[1], 'salt': r[2]} for r in rows]
+    return_db_connection(conn)
+    return [dict(row) for row in rows]
 
 def get_all_messages(limit=100):
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute("SELECT id, sender, group_name, created_at FROM messages ORDER BY created_at DESC LIMIT ?", (limit,))
+    conn = get_db_connection()
+    c = conn.cursor(cursor_factory=RealDictCursor)
+    c.execute(
+        "SELECT id, sender, group_name, created_at FROM messages ORDER BY created_at DESC LIMIT %s",
+        (limit,)
+    )
     rows = c.fetchall()
-    conn.close()
-    return [{'id': r[0], 'sender': r[1], 'group': r[2], 'created_at': r[3]} for r in rows]
+    return_db_connection(conn)
+    return [dict(row) for row in rows]
 
 def delete_message(message_id):
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_db_connection()
     c = conn.cursor()
-    c.execute("DELETE FROM messages WHERE id=?", (message_id,))
+    c.execute("DELETE FROM messages WHERE id = %s", (message_id,))
     deleted = c.rowcount
     conn.commit()
-    conn.close()
+    return_db_connection(conn)
     return deleted > 0
 
 def set_user_status(username, status, group):
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_db_connection()
     c = conn.cursor()
-    c.execute("UPDATE users SET status=?, current_group=?, last_seen=? WHERE username=?",
-             (status, group, time.time(), username))
+    c.execute(
+        "UPDATE users SET status = %s, current_group = %s, last_seen = %s WHERE username = %s",
+        (status, group, time.time(), username)
+    )
     conn.commit()
-    conn.close()
+    return_db_connection(conn)
 
 def get_online_users(group):
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_db_connection()
     c = conn.cursor()
     cutoff = time.time() - 120
-    c.execute("SELECT username FROM users WHERE status='online' AND current_group=? AND last_seen > ?",
-             (group, cutoff))
+    c.execute(
+        "SELECT username FROM users WHERE status = 'online' AND current_group = %s AND last_seen > %s",
+        (group, cutoff)
+    )
     rows = c.fetchall()
-    conn.close()
+    return_db_connection(conn)
     return [r[0] for r in rows]
 
 def get_group_info(group):
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute("SELECT salt, password_hash FROM groups WHERE group_name=?", (group,))
+    conn = get_db_connection()
+    c = conn.cursor(cursor_factory=RealDictCursor)
+    c.execute("SELECT salt, password_hash FROM groups WHERE group_name = %s", (group,))
     row = c.fetchone()
-    conn.close()
-    return {'salt': row[0], 'password_hash': row[1]} if row else None
+    return_db_connection(conn)
+    return dict(row) if row else None
 
 def create_group(group, salt, password_hash, creator):
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_db_connection()
     c = conn.cursor()
     try:
-        c.execute("INSERT INTO groups (group_name, salt, password_hash, created_by, created_at) VALUES (?,?,?,?,?)",
-                 (group, salt, password_hash, creator, time.time()))
+        c.execute(
+            "INSERT INTO groups (group_name, salt, password_hash, created_by, created_at) VALUES (%s, %s, %s, %s, %s)",
+            (group, salt, password_hash, creator, time.time())
+        )
         conn.commit()
-        conn.close()
+        return_db_connection(conn)
         return True
     except:
-        conn.close()
+        conn.rollback()
+        return_db_connection(conn)
         return False
 
 def get_all_groups():
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
+    conn = get_db_connection()
+    c = conn.cursor(cursor_factory=RealDictCursor)
     c.execute("SELECT group_name, created_by, created_at FROM groups ORDER BY created_at DESC")
     rows = c.fetchall()
-    conn.close()
-    return [{'name': r[0], 'created_by': r[1], 'created_at': r[2]} for r in rows]
+    return_db_connection(conn)
+    return [dict(row) for row in rows]
 
 def delete_group(group_name):
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_db_connection()
     c = conn.cursor()
-    c.execute("DELETE FROM groups WHERE group_name=?", (group_name,))
-    c.execute("DELETE FROM messages WHERE group_name=?", (group_name,))
+    c.execute("DELETE FROM groups WHERE group_name = %s", (group_name,))
+    c.execute("DELETE FROM messages WHERE group_name = %s", (group_name,))
     deleted = c.rowcount
     conn.commit()
-    conn.close()
+    return_db_connection(conn)
     return deleted > 0
 
 def verify_group_password(password, group_name):
@@ -537,291 +592,6 @@ def check_rate_limit(username):
 # ========== INIT DATABASE ==========
 init_db()
 start_cleanup()
-
-# ========== HTML (Same as before) ==========
-# [HTML content - keeping it compact for the response]
-# For the full HTML, use the same as in previous versions
-
-# ========== FASTAPI ENDPOINTS ==========
-@app.get("/")
-async def root():
-    return HTMLResponse(HTML)
-
-@app.post("/login")
-async def login(request: Request, login_data: LoginRequest):
-    if not check_login_rate_limit(login_data.username):
-        return JSONResponse(
-            status_code=429,
-            content={"success": False, "message": "Too many login attempts. Please wait 5 minutes."}
-        )
-    
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute("SELECT password_hash, role, assigned_group, display_name, login_attempts, locked_until FROM users WHERE username=?", (login_data.username,))
-    row = c.fetchone()
-    conn.close()
-    
-    if not row:
-        return JSONResponse(
-            status_code=401,
-            content={"success": False, "message": "Invalid credentials"}
-        )
-    
-    stored_hash, role, assigned_group, display_name, attempts, locked_until = row
-    
-    if locked_until and locked_until > time.time():
-        return JSONResponse(
-            status_code=429,
-            content={"success": False, "message": "Account locked. Please try again later."}
-        )
-    
-    if verify_password_argon2(login_data.password, stored_hash):
-        reset_login_attempts(login_data.username)
-        
-        session_id = create_session(login_data.username, role, assigned_group)
-        
-        response = JSONResponse({
-            "success": True, 
-            "username": login_data.username, 
-            "role": role,
-            "display_name": display_name
-        })
-        response.set_cookie(
-            key="abavandimwe_session",
-            value=session_id,
-            httponly=True,
-            secure=True,
-            samesite="lax",
-            max_age=SESSION_TIMEOUT,
-            path="/"
-        )
-        return response
-    else:
-        increment_login_attempts(login_data.username)
-        return JSONResponse(
-            status_code=401,
-            content={"success": False, "message": "Invalid credentials"}
-        )
-
-@app.post("/gatekeeper")
-async def gatekeeper(login_data: LoginRequest):
-    if not check_login_rate_limit(login_data.username):
-        return JSONResponse(
-            status_code=429,
-            content={"success": False, "message": "Too many attempts. Please wait 5 minutes."}
-        )
-    
-    user = authenticate_user(login_data.username, login_data.password)
-    if not user:
-        return JSONResponse(
-            status_code=401,
-            content={"success": False, "message": "Invalid credentials"}
-        )
-    
-    if "error" in user:
-        return JSONResponse(
-            status_code=429,
-            content={"success": False, "message": user["error"]}
-        )
-    
-    if user["role"] == "admin":
-        return JSONResponse(
-            status_code=403,
-            content={"success": False, "message": "Admin cannot access chat"}
-        )
-    
-    assigned_group = user["assigned_group"]
-    if not assigned_group:
-        return JSONResponse(
-            status_code=404,
-            content={"success": False, "message": "No group assigned to this user"}
-        )
-    
-    return {
-        "success": True,
-        "username": login_data.username,
-        "assigned_group": assigned_group,
-        "display_name": user.get("display_name")
-    }
-
-@app.post("/save_display_name")
-async def save_display_name(data: SaveDisplayNameRequest, request: Request):
-    session = await require_auth(request)
-    if session["username"] != data.username:
-        raise HTTPException(status_code=403, detail="Cannot modify other users")
-    
-    save_user_display_name(data.username, data.display_name)
-    return {"success": True}
-
-@app.get("/admin/data")
-async def admin_data(request: Request):
-    await require_admin(request)
-    users = get_all_users()
-    messages = get_all_messages()
-    groups = get_all_groups()
-    logs = get_admin_logs()
-    online_users = get_online_users("Main")
-    
-    return {
-        "users": users,
-        "messages": messages,
-        "messages_count": len(messages),
-        "groups": groups,
-        "online_count": len(online_users),
-        "logs": logs
-    }
-
-@app.post("/admin/create_user")
-async def admin_create_user(data: CreateUserRequest, request: Request):
-    session = await require_admin(request)
-    if create_user_with_group(data.username, data.password, data.group_name, data.group_password):
-        log_admin_action(session["username"], "create_user", data.username, f"Group: {data.group_name}")
-        return {"success": True}
-    return {"success": False, "message": "Username already exists"}
-
-@app.post("/admin/delete_user")
-async def admin_delete_user(data: DeleteUserRequest, request: Request):
-    session = await require_admin(request)
-    if delete_user(data.username):
-        log_admin_action(session["username"], "delete_user", data.username)
-        return {"success": True}
-    return {"success": False, "message": "Cannot delete admin or user not found"}
-
-@app.post("/admin/delete_group")
-async def admin_delete_group(data: DeleteGroupRequest, request: Request):
-    session = await require_admin(request)
-    if delete_group(data.name):
-        log_admin_action(session["username"], "delete_group", data.name)
-        return {"success": True}
-    return {"success": False, "message": "Group not found"}
-
-@app.post("/admin/delete_message")
-async def admin_delete_message(data: DeleteMessageRequest, request: Request):
-    session = await require_admin(request)
-    if delete_message(data.id):
-        log_admin_action(session["username"], "delete_message", str(data.id))
-        return {"success": True}
-    return {"success": False, "message": "Message not found"}
-
-@app.post("/logout")
-async def logout(request: Request):
-    session_id = request.cookies.get("abavandimwe_session")
-    if session_id:
-        delete_session(session_id)
-    response = JSONResponse({"success": True})
-    response.delete_cookie("abavandimwe_session")
-    return response
-
-@app.get("/health")
-async def health():
-    return {"status": "ok", "system": "ABAVANDIMWE", "author": "Mugisha Pc"}
-
-# ========== WEBSOCKET ==========
-@app.websocket("/ws")
-async def ws_endpoint(websocket: WebSocket):
-    await websocket.accept()
-    
-    # Get session from cookie
-    cookie_header = websocket.headers.get("cookie", "")
-    session_id = None
-    for item in cookie_header.split(";"):
-        item = item.strip()
-        if item.startswith("abavandimwe_session="):
-            session_id = item.split("=")[1]
-            break
-    
-    if not session_id:
-        await websocket.send_json({'type': 'error', 'message': 'No session found'})
-        await websocket.close()
-        return
-    
-    # Verify session
-    session = get_session(session_id)
-    if not session:
-        await websocket.send_json({'type': 'error', 'message': 'Invalid session'})
-        await websocket.close()
-        return
-    
-    username = session["username"]
-    assigned_group = session["assigned_group"]
-    
-    if not assigned_group:
-        await websocket.send_json({'type': 'error', 'message': 'No group assigned'})
-        await websocket.close()
-        return
-    
-    group_name = assigned_group
-    group_info = get_group_info(group_name)
-    
-    if not group_info:
-        await websocket.send_json({'type': 'error', 'message': 'Group not found'})
-        await websocket.close()
-        return
-    
-    group_salt = group_info['salt']
-    
-    # Add to manager
-    await manager.add(group_name, username, websocket)
-    set_user_status(username, 'online', group_name)
-    
-    # Send message history
-    for msg in get_messages(group_name):
-        await websocket.send_json({
-            'type': 'history',
-            'ciphertext': msg['ciphertext'],
-            'sender': msg['sender'],
-            'salt': msg['salt']
-        })
-    
-    online = get_online_users(group_name)
-    await manager.broadcast(group_name, {'type': 'users', 'users': online})
-    await manager.broadcast(group_name, {'type': 'user_joined', 'user': username}, exclude=username)
-    await websocket.send_json({'type': 'ready', 'salt': group_salt, 'group': group_name})
-    print(f"[+] {username} joined {group_name}")
-    
-    try:
-        # Message loop
-        while True:
-            data = await websocket.receive_json()
-            msg_type = data.get('type')
-            
-            if msg_type == 'message':
-                cipher = data.get('ciphertext')
-                salt = data.get('salt')
-                if username and group_name and check_rate_limit(username):
-                    save_message(cipher, group_name, username, salt)
-                    await manager.broadcast(group_name, {
-                        'type': 'message',
-                        'ciphertext': cipher,
-                        'sender': username,
-                        'salt': salt
-                    }, exclude=username)
-            
-            elif msg_type == 'typing':
-                if username and group_name:
-                    await manager.broadcast(group_name, {'type': 'typing', 'user': username}, exclude=username)
-            
-            elif msg_type == 'stop_typing':
-                if username and group_name:
-                    await manager.broadcast(group_name, {'type': 'stop_typing', 'user': username}, exclude=username)
-            
-            elif msg_type == 'ping':
-                set_user_status(username, 'online', group_name)
-                await websocket.send_json({'type': 'pong'})
-    
-    except WebSocketDisconnect:
-        pass
-    except Exception as e:
-        print(f"[!] WebSocket error: {e}")
-    
-    finally:
-        if username and group_name:
-            manager.remove(group_name, username)
-            set_user_status(username, 'offline', group_name)
-            online = get_online_users(group_name)
-            await manager.broadcast(group_name, {'type': 'users', 'users': online})
-            await manager.broadcast(group_name, {'type': 'user_left', 'user': username})
-            print(f"[-] {username} left {group_name}")
 
 # ========== HTML ==========
 HTML = '''<!DOCTYPE html>
@@ -1703,6 +1473,290 @@ console.log('📱 Developed by Mugisha Pc');
 </body>
 </html>'''
 
+# ========== FASTAPI ENDPOINTS ==========
+@app.get("/")
+async def root():
+    return HTMLResponse(HTML)
+
+@app.post("/login")
+async def login(request: Request, login_data: LoginRequest):
+    if not check_login_rate_limit(login_data.username):
+        return JSONResponse(
+            status_code=429,
+            content={"success": False, "message": "Too many login attempts. Please wait 5 minutes."}
+        )
+    
+    conn = get_db_connection()
+    c = conn.cursor(cursor_factory=RealDictCursor)
+    c.execute(
+        "SELECT password_hash, role, assigned_group, display_name, login_attempts, locked_until FROM users WHERE username = %s",
+        (login_data.username,)
+    )
+    row = c.fetchone()
+    return_db_connection(conn)
+    
+    if not row:
+        return JSONResponse(
+            status_code=401,
+            content={"success": False, "message": "Invalid credentials"}
+        )
+    
+    stored_hash = row['password_hash']
+    role = row['role']
+    assigned_group = row['assigned_group']
+    display_name = row['display_name']
+    locked_until = row['locked_until']
+    
+    if locked_until and locked_until > time.time():
+        return JSONResponse(
+            status_code=429,
+            content={"success": False, "message": "Account locked. Please try again later."}
+        )
+    
+    if verify_password_argon2(login_data.password, stored_hash):
+        reset_login_attempts(login_data.username)
+        
+        session_id = create_session(login_data.username, role, assigned_group)
+        
+        response = JSONResponse({
+            "success": True, 
+            "username": login_data.username, 
+            "role": role,
+            "display_name": display_name
+        })
+        response.set_cookie(
+            key="abavandimwe_session",
+            value=session_id,
+            httponly=True,
+            secure=True,
+            samesite="lax",
+            max_age=SESSION_TIMEOUT,
+            path="/"
+        )
+        return response
+    else:
+        increment_login_attempts(login_data.username)
+        return JSONResponse(
+            status_code=401,
+            content={"success": False, "message": "Invalid credentials"}
+        )
+
+@app.post("/gatekeeper")
+async def gatekeeper(login_data: LoginRequest):
+    if not check_login_rate_limit(login_data.username):
+        return JSONResponse(
+            status_code=429,
+            content={"success": False, "message": "Too many attempts. Please wait 5 minutes."}
+        )
+    
+    user = authenticate_user(login_data.username, login_data.password)
+    if not user:
+        return JSONResponse(
+            status_code=401,
+            content={"success": False, "message": "Invalid credentials"}
+        )
+    
+    if "error" in user:
+        return JSONResponse(
+            status_code=429,
+            content={"success": False, "message": user["error"]}
+        )
+    
+    if user["role"] == "admin":
+        return JSONResponse(
+            status_code=403,
+            content={"success": False, "message": "Admin cannot access chat"}
+        )
+    
+    assigned_group = user["assigned_group"]
+    if not assigned_group:
+        return JSONResponse(
+            status_code=404,
+            content={"success": False, "message": "No group assigned to this user"}
+        )
+    
+    return {
+        "success": True,
+        "username": login_data.username,
+        "assigned_group": assigned_group,
+        "display_name": user.get("display_name")
+    }
+
+@app.post("/save_display_name")
+async def save_display_name(data: SaveDisplayNameRequest, request: Request):
+    session = await require_auth(request)
+    if session["username"] != data.username:
+        raise HTTPException(status_code=403, detail="Cannot modify other users")
+    
+    save_user_display_name(data.username, data.display_name)
+    return {"success": True}
+
+@app.get("/admin/data")
+async def admin_data(request: Request):
+    await require_admin(request)
+    users = get_all_users()
+    messages = get_all_messages()
+    groups = get_all_groups()
+    logs = get_admin_logs()
+    online_users = get_online_users("Main")
+    
+    return {
+        "users": users,
+        "messages": messages,
+        "messages_count": len(messages),
+        "groups": groups,
+        "online_count": len(online_users),
+        "logs": logs
+    }
+
+@app.post("/admin/create_user")
+async def admin_create_user(data: CreateUserRequest, request: Request):
+    session = await require_admin(request)
+    if create_user_with_group(data.username, data.password, data.group_name, data.group_password):
+        log_admin_action(session["username"], "create_user", data.username, f"Group: {data.group_name}")
+        return {"success": True}
+    return {"success": False, "message": "Username already exists"}
+
+@app.post("/admin/delete_user")
+async def admin_delete_user(data: DeleteUserRequest, request: Request):
+    session = await require_admin(request)
+    if delete_user(data.username):
+        log_admin_action(session["username"], "delete_user", data.username)
+        return {"success": True}
+    return {"success": False, "message": "Cannot delete admin or user not found"}
+
+@app.post("/admin/delete_group")
+async def admin_delete_group(data: DeleteGroupRequest, request: Request):
+    session = await require_admin(request)
+    if delete_group(data.name):
+        log_admin_action(session["username"], "delete_group", data.name)
+        return {"success": True}
+    return {"success": False, "message": "Group not found"}
+
+@app.post("/admin/delete_message")
+async def admin_delete_message(data: DeleteMessageRequest, request: Request):
+    session = await require_admin(request)
+    if delete_message(data.id):
+        log_admin_action(session["username"], "delete_message", str(data.id))
+        return {"success": True}
+    return {"success": False, "message": "Message not found"}
+
+@app.post("/logout")
+async def logout(request: Request):
+    session_id = request.cookies.get("abavandimwe_session")
+    if session_id:
+        delete_session(session_id)
+    response = JSONResponse({"success": True})
+    response.delete_cookie("abavandimwe_session")
+    return response
+
+@app.get("/health")
+async def health():
+    return {"status": "ok", "system": "ABAVANDIMWE", "author": "Mugisha Pc"}
+
+# ========== WEBSOCKET ==========
+@app.websocket("/ws")
+async def ws_endpoint(websocket: WebSocket):
+    await websocket.accept()
+    
+    # Get session from cookie
+    cookie_header = websocket.headers.get("cookie", "")
+    session_id = None
+    for item in cookie_header.split(";"):
+        item = item.strip()
+        if item.startswith("abavandimwe_session="):
+            session_id = item.split("=")[1]
+            break
+    
+    if not session_id:
+        await websocket.send_json({'type': 'error', 'message': 'No session found'})
+        await websocket.close()
+        return
+    
+    session = get_session(session_id)
+    if not session:
+        await websocket.send_json({'type': 'error', 'message': 'Invalid session'})
+        await websocket.close()
+        return
+    
+    username = session["username"]
+    assigned_group = session["assigned_group"]
+    
+    if not assigned_group:
+        await websocket.send_json({'type': 'error', 'message': 'No group assigned'})
+        await websocket.close()
+        return
+    
+    group_name = assigned_group
+    group_info = get_group_info(group_name)
+    
+    if not group_info:
+        await websocket.send_json({'type': 'error', 'message': 'Group not found'})
+        await websocket.close()
+        return
+    
+    group_salt = group_info['salt']
+    
+    await manager.add(group_name, username, websocket)
+    set_user_status(username, 'online', group_name)
+    
+    for msg in get_messages(group_name):
+        await websocket.send_json({
+            'type': 'history',
+            'ciphertext': msg['ciphertext'],
+            'sender': msg['sender'],
+            'salt': msg['salt']
+        })
+    
+    online = get_online_users(group_name)
+    await manager.broadcast(group_name, {'type': 'users', 'users': online})
+    await manager.broadcast(group_name, {'type': 'user_joined', 'user': username}, exclude=username)
+    await websocket.send_json({'type': 'ready', 'salt': group_salt, 'group': group_name})
+    print(f"[+] {username} joined {group_name}")
+    
+    try:
+        while True:
+            data = await websocket.receive_json()
+            msg_type = data.get('type')
+            
+            if msg_type == 'message':
+                cipher = data.get('ciphertext')
+                salt = data.get('salt')
+                if username and group_name and check_rate_limit(username):
+                    save_message(cipher, group_name, username, salt)
+                    await manager.broadcast(group_name, {
+                        'type': 'message',
+                        'ciphertext': cipher,
+                        'sender': username,
+                        'salt': salt
+                    }, exclude=username)
+            
+            elif msg_type == 'typing':
+                if username and group_name:
+                    await manager.broadcast(group_name, {'type': 'typing', 'user': username}, exclude=username)
+            
+            elif msg_type == 'stop_typing':
+                if username and group_name:
+                    await manager.broadcast(group_name, {'type': 'stop_typing', 'user': username}, exclude=username)
+            
+            elif msg_type == 'ping':
+                set_user_status(username, 'online', group_name)
+                await websocket.send_json({'type': 'pong'})
+    
+    except WebSocketDisconnect:
+        pass
+    except Exception as e:
+        print(f"[!] WebSocket error: {e}")
+    
+    finally:
+        if username and group_name:
+            manager.remove(group_name, username)
+            set_user_status(username, 'offline', group_name)
+            online = get_online_users(group_name)
+            await manager.broadcast(group_name, {'type': 'users', 'users': online})
+            await manager.broadcast(group_name, {'type': 'user_left', 'user': username})
+            print(f"[-] {username} left {group_name}")
+
 # ========== MAIN ==========
 if __name__ == "__main__":
     import uvicorn
@@ -1724,18 +1778,17 @@ if __name__ == "__main__":
 ╚════════════════════════════════════════════════════════════╝
 """)
     print(f"[✓] Server running on port {port}")
-    print(f"[✓] Admin: Mpc / ChangeMeNow123!")
-    print(f"[!] CHANGE THE ADMIN PASSWORD IMMEDIATELY!")
+    print(f"[✓] Admin: {ADMIN_USERNAME} / {ADMIN_PASSWORD}")
+    print(f"[✓] Database: PostgreSQL (Neon)")
     print(f"[✓] Messages expire after 24 hours")
     print(f"[✓] Open: http://localhost:{port}")
     print(f"\n📋 Security Features:")
     print(f"   ✅ Argon2id password hashing")
-    print(f"   ✅ Server-side sessions (in-memory)")
+    print(f"   ✅ Server-side sessions")
     print(f"   ✅ Login rate limiting")
     print(f"   ✅ Account lockout after 5 attempts")
     print(f"   ✅ CORS restricted to allowed origins")
     print(f"   ✅ WebSocket authentication via session")
     print(f"   ✅ Admin-only endpoints protected")
-    print(f"   ✅ No group creation in WebSocket")
-    print(f"   ✅ Group passwords stored hashed")
+    print(f"   ✅ PostgreSQL database")
     uvicorn.run(app, host="0.0.0.0", port=port)
