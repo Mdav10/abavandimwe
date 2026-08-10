@@ -7,9 +7,6 @@ Messages stay for 24 hours then auto-delete
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request, Depends, HTTPException
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi_sessions.backends.implementations import InMemoryBackend
-from fastapi_sessions.session_verifier import SessionVerifier
-from fastapi_sessions.frontends.implementations import SessionCookie, CookieParameters
 import asyncio
 import json
 import sqlite3
@@ -19,7 +16,7 @@ import hashlib
 import os
 import threading
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Dict, Optional
 from collections import defaultdict
 from pydantic import BaseModel
@@ -32,14 +29,52 @@ app = FastAPI()
 ADMIN_USERNAME = "Mpc"
 ADMIN_PASSWORD_HASH = None
 
-# Session configuration
-cookie_params = CookieParameters(
-    max_age=3600 * 24 * 7,  # 7 days
-    path="/",
-    secure=True,
-    httponly=True,
-    samesite="lax"
-)
+# ========== SESSION MANAGEMENT (Manual) ==========
+# Store sessions in memory (for production, use Redis or database)
+sessions: Dict[str, Dict] = {}
+SESSION_TIMEOUT = 3600 * 24 * 7  # 7 days
+
+def create_session(username: str, role: str, assigned_group: str = None) -> str:
+    session_id = secrets.token_urlsafe(32)
+    sessions[session_id] = {
+        "username": username,
+        "role": role,
+        "assigned_group": assigned_group,
+        "created_at": time.time(),
+        "expires_at": time.time() + SESSION_TIMEOUT
+    }
+    return session_id
+
+def get_session(session_id: str) -> Optional[Dict]:
+    if session_id not in sessions:
+        return None
+    session = sessions[session_id]
+    if session["expires_at"] < time.time():
+        del sessions[session_id]
+        return None
+    return session
+
+def delete_session(session_id: str):
+    if session_id in sessions:
+        del sessions[session_id]
+
+async def get_session_from_cookie(request: Request) -> Dict:
+    session_id = request.cookies.get("abavandimwe_session")
+    if not session_id:
+        raise HTTPException(status_code=401, detail="No session found")
+    session = get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=401, detail="Invalid or expired session")
+    return session
+
+async def require_admin(request: Request) -> Dict:
+    session = await get_session_from_cookie(request)
+    if session["role"] != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required")
+    return session
+
+async def require_auth(request: Request) -> Dict:
+    return await get_session_from_cookie(request)
 
 # ========== CORS CONFIG ==========
 ALLOWED_ORIGINS = [
@@ -47,6 +82,7 @@ ALLOWED_ORIGINS = [
     "https://abavandimwe-production.up.railway.app",
     "http://localhost:8080",
     "http://localhost:8000",
+    "http://localhost:3000",
 ]
 
 app.add_middleware(
@@ -55,40 +91,6 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
-)
-
-# ========== SESSION MANAGEMENT ==========
-class SessionData(BaseModel):
-    username: str
-    role: str
-    assigned_group: Optional[str] = None
-
-class BasicVerifier(SessionVerifier):
-    def __init__(self, identifier: str, backend: InMemoryBackend, auth_http_exception: HTTPException):
-        self.identifier = identifier
-        self.backend = backend
-        self.auth_http_exception = auth_http_exception
-
-    async def verify(self, session_id: str) -> SessionData:
-        if not session_id:
-            raise self.auth_http_exception
-        session = await self.backend.read(session_id)
-        if not session:
-            raise self.auth_http_exception
-        return SessionData(**session)
-
-backend = InMemoryBackend[SessionData]()
-verifier = BasicVerifier(
-    identifier="abavandimwe_session",
-    backend=backend,
-    auth_http_exception=HTTPException(status_code=401, detail="Invalid session")
-)
-cookie = SessionCookie(
-    cookie_name="abavandimwe_session",
-    identifier="abavandimwe_session",
-    auto_error=True,
-    secret_key=secrets.token_urlsafe(32),
-    cookie_params=cookie_params,
 )
 
 # ========== DATABASE ==========
@@ -536,16 +538,290 @@ def check_rate_limit(username):
 init_db()
 start_cleanup()
 
-# ========== ADMIN DEPENDENCY ==========
-async def require_admin(session_id: str = Depends(cookie)):
-    session = await verifier.verify(session_id)
-    if session.role != "admin":
-        raise HTTPException(status_code=403, detail="Admin access required")
-    return session
+# ========== HTML (Same as before) ==========
+# [HTML content - keeping it compact for the response]
+# For the full HTML, use the same as in previous versions
 
-async def require_auth(session_id: str = Depends(cookie)):
-    session = await verifier.verify(session_id)
-    return session
+# ========== FASTAPI ENDPOINTS ==========
+@app.get("/")
+async def root():
+    return HTMLResponse(HTML)
+
+@app.post("/login")
+async def login(request: Request, login_data: LoginRequest):
+    if not check_login_rate_limit(login_data.username):
+        return JSONResponse(
+            status_code=429,
+            content={"success": False, "message": "Too many login attempts. Please wait 5 minutes."}
+        )
+    
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT password_hash, role, assigned_group, display_name, login_attempts, locked_until FROM users WHERE username=?", (login_data.username,))
+    row = c.fetchone()
+    conn.close()
+    
+    if not row:
+        return JSONResponse(
+            status_code=401,
+            content={"success": False, "message": "Invalid credentials"}
+        )
+    
+    stored_hash, role, assigned_group, display_name, attempts, locked_until = row
+    
+    if locked_until and locked_until > time.time():
+        return JSONResponse(
+            status_code=429,
+            content={"success": False, "message": "Account locked. Please try again later."}
+        )
+    
+    if verify_password_argon2(login_data.password, stored_hash):
+        reset_login_attempts(login_data.username)
+        
+        session_id = create_session(login_data.username, role, assigned_group)
+        
+        response = JSONResponse({
+            "success": True, 
+            "username": login_data.username, 
+            "role": role,
+            "display_name": display_name
+        })
+        response.set_cookie(
+            key="abavandimwe_session",
+            value=session_id,
+            httponly=True,
+            secure=True,
+            samesite="lax",
+            max_age=SESSION_TIMEOUT,
+            path="/"
+        )
+        return response
+    else:
+        increment_login_attempts(login_data.username)
+        return JSONResponse(
+            status_code=401,
+            content={"success": False, "message": "Invalid credentials"}
+        )
+
+@app.post("/gatekeeper")
+async def gatekeeper(login_data: LoginRequest):
+    if not check_login_rate_limit(login_data.username):
+        return JSONResponse(
+            status_code=429,
+            content={"success": False, "message": "Too many attempts. Please wait 5 minutes."}
+        )
+    
+    user = authenticate_user(login_data.username, login_data.password)
+    if not user:
+        return JSONResponse(
+            status_code=401,
+            content={"success": False, "message": "Invalid credentials"}
+        )
+    
+    if "error" in user:
+        return JSONResponse(
+            status_code=429,
+            content={"success": False, "message": user["error"]}
+        )
+    
+    if user["role"] == "admin":
+        return JSONResponse(
+            status_code=403,
+            content={"success": False, "message": "Admin cannot access chat"}
+        )
+    
+    assigned_group = user["assigned_group"]
+    if not assigned_group:
+        return JSONResponse(
+            status_code=404,
+            content={"success": False, "message": "No group assigned to this user"}
+        )
+    
+    return {
+        "success": True,
+        "username": login_data.username,
+        "assigned_group": assigned_group,
+        "display_name": user.get("display_name")
+    }
+
+@app.post("/save_display_name")
+async def save_display_name(data: SaveDisplayNameRequest, request: Request):
+    session = await require_auth(request)
+    if session["username"] != data.username:
+        raise HTTPException(status_code=403, detail="Cannot modify other users")
+    
+    save_user_display_name(data.username, data.display_name)
+    return {"success": True}
+
+@app.get("/admin/data")
+async def admin_data(request: Request):
+    await require_admin(request)
+    users = get_all_users()
+    messages = get_all_messages()
+    groups = get_all_groups()
+    logs = get_admin_logs()
+    online_users = get_online_users("Main")
+    
+    return {
+        "users": users,
+        "messages": messages,
+        "messages_count": len(messages),
+        "groups": groups,
+        "online_count": len(online_users),
+        "logs": logs
+    }
+
+@app.post("/admin/create_user")
+async def admin_create_user(data: CreateUserRequest, request: Request):
+    session = await require_admin(request)
+    if create_user_with_group(data.username, data.password, data.group_name, data.group_password):
+        log_admin_action(session["username"], "create_user", data.username, f"Group: {data.group_name}")
+        return {"success": True}
+    return {"success": False, "message": "Username already exists"}
+
+@app.post("/admin/delete_user")
+async def admin_delete_user(data: DeleteUserRequest, request: Request):
+    session = await require_admin(request)
+    if delete_user(data.username):
+        log_admin_action(session["username"], "delete_user", data.username)
+        return {"success": True}
+    return {"success": False, "message": "Cannot delete admin or user not found"}
+
+@app.post("/admin/delete_group")
+async def admin_delete_group(data: DeleteGroupRequest, request: Request):
+    session = await require_admin(request)
+    if delete_group(data.name):
+        log_admin_action(session["username"], "delete_group", data.name)
+        return {"success": True}
+    return {"success": False, "message": "Group not found"}
+
+@app.post("/admin/delete_message")
+async def admin_delete_message(data: DeleteMessageRequest, request: Request):
+    session = await require_admin(request)
+    if delete_message(data.id):
+        log_admin_action(session["username"], "delete_message", str(data.id))
+        return {"success": True}
+    return {"success": False, "message": "Message not found"}
+
+@app.post("/logout")
+async def logout(request: Request):
+    session_id = request.cookies.get("abavandimwe_session")
+    if session_id:
+        delete_session(session_id)
+    response = JSONResponse({"success": True})
+    response.delete_cookie("abavandimwe_session")
+    return response
+
+@app.get("/health")
+async def health():
+    return {"status": "ok", "system": "ABAVANDIMWE", "author": "Mugisha Pc"}
+
+# ========== WEBSOCKET ==========
+@app.websocket("/ws")
+async def ws_endpoint(websocket: WebSocket):
+    await websocket.accept()
+    
+    # Get session from cookie
+    cookie_header = websocket.headers.get("cookie", "")
+    session_id = None
+    for item in cookie_header.split(";"):
+        item = item.strip()
+        if item.startswith("abavandimwe_session="):
+            session_id = item.split("=")[1]
+            break
+    
+    if not session_id:
+        await websocket.send_json({'type': 'error', 'message': 'No session found'})
+        await websocket.close()
+        return
+    
+    # Verify session
+    session = get_session(session_id)
+    if not session:
+        await websocket.send_json({'type': 'error', 'message': 'Invalid session'})
+        await websocket.close()
+        return
+    
+    username = session["username"]
+    assigned_group = session["assigned_group"]
+    
+    if not assigned_group:
+        await websocket.send_json({'type': 'error', 'message': 'No group assigned'})
+        await websocket.close()
+        return
+    
+    group_name = assigned_group
+    group_info = get_group_info(group_name)
+    
+    if not group_info:
+        await websocket.send_json({'type': 'error', 'message': 'Group not found'})
+        await websocket.close()
+        return
+    
+    group_salt = group_info['salt']
+    
+    # Add to manager
+    await manager.add(group_name, username, websocket)
+    set_user_status(username, 'online', group_name)
+    
+    # Send message history
+    for msg in get_messages(group_name):
+        await websocket.send_json({
+            'type': 'history',
+            'ciphertext': msg['ciphertext'],
+            'sender': msg['sender'],
+            'salt': msg['salt']
+        })
+    
+    online = get_online_users(group_name)
+    await manager.broadcast(group_name, {'type': 'users', 'users': online})
+    await manager.broadcast(group_name, {'type': 'user_joined', 'user': username}, exclude=username)
+    await websocket.send_json({'type': 'ready', 'salt': group_salt, 'group': group_name})
+    print(f"[+] {username} joined {group_name}")
+    
+    try:
+        # Message loop
+        while True:
+            data = await websocket.receive_json()
+            msg_type = data.get('type')
+            
+            if msg_type == 'message':
+                cipher = data.get('ciphertext')
+                salt = data.get('salt')
+                if username and group_name and check_rate_limit(username):
+                    save_message(cipher, group_name, username, salt)
+                    await manager.broadcast(group_name, {
+                        'type': 'message',
+                        'ciphertext': cipher,
+                        'sender': username,
+                        'salt': salt
+                    }, exclude=username)
+            
+            elif msg_type == 'typing':
+                if username and group_name:
+                    await manager.broadcast(group_name, {'type': 'typing', 'user': username}, exclude=username)
+            
+            elif msg_type == 'stop_typing':
+                if username and group_name:
+                    await manager.broadcast(group_name, {'type': 'stop_typing', 'user': username}, exclude=username)
+            
+            elif msg_type == 'ping':
+                set_user_status(username, 'online', group_name)
+                await websocket.send_json({'type': 'pong'})
+    
+    except WebSocketDisconnect:
+        pass
+    except Exception as e:
+        print(f"[!] WebSocket error: {e}")
+    
+    finally:
+        if username and group_name:
+            manager.remove(group_name, username)
+            set_user_status(username, 'offline', group_name)
+            online = get_online_users(group_name)
+            await manager.broadcast(group_name, {'type': 'users', 'users': online})
+            await manager.broadcast(group_name, {'type': 'user_left', 'user': username})
+            print(f"[-] {username} left {group_name}")
 
 # ========== HTML ==========
 HTML = '''<!DOCTYPE html>
@@ -1427,270 +1703,6 @@ console.log('📱 Developed by Mugisha Pc');
 </body>
 </html>'''
 
-# ========== FASTAPI ENDPOINTS ==========
-@app.get("/")
-async def root():
-    return HTMLResponse(HTML)
-
-@app.post("/login")
-async def login(request: Request, login_data: LoginRequest):
-    if not check_login_rate_limit(login_data.username):
-        return JSONResponse(
-            status_code=429,
-            content={"success": False, "message": "Too many login attempts. Please wait 5 minutes."}
-        )
-    
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute("SELECT password_hash, role, assigned_group, display_name, login_attempts, locked_until FROM users WHERE username=?", (login_data.username,))
-    row = c.fetchone()
-    conn.close()
-    
-    if not row:
-        return JSONResponse(
-            status_code=401,
-            content={"success": False, "message": "Invalid credentials"}
-        )
-    
-    stored_hash, role, assigned_group, display_name, attempts, locked_until = row
-    
-    if locked_until and locked_until > time.time():
-        return JSONResponse(
-            status_code=429,
-            content={"success": False, "message": "Account locked. Please try again later."}
-        )
-    
-    if verify_password_argon2(login_data.password, stored_hash):
-        reset_login_attempts(login_data.username)
-        
-        session_data = SessionData(
-            username=login_data.username,
-            role=role,
-            assigned_group=assigned_group
-        )
-        
-        response = JSONResponse({
-            "success": True, 
-            "username": login_data.username, 
-            "role": role,
-            "display_name": display_name
-        })
-        await cookie.attach_to_response(response, session_id=secrets.token_urlsafe(32), data=session_data.dict())
-        return response
-    else:
-        increment_login_attempts(login_data.username)
-        return JSONResponse(
-            status_code=401,
-            content={"success": False, "message": "Invalid credentials"}
-        )
-
-@app.post("/gatekeeper")
-async def gatekeeper(login_data: LoginRequest):
-    if not check_login_rate_limit(login_data.username):
-        return JSONResponse(
-            status_code=429,
-            content={"success": False, "message": "Too many attempts. Please wait 5 minutes."}
-        )
-    
-    user = authenticate_user(login_data.username, login_data.password)
-    if not user:
-        return JSONResponse(
-            status_code=401,
-            content={"success": False, "message": "Invalid credentials"}
-        )
-    
-    if "error" in user:
-        return JSONResponse(
-            status_code=429,
-            content={"success": False, "message": user["error"]}
-        )
-    
-    if user["role"] == "admin":
-        return JSONResponse(
-            status_code=403,
-            content={"success": False, "message": "Admin cannot access chat"}
-        )
-    
-    assigned_group = user["assigned_group"]
-    if not assigned_group:
-        return JSONResponse(
-            status_code=404,
-            content={"success": False, "message": "No group assigned to this user"}
-        )
-    
-    return {
-        "success": True,
-        "username": login_data.username,
-        "assigned_group": assigned_group,
-        "display_name": user.get("display_name")
-    }
-
-@app.post("/save_display_name")
-async def save_display_name(data: SaveDisplayNameRequest, session: SessionData = Depends(require_auth)):
-    if session.username != data.username:
-        raise HTTPException(status_code=403, detail="Cannot modify other users")
-    
-    save_user_display_name(data.username, data.display_name)
-    return {"success": True}
-
-@app.get("/admin/data")
-async def admin_data(session: SessionData = Depends(require_admin)):
-    users = get_all_users()
-    messages = get_all_messages()
-    groups = get_all_groups()
-    logs = get_admin_logs()
-    online_users = get_online_users("Main")
-    
-    return {
-        "users": users,
-        "messages": messages,
-        "messages_count": len(messages),
-        "groups": groups,
-        "online_count": len(online_users),
-        "logs": logs
-    }
-
-@app.post("/admin/create_user")
-async def admin_create_user(data: CreateUserRequest, session: SessionData = Depends(require_admin)):
-    if create_user_with_group(data.username, data.password, data.group_name, data.group_password):
-        log_admin_action(session.username, "create_user", data.username, f"Group: {data.group_name}")
-        return {"success": True}
-    return {"success": False, "message": "Username already exists"}
-
-@app.post("/admin/delete_user")
-async def admin_delete_user(data: DeleteUserRequest, session: SessionData = Depends(require_admin)):
-    if delete_user(data.username):
-        log_admin_action(session.username, "delete_user", data.username)
-        return {"success": True}
-    return {"success": False, "message": "Cannot delete admin or user not found"}
-
-@app.post("/admin/delete_group")
-async def admin_delete_group(data: DeleteGroupRequest, session: SessionData = Depends(require_admin)):
-    if delete_group(data.name):
-        log_admin_action(session.username, "delete_group", data.name)
-        return {"success": True}
-    return {"success": False, "message": "Group not found"}
-
-@app.post("/admin/delete_message")
-async def admin_delete_message(data: DeleteMessageRequest, session: SessionData = Depends(require_admin)):
-    if delete_message(data.id):
-        log_admin_action(session.username, "delete_message", str(data.id))
-        return {"success": True}
-    return {"success": False, "message": "Message not found"}
-
-@app.post("/logout")
-async def logout(request: Request):
-    response = JSONResponse({"success": True})
-    response.delete_cookie("abavandimwe_session")
-    return response
-
-@app.get("/health")
-async def health():
-    return {"status": "ok", "system": "ABAVANDIMWE", "author": "Mugisha Pc"}
-
-# ========== WEBSOCKET ==========
-@app.websocket("/ws")
-async def ws_endpoint(websocket: WebSocket):
-    await websocket.accept()
-    
-    # Get session from cookie
-    cookie_header = websocket.headers.get("cookie", "")
-    session_id = None
-    for item in cookie_header.split(";"):
-        item = item.strip()
-        if item.startswith("abavandimwe_session="):
-            session_id = item.split("=")[1]
-            break
-    
-    if not session_id:
-        await websocket.send_json({'type': 'error', 'message': 'No session found'})
-        await websocket.close()
-        return
-    
-    # Verify session
-    try:
-        session = await verifier.verify(session_id)
-        username = session.username
-        assigned_group = session.assigned_group
-        
-        if not assigned_group:
-            await websocket.send_json({'type': 'error', 'message': 'No group assigned'})
-            await websocket.close()
-            return
-        
-        group_name = assigned_group
-        group_info = get_group_info(group_name)
-        
-        if not group_info:
-            await websocket.send_json({'type': 'error', 'message': 'Group not found'})
-            await websocket.close()
-            return
-        
-        group_salt = group_info['salt']
-        
-        # Add to manager
-        await manager.add(group_name, username, websocket)
-        set_user_status(username, 'online', group_name)
-        
-        # Send message history
-        for msg in get_messages(group_name):
-            await websocket.send_json({
-                'type': 'history',
-                'ciphertext': msg['ciphertext'],
-                'sender': msg['sender'],
-                'salt': msg['salt']
-            })
-        
-        online = get_online_users(group_name)
-        await manager.broadcast(group_name, {'type': 'users', 'users': online})
-        await manager.broadcast(group_name, {'type': 'user_joined', 'user': username}, exclude=username)
-        await websocket.send_json({'type': 'ready', 'salt': group_salt, 'group': group_name})
-        print(f"[+] {username} joined {group_name}")
-        
-        # Message loop
-        while True:
-            data = await websocket.receive_json()
-            msg_type = data.get('type')
-            
-            if msg_type == 'message':
-                cipher = data.get('ciphertext')
-                salt = data.get('salt')
-                if username and group_name and check_rate_limit(username):
-                    save_message(cipher, group_name, username, salt)
-                    await manager.broadcast(group_name, {
-                        'type': 'message',
-                        'ciphertext': cipher,
-                        'sender': username,
-                        'salt': salt
-                    }, exclude=username)
-            
-            elif msg_type == 'typing':
-                if username and group_name:
-                    await manager.broadcast(group_name, {'type': 'typing', 'user': username}, exclude=username)
-            
-            elif msg_type == 'stop_typing':
-                if username and group_name:
-                    await manager.broadcast(group_name, {'type': 'stop_typing', 'user': username}, exclude=username)
-            
-            elif msg_type == 'ping':
-                set_user_status(username, 'online', group_name)
-                await websocket.send_json({'type': 'pong'})
-    
-    except Exception as e:
-        print(f"[!] WebSocket error: {e}")
-        await websocket.send_json({'type': 'error', 'message': 'Authentication failed'})
-        await websocket.close()
-        return
-    
-    finally:
-        if username and group_name:
-            manager.remove(group_name, username)
-            set_user_status(username, 'offline', group_name)
-            online = get_online_users(group_name)
-            await manager.broadcast(group_name, {'type': 'users', 'users': online})
-            await manager.broadcast(group_name, {'type': 'user_left', 'user': username})
-            print(f"[-] {username} left {group_name}")
-
 # ========== MAIN ==========
 if __name__ == "__main__":
     import uvicorn
@@ -1718,7 +1730,7 @@ if __name__ == "__main__":
     print(f"[✓] Open: http://localhost:{port}")
     print(f"\n📋 Security Features:")
     print(f"   ✅ Argon2id password hashing")
-    print(f"   ✅ Server-side sessions")
+    print(f"   ✅ Server-side sessions (in-memory)")
     print(f"   ✅ Login rate limiting")
     print(f"   ✅ Account lockout after 5 attempts")
     print(f"   ✅ CORS restricted to allowed origins")
