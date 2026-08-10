@@ -1,7 +1,6 @@
+
 fastapi==0.104.1
 uvicorn==0.24.0
 websockets==12.0
 python-multipart==0.0.6
 argon2-cffi==23.1.0
-fastapi-sessions==0.2.2
-pydantic==2.5.0
