@@ -189,7 +189,7 @@ async def init_db():
     conn = await get_db_connection()
     
     try:
-        # Create tables (without reply_to for now)
+        # Create tables with reply_to
         await conn.execute('''
             CREATE TABLE IF NOT EXISTS users (
                 username TEXT PRIMARY KEY,
@@ -215,7 +215,8 @@ async def init_db():
                 sender TEXT NOT NULL,
                 salt TEXT NOT NULL,
                 created_at DOUBLE PRECISION NOT NULL,
-                expires_at DOUBLE PRECISION NOT NULL
+                expires_at DOUBLE PRECISION NOT NULL,
+                reply_to INTEGER DEFAULT NULL
             )
         ''')
         
@@ -241,6 +242,15 @@ async def init_db():
         ''')
         
         print("[✓] PostgreSQL database ready")
+        
+        # Add reply_to column if it doesn't exist (for existing databases)
+        try:
+            await conn.execute('''
+                ALTER TABLE messages ADD COLUMN IF NOT EXISTS reply_to INTEGER DEFAULT NULL
+            ''')
+            print("[✓] reply_to column added/verified")
+        except Exception as e:
+            print(f"[!] reply_to column already exists or error: {e}")
         
         # Create admin if not exists
         row = await conn.fetchrow("SELECT username FROM users WHERE username = $1", ADMIN_USERNAME)
@@ -428,14 +438,14 @@ async def get_user_assigned_group(username):
     finally:
         await return_db_connection(conn)
 
-async def save_message(ciphertext, group, sender, salt):
+async def save_message(ciphertext, group, sender, salt, reply_to=None):
     now = time.time()
     expiry = now + (24 * 3600)
     conn = await get_db_connection()
     try:
         result = await conn.fetchrow(
-            "INSERT INTO messages (ciphertext, group_name, sender, salt, created_at, expires_at) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id, created_at",
-            ciphertext, group, sender, salt, now, expiry
+            "INSERT INTO messages (ciphertext, group_name, sender, salt, created_at, expires_at, reply_to) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id, created_at",
+            ciphertext, group, sender, salt, now, expiry, reply_to
         )
         return dict(result)
     finally:
@@ -446,10 +456,21 @@ async def get_messages(group):
     conn = await get_db_connection()
     try:
         rows = await conn.fetch(
-            "SELECT id, ciphertext, sender, salt, created_at FROM messages WHERE group_name = $1 AND created_at > $2 ORDER BY id ASC",
+            "SELECT id, ciphertext, sender, salt, created_at, reply_to FROM messages WHERE group_name = $1 AND created_at > $2 ORDER BY id ASC",
             group, cutoff
         )
         return [dict(row) for row in rows]
+    finally:
+        await return_db_connection(conn)
+
+async def get_message_by_id(message_id):
+    conn = await get_db_connection()
+    try:
+        row = await conn.fetchrow(
+            "SELECT id, ciphertext, sender, salt, created_at, reply_to FROM messages WHERE id = $1",
+            message_id
+        )
+        return dict(row) if row else None
     finally:
         await return_db_connection(conn)
 
@@ -654,7 +675,7 @@ HTML = '''<!DOCTYPE html>
         
         .chat-area{flex:1;display:flex;flex-direction:column;}
         .messages-container{flex:1;padding:16px;overflow-y:auto;display:flex;flex-direction:column;gap:12px;}
-        .message{max-width:85%;display:flex;flex-direction:column;animation:fadeIn 0.2s ease;position:relative;padding:8px 0;}
+        .message{max-width:85%;display:flex;flex-direction:column;animation:fadeIn 0.2s ease;position:relative;padding:8px 0;transition:transform 0.2s ease;}
         .message.sent{align-self:flex-end;}
         .message.received{align-self:flex-start;}
         .message-bubble{padding:10px 14px;border-radius:18px;font-size:14px;word-wrap:break-word;position:relative;}
@@ -662,14 +683,21 @@ HTML = '''<!DOCTYPE html>
         .message.received .message-bubble{background:#1a1a2e;border:1px solid #0f0;border-bottom-left-radius:4px;}
         .message-sender{font-size:10px;margin-bottom:4px;opacity:0.7;padding-left:4px;}
         .message-time{font-size:9px;margin-top:4px;opacity:0.5;}
+        .message-reply-preview{font-size:11px;color:#ffaa00;margin-bottom:6px;padding:6px 10px;background:rgba(255,170,0,0.08);border-left:3px solid #ffaa00;border-radius:4px;opacity:0.8;cursor:pointer;}
+        .message-reply-preview .reply-sender{color:#ffaa00;font-weight:bold;}
+        .message-reply-preview .reply-text{color:#888;}
         .system-message{text-align:center;font-size:11px;color:#ffaa00;margin:8px 0;font-style:italic;animation:fadeIn 0.3s ease;}
         .typing-indicator{padding:8px 16px;color:#0f0;font-style:italic;font-size:11px;min-height:36px;}
         
-        .input-area{padding:12px 16px;background:#050508;border-top:1px solid #0f0;display:flex;gap:10px;align-items:flex-end;}
-        .input-area textarea{flex:1;margin:0;padding:12px 16px;background:#111;border:1px solid #0f0;border-radius:12px;color:#0f0;font-family:monospace;font-size:14px;resize:vertical;min-height:50px;max-height:120px;line-height:1.5;overflow-y:auto;}
-        .input-area textarea:focus{outline:none;box-shadow:0 0 20px rgba(0,255,65,0.2);border-color:#0f0;}
-        .input-area textarea::placeholder{color:#444;}
-        .input-area button{width:auto;margin:0;padding:12px 20px;height:50px;align-self:flex-end;}
+        .input-area{padding:12px 16px;background:#050508;border-top:1px solid #0f0;display:flex;flex-direction:column;gap:8px;}
+        .reply-preview{display:none;padding:8px 12px;background:rgba(255,170,0,0.1);border-left:3px solid #ffaa00;border-radius:6px;font-size:12px;color:#ffaa00;align-items:center;justify-content:space-between;}
+        .reply-preview .reply-cancel{color:#ff4444;cursor:pointer;font-weight:bold;padding:0 8px;}
+        .reply-preview .reply-cancel:hover{color:#ff6666;}
+        .input-row{display:flex;gap:10px;align-items:flex-end;}
+        .input-row textarea{flex:1;margin:0;padding:12px 16px;background:#111;border:1px solid #0f0;border-radius:12px;color:#0f0;font-family:monospace;font-size:14px;resize:vertical;min-height:50px;max-height:120px;line-height:1.5;overflow-y:auto;}
+        .input-row textarea:focus{outline:none;box-shadow:0 0 20px rgba(0,255,65,0.2);border-color:#0f0;}
+        .input-row textarea::placeholder{color:#444;}
+        .input-row button{width:auto;margin:0;padding:12px 20px;height:50px;align-self:flex-end;}
         .footer{text-align:center;padding:6px;font-size:8px;color:#333;border-top:1px solid #0f0;}
         
         ::-webkit-scrollbar{width:3px;}
@@ -888,8 +916,14 @@ HTML = '''<!DOCTYPE html>
             </div>
             <div class="typing-indicator" id="typingIndicator"></div>
             <div class="input-area">
-                <textarea id="messageInput" placeholder="Type a message..." rows="2"></textarea>
-                <button onclick="sendMessage()">Send</button>
+                <div class="reply-preview" id="replyPreview">
+                    <span>↩️ Replying to <span id="replyPreviewSender" style="color:#ffaa00;font-weight:bold;"></span>: <span id="replyPreviewText" style="color:#888;"></span></span>
+                    <span class="reply-cancel" onclick="cancelReply()">✕</span>
+                </div>
+                <div class="input-row">
+                    <textarea id="messageInput" placeholder="Type a message..." rows="2"></textarea>
+                    <button onclick="sendMessage()">Send</button>
+                </div>
             </div>
             <div class="footer">🔐 End-to-End Encrypted | Messages self-destruct after 24 hours</div>
         </div>
@@ -901,6 +935,8 @@ HTML = '''<!DOCTYPE html>
 let ws, username, groupName, groupPassword, groupSalt, typingTimeout, reconnectAttempts = 0;
 let currentUser = null;
 let gatekeeperData = null;
+let replyingToMessageId = null;
+let messagesData = {}; // Store messages by ID for reply previews
 
 document.addEventListener('DOMContentLoaded', function() {
     document.getElementById('loginBtn').addEventListener('click', login);
@@ -1090,28 +1126,32 @@ function connectToChat(username, group) {
                 addSystemMessage('🔐 Connected - Messages last 24 hours');
             } else if(d.type === 'history') {
                 document.getElementById('messages').innerHTML = '';
+                messagesData = {};
                 
                 if(d.messages && d.messages.length > 0) {
                     for(let msg of d.messages) {
                         try {
                             let dec = await decrypt(msg.ciphertext, window.groupPassword, msg.salt);
                             let isSent = msg.sender === window.chatUsername;
-                            addMessage(msg.sender, dec, isSent, msg.timestamp);
+                            messagesData[msg.id] = {sender: msg.sender, text: dec, timestamp: msg.created_at};
+                            addMessage(msg.sender, dec, isSent, msg.timestamp, msg.id, msg.reply_to);
                         } catch(e) {
                             console.error('Decryption error:', e);
                             let isSent = msg.sender === window.chatUsername;
-                            addMessage(msg.sender, '🔒 Encrypted', isSent, msg.timestamp);
+                            messagesData[msg.id] = {sender: msg.sender, text: '🔒 Encrypted', timestamp: msg.created_at};
+                            addMessage(msg.sender, '🔒 Encrypted', isSent, msg.timestamp, msg.id, msg.reply_to);
                         }
                     }
                 }
             } else if(d.type === 'message') {
-                if (d.sender !== window.chatUsername) {
-                    try {
-                        let dec = await decrypt(d.ciphertext, window.groupPassword, d.salt);
-                        addMessage(d.sender, dec, false, d.timestamp);
-                    } catch(e) {
-                        addMessage(d.sender, '🔒 Encrypted', false, d.timestamp);
-                    }
+                try {
+                    let dec = await decrypt(d.ciphertext, window.groupPassword, d.salt);
+                    let isSent = d.sender === window.chatUsername;
+                    messagesData[d.message_id] = {sender: d.sender, text: dec, timestamp: d.timestamp};
+                    addMessage(d.sender, dec, isSent, d.timestamp, d.message_id, d.reply_to);
+                } catch(e) {
+                    messagesData[d.message_id] = {sender: d.sender, text: '🔒 Encrypted', timestamp: d.timestamp};
+                    addMessage(d.sender, '🔒 Encrypted', false, d.timestamp, d.message_id, d.reply_to);
                 }
             } else if(d.type === 'users') {
                 updateUsers(d.users);
@@ -1180,10 +1220,13 @@ function addSystemMessage(text) {
     msgs.scrollTop = msgs.scrollHeight;
 }
 
-function addMessage(sender, text, isSent, timestamp) {
+function addMessage(sender, text, isSent, timestamp, messageId, replyTo) {
     let msgs = document.getElementById('messages');
     let div = document.createElement('div');
     div.className = 'message ' + (isSent ? 'sent' : 'received');
+    div.dataset.messageId = messageId;
+    div.dataset.sender = sender;
+    div.dataset.text = text;
     
     let time;
     if(timestamp) {
@@ -1193,12 +1236,133 @@ function addMessage(sender, text, isSent, timestamp) {
         time = new Date().toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
     }
     
+    let replyHtml = '';
+    if(replyTo && messagesData[replyTo]) {
+        let original = messagesData[replyTo];
+        let originalText = original.text || 'Message';
+        replyHtml = '<div class="message-reply-preview" onclick="scrollToMessage(' + replyTo + ')">' +
+                    '↩️ <span class="reply-sender">' + escapeHtml(original.sender) + '</span>: ' +
+                    '<span class="reply-text">' + escapeHtml(originalText.substring(0, 60)) + (originalText.length > 60 ? '...' : '') + '</span>' +
+                    '</div>';
+    }
+    
     div.innerHTML = '<div class="message-sender">' + (isSent ? 'YOU' : escapeHtml(sender)) + '</div>' + 
+                    replyHtml +
                     '<div class="message-bubble">' + escapeHtml(text) + '</div>' + 
                     '<div class="message-time">' + time + '</div>';
     
+    // Swipe to reply on mobile
+    let touchStartX = 0;
+    let touchCurrentX = 0;
+    let touchStartY = 0;
+    
+    div.addEventListener('touchstart', function(e) {
+        touchStartX = e.touches[0].clientX;
+        touchStartY = e.touches[0].clientY;
+        touchCurrentX = touchStartX;
+    }, {passive: true});
+    
+    div.addEventListener('touchmove', function(e) {
+        touchCurrentX = e.touches[0].clientX;
+        let diffX = touchCurrentX - touchStartX;
+        let diffY = e.touches[0].clientY - touchStartY;
+        
+        if (diffX > 0 && diffX < 80 && Math.abs(diffY) < 30) {
+            div.style.transform = 'translateX(' + diffX + 'px)';
+        }
+    }, {passive: true});
+    
+    div.addEventListener('touchend', function(e) {
+        let diffX = touchCurrentX - touchStartX;
+        div.style.transform = '';
+        
+        if (diffX >= 60) {
+            startReply(messageId);
+        }
+        touchStartX = 0;
+        touchCurrentX = 0;
+        touchStartY = 0;
+    }, {passive: true});
+    
+    // Mouse swipe for desktop
+    let mouseStartX = 0;
+    let mouseCurrentX = 0;
+    let mouseStartY = 0;
+    let isMouseDown = false;
+    
+    div.addEventListener('mousedown', function(e) {
+        mouseStartX = e.clientX;
+        mouseStartY = e.clientY;
+        mouseCurrentX = mouseStartX;
+        isMouseDown = true;
+    });
+    
+    div.addEventListener('mousemove', function(e) {
+        if (!isMouseDown) return;
+        mouseCurrentX = e.clientX;
+        let diffX = mouseCurrentX - mouseStartX;
+        let diffY = e.clientY - mouseStartY;
+        
+        if (diffX > 0 && diffX < 80 && Math.abs(diffY) < 30) {
+            div.style.transform = 'translateX(' + diffX + 'px)';
+        }
+    });
+    
+    div.addEventListener('mouseup', function(e) {
+        if (!isMouseDown) return;
+        let diffX = mouseCurrentX - mouseStartX;
+        div.style.transform = '';
+        
+        if (diffX >= 60) {
+            startReply(messageId);
+        }
+        isMouseDown = false;
+        mouseStartX = 0;
+        mouseCurrentX = 0;
+        mouseStartY = 0;
+    });
+    
+    div.addEventListener('mouseleave', function() {
+        if (isMouseDown) {
+            div.style.transform = '';
+            isMouseDown = false;
+        }
+    });
+    
     msgs.appendChild(div);
     msgs.scrollTop = msgs.scrollHeight;
+}
+
+function startReply(messageId) {
+    if (!messageId || !messagesData[messageId]) return;
+    
+    replyingToMessageId = messageId;
+    let original = messagesData[messageId];
+    
+    document.getElementById('replyPreviewSender').textContent = original.sender;
+    document.getElementById('replyPreviewText').textContent = original.text.substring(0, 60) + (original.text.length > 60 ? '...' : '');
+    document.getElementById('replyPreview').style.display = 'flex';
+    document.getElementById('messageInput').focus();
+}
+
+function cancelReply() {
+    replyingToMessageId = null;
+    document.getElementById('replyPreview').style.display = 'none';
+}
+
+function scrollToMessage(messageId) {
+    // Find the message element and scroll to it
+    let messages = document.querySelectorAll('.message');
+    for (let msg of messages) {
+        if (msg.dataset.messageId == messageId) {
+            msg.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            msg.style.border = '2px solid #ffaa00';
+            setTimeout(() => {
+                msg.style.border = '';
+            }, 2000);
+            break;
+        }
+    }
 }
 
 function updateUsers(users) {
@@ -1274,7 +1438,12 @@ async function sendMessage() {
         let cipher = await encrypt(text, window.groupPassword, groupSalt);
         let timestamp = Date.now() / 1000;
         
-        addMessage(window.chatUsername, text, true, timestamp);
+        let replyToId = replyingToMessageId;
+        
+        // Show message immediately
+        let newId = Date.now();
+        messagesData[newId] = {sender: window.chatUsername, text: text, timestamp: timestamp};
+        addMessage(window.chatUsername, text, true, timestamp, newId, replyToId);
         input.value = '';
         input.style.height = 'auto';
         
@@ -1282,8 +1451,12 @@ async function sendMessage() {
             type:'message',
             ciphertext:cipher,
             salt:groupSalt,
-            timestamp: timestamp
+            timestamp: timestamp,
+            reply_to: replyToId
         }));
+        
+        // Clear reply indicator
+        cancelReply();
     } catch(e) {
         alert('Failed to send message');
     }
@@ -1360,9 +1533,12 @@ async function logout() {
     document.getElementById('userGroupPassword').value = '';
     document.getElementById('gatekeeperSuccess')?.remove();
     document.getElementById('setupSuccess').style.display = 'none';
+    document.getElementById('replyPreview').style.display = 'none';
     reconnectAttempts = 0;
     currentUser = null;
     gatekeeperData = null;
+    replyingToMessageId = null;
+    messagesData = {};
 }
 
 async function loadAdminData() {
@@ -1523,6 +1699,7 @@ async function deleteMessage(id) {
 
 console.log('🔐 ABAVANDIMWE Secure Messaging System');
 console.log('📱 Developed by Mugisha Pc');
+console.log('💬 Reply feature: Swipe any message left to right to reply');
 </script>
 </body>
 </html>'''
@@ -1768,7 +1945,7 @@ async def ws_endpoint(websocket: WebSocket):
     online = await get_online_users(group_name)
     await websocket.send_json({'type': 'users', 'users': online})
     
-    # Send message history
+    # Send message history with reply_to
     messages = await get_messages(group_name)
     
     history_messages = []
@@ -1778,7 +1955,8 @@ async def ws_endpoint(websocket: WebSocket):
             'ciphertext': msg['ciphertext'],
             'sender': msg['sender'],
             'salt': msg['salt'],
-            'timestamp': msg['created_at']
+            'timestamp': msg['created_at'],
+            'reply_to': msg.get('reply_to')
         })
     
     await websocket.send_json({
@@ -1799,9 +1977,10 @@ async def ws_endpoint(websocket: WebSocket):
             if msg_type == 'message':
                 cipher = data.get('ciphertext')
                 salt = data.get('salt')
+                reply_to = data.get('reply_to')
                 
                 if username and group_name and check_rate_limit(username):
-                    result = await save_message(cipher, group_name, username, salt)
+                    result = await save_message(cipher, group_name, username, salt, reply_to)
                     message_id = result['id']
                     created_at = result['created_at']
                     
@@ -1811,7 +1990,8 @@ async def ws_endpoint(websocket: WebSocket):
                         'ciphertext': cipher,
                         'sender': username,
                         'salt': salt,
-                        'timestamp': created_at
+                        'timestamp': created_at,
+                        'reply_to': reply_to
                     }, exclude=username)
             
             elif msg_type == 'typing':
@@ -1870,4 +2050,7 @@ if __name__ == "__main__":
     print(f"   ✅ Shift+Enter for new line, Enter to send")
     print(f"   ✅ Messages load on connect")
     print(f"   ✅ Online users list updates")
+    print(f"   ✅ Reply to messages (swipe left to right)")
+    print(f"   ✅ Reply previews with original message")
+    print(f"   ✅ Click reply preview to scroll to original")
     uvicorn.run(app, host="0.0.0.0", port=port)
