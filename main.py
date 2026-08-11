@@ -682,7 +682,7 @@ HTML = '''<!DOCTYPE html>
         input{width:100%;padding:14px;margin:10px 0;background:#111;border:1px solid #0f0;border-radius:12px;color:#0f0;font-family:monospace;font-size:15px;transition:all 0.3s;}
         input:focus{outline:none;box-shadow:0 0 20px rgba(0,255,65,0.2);border-color:#0f0;}
         input::placeholder{color:#444;}
-        button{width:100%;padding:14px;margin-top:20px;background:transparent;border:2px solid #0f0;border-radius:12px;color:#0f0;font-size:16px;font-weight:bold;cursor:pointer;transition:all 0.3s;}
+        button{width:100%;padding:14px;margin-top:20px;background:transparent;border:2px solid #0f0;border-radius:12px;color:#0f0;font-size:16px;font-weight:bold;cursor:pointer;transition:all 0.3s;position:relative;overflow:hidden;}
         button:hover{background:#0f0;color:#000;transform:translateY(-2px);box-shadow:0 5px 20px rgba(0,255,65,0.3);}
         button:active{transform:scale(0.98);}
         .btn-whatsapp{background:#25D366;border-color:#25D366;color:white;margin-top:12px;}
@@ -744,7 +744,7 @@ HTML = '''<!DOCTYPE html>
         .input-row textarea{flex:1;margin:0;padding:12px 16px;background:#111;border:1px solid #0f0;border-radius:12px;color:#0f0;font-family:monospace;font-size:14px;resize:vertical;min-height:50px;max-height:120px;line-height:1.5;overflow-y:auto;}
         .input-row textarea:focus{outline:none;box-shadow:0 0 20px rgba(0,255,65,0.2);border-color:#0f0;}
         .input-row textarea::placeholder{color:#444;}
-        .input-row button{width:auto;margin:0;padding:12px 20px;height:50px;align-self:flex-end;}
+        .input-row button{width:auto;margin:0;padding:12px 20px;height:50px;align-self:flex-end;position:relative;overflow:hidden;}
         .footer{text-align:center;padding:6px;font-size:8px;color:#333;border-top:1px solid #0f0;}
         
         ::-webkit-scrollbar{width:3px;}
@@ -771,7 +771,7 @@ HTML = '''<!DOCTYPE html>
         .admin-card table td{padding:6px;border-bottom:1px solid #1a1a2e;}
         .admin-card input{width:100%;padding:8px;margin:5px 0;background:#111;border:1px solid #0f0;border-radius:6px;color:#0f0;font-size:12px;}
         .admin-card select{width:100%;padding:8px;margin:5px 0;background:#111;border:1px solid #0f0;border-radius:6px;color:#0f0;font-size:12px;}
-        .admin-card button{width:auto;padding:8px 16px;margin:5px;font-size:12px;}
+        .admin-card button{width:auto;padding:8px 16px;margin:5px;font-size:12px;position:relative;overflow:hidden;}
         .close-admin{background:#ff0041;border-color:#ff0041;color:white;padding:8px 16px;border-radius:8px;cursor:pointer;}
         .close-admin:hover{background:#cc0033;}
         .admin-stats{display:grid;grid-template-columns:repeat(auto-fit, minmax(150px, 1fr));gap:12px;margin-bottom:20px;}
@@ -779,9 +779,9 @@ HTML = '''<!DOCTYPE html>
         .stat-number{font-size:24px;color:#0f0;}
         .stat-label{font-size:10px;color:#666;margin-top:4px;}
         .admin-table-wrap{max-height:200px;overflow-y:auto;}
-        .action-btn{background:transparent;border:1px solid #ff0041;color:#ff0041;padding:4px 8px;border-radius:4px;cursor:pointer;font-size:10px;margin:0 2px;}
+        .action-btn{background:transparent;border:1px solid #ff0041;color:#ff0041;padding:4px 8px;border-radius:4px;cursor:pointer;font-size:10px;margin:0 2px;position:relative;overflow:hidden;}
         .action-btn:hover{background:#ff0041;color:white;}
-        .action-btn-green{background:transparent;border:1px solid #0f0;color:#0f0;padding:4px 8px;border-radius:4px;cursor:pointer;font-size:10px;margin:0 2px;}
+        .action-btn-green{background:transparent;border:1px solid #0f0;color:#0f0;padding:4px 8px;border-radius:4px;cursor:pointer;font-size:10px;margin:0 2px;position:relative;overflow:hidden;}
         .action-btn-green:hover{background:#0f0;color:#000;}
         .admin-close-area{display:flex;justify-content:flex-end;gap:10px;}
         .admin-username{color:#ffaa00;font-size:12px;margin-left:10px;}
@@ -819,6 +819,8 @@ HTML = '''<!DOCTYPE html>
             transition: all 0.3s;
             font-family: monospace;
             letter-spacing: 0.5px;
+            position:relative;
+            overflow:hidden;
         }
         .install-btn:hover {
             transform: translateX(-50%) scale(1.05);
@@ -830,9 +832,123 @@ HTML = '''<!DOCTYPE html>
         .install-btn.show {
             display: block;
         }
+        
+        /* Loading Overlay */
+        .loading-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(10, 10, 15, 0.92);
+            z-index: 9999;
+            display: none;
+            justify-content: center;
+            align-items: center;
+            flex-direction: column;
+            gap: 30px;
+        }
+        .loading-overlay.active {
+            display: flex;
+        }
+        .loader {
+            width: 80px;
+            height: 80px;
+            border: 3px solid rgba(0, 255, 65, 0.1);
+            border-top: 3px solid #0f0;
+            border-radius: 50%;
+            animation: spin 0.8s cubic-bezier(0.4, 0.0, 0.2, 1) infinite;
+            box-shadow: 0 0 30px rgba(0, 255, 65, 0.15);
+        }
+        .loader-pulse {
+            position: absolute;
+            width: 80px;
+            height: 80px;
+            border-radius: 50%;
+            border: 1px solid rgba(0, 255, 65, 0.3);
+            animation: pulse-ring 1.5s cubic-bezier(0.4, 0.0, 0.2, 1) infinite;
+        }
+        .loader-container {
+            position: relative;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+        .loader-text {
+            color: #0f0;
+            font-size: 16px;
+            font-family: monospace;
+            letter-spacing: 2px;
+            animation: text-pulse 1.5s ease-in-out infinite;
+        }
+        .loader-dots {
+            display: inline-block;
+        }
+        .loader-dots span {
+            display: inline-block;
+            animation: dot-bounce 1.4s ease-in-out infinite;
+        }
+        .loader-dots span:nth-child(1) { animation-delay: 0s; }
+        .loader-dots span:nth-child(2) { animation-delay: 0.2s; }
+        .loader-dots span:nth-child(3) { animation-delay: 0.4s; }
+        
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        @keyframes pulse-ring {
+            0% { transform: scale(1); opacity: 1; }
+            100% { transform: scale(1.6); opacity: 0; }
+        }
+        @keyframes text-pulse {
+            0%, 100% { opacity: 0.6; }
+            50% { opacity: 1; }
+        }
+        @keyframes dot-bounce {
+            0%, 80%, 100% { transform: scale(0); opacity: 0.3; }
+            40% { transform: scale(1); opacity: 1; }
+        }
+        
+        /* Button loading ripple effect */
+        .btn-loading {
+            pointer-events: none;
+            opacity: 0.7;
+        }
+        .btn-loading::after {
+            content: '';
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            width: 24px;
+            height: 24px;
+            margin-top: -12px;
+            margin-left: -12px;
+            border: 2px solid rgba(255,255,255,0.2);
+            border-top: 2px solid currentColor;
+            border-radius: 50%;
+            animation: spin 0.6s linear infinite;
+        }
+        .btn-loading .btn-text {
+            opacity: 0;
+        }
     </style>
 </head>
 <body>
+
+<!-- Loading Overlay -->
+<div class="loading-overlay" id="loadingOverlay">
+    <div class="loader-container">
+        <div class="loader-pulse"></div>
+        <div class="loader"></div>
+    </div>
+    <div class="loader-text">
+        <span id="loadingText">Loading</span>
+        <span class="loader-dots">
+            <span>.</span><span>.</span><span>.</span>
+        </span>
+    </div>
+</div>
+
 <div id="loginScreen" class="login-container">
     <div class="login-card">
         <div class="login-card-inner">
@@ -843,11 +959,11 @@ HTML = '''<!DOCTYPE html>
             <input type="text" id="loginUsername" placeholder="Username" autocomplete="username">
             <input type="password" id="loginPassword" placeholder="Password" autocomplete="current-password">
             
-            <button id="loginBtn">▶ Login</button>
+            <button id="loginBtn" onclick="showLoading('Logging in', login)">▶ Login</button>
             
             <div class="separator"><span>OR</span></div>
             
-            <button class="btn-whatsapp" onclick="requestAccess()">
+            <button class="btn-whatsapp" onclick="showLoading('Opening WhatsApp', requestAccess)">
                 💬 Request Access on WhatsApp
             </button>
             
@@ -866,7 +982,7 @@ HTML = '''<!DOCTYPE html>
     <div class="admin-panel-header">
         <h2>⚙️ Admin Dashboard <span class="admin-username">(Logged in as: <span id="adminUsername">Mpc</span>)</span></h2>
         <div>
-            <button class="close-admin" onclick="logout()">🚪 Logout</button>
+            <button class="close-admin" onclick="showLoading('Logging out', logout)">🚪 Logout</button>
         </div>
     </div>
     
@@ -885,7 +1001,7 @@ HTML = '''<!DOCTYPE html>
                 <input type="text" id="newPassword" placeholder="Password" style="width:100%;">
                 <input type="text" id="newGroupName" placeholder="Group Name" style="width:100%;">
                 <input type="text" id="newGroupPassword" placeholder="Group Password" style="width:100%;">
-                <button onclick="createUser()" class="action-btn-green">➕ Create User</button>
+                <button onclick="showLoading('Creating User', createUser)" class="action-btn-green">➕ Create User</button>
             </div>
             <div style="font-size:10px;color:#666;margin-top:8px;">
                 💡 Users will use these credentials to login
@@ -942,7 +1058,7 @@ HTML = '''<!DOCTYPE html>
         <input type="text" id="gatekeeperUsername" placeholder="Username" readonly>
         <input type="password" id="gatekeeperPassword" placeholder="Password">
         
-        <button id="gatekeeperBtn">▶ Verify</button>
+        <button id="gatekeeperBtn" onclick="showLoading('Verifying', gatekeeperLogin)">▶ Verify</button>
         
         <div id="gatekeeperError" class="error-message"></div>
         
@@ -961,7 +1077,7 @@ HTML = '''<!DOCTYPE html>
         <input type="text" id="userGroupName" placeholder="Group Name" readonly>
         <input type="password" id="userGroupPassword" placeholder="Group Password" readonly>
         
-        <button id="enterChatBtn">▶ Enter Chat</button>
+        <button id="enterChatBtn" onclick="showLoading('Entering Chat', enterChat)">▶ Enter Chat</button>
         
         <div id="setupError" class="error-message"></div>
         <div id="setupSuccess" class="success-message"></div>
@@ -979,7 +1095,7 @@ HTML = '''<!DOCTYPE html>
             <span class="online-badge" id="connectionBadge">● Online</span>
         </div>
         <h2 id="groupTitle"># LOADING</h2>
-        <button class="logout-btn" onclick="logout()">Leave</button>
+        <button class="logout-btn" onclick="showLoading('Leaving', logout)">Leave</button>
     </div>
     
     <div class="main-content">
@@ -1001,7 +1117,7 @@ HTML = '''<!DOCTYPE html>
                 </div>
                 <div class="input-row">
                     <textarea id="messageInput" placeholder="Type a message..." rows="2"></textarea>
-                    <button onclick="sendMessage()">Send</button>
+                    <button onclick="showLoading('Sending', sendMessage)">Send</button>
                 </div>
             </div>
             <div class="footer">🔐 End-to-End Encrypted | Messages self-destruct after 24 hours</div>
@@ -1011,7 +1127,7 @@ HTML = '''<!DOCTYPE html>
 </div>
 
 <!-- Install App Button -->
-<button id="installBtn" class="install-btn">📲 Install ABAVANDIMWE App</button>
+<button id="installBtn" class="install-btn" onclick="showLoading('Installing App', installApp)">📲 Install ABAVANDIMWE App</button>
 
 <script>
 let ws, username, groupName, groupPassword, groupSalt, typingTimeout, reconnectAttempts = 0;
@@ -1020,26 +1136,38 @@ let gatekeeperData = null;
 let replyingToMessageId = null;
 let messagesData = {};
 
-document.addEventListener('DOMContentLoaded', function() {
-    document.getElementById('loginBtn').addEventListener('click', login);
-    document.getElementById('gatekeeperBtn').addEventListener('click', gatekeeperLogin);
-    document.getElementById('enterChatBtn').addEventListener('click', enterChat);
+// ========== LOADING OVERLAY ==========
+function showLoading(text, callback) {
+    const overlay = document.getElementById('loadingOverlay');
+    const loadingText = document.getElementById('loadingText');
+    loadingText.textContent = text;
+    overlay.classList.add('active');
     
-    document.getElementById('loginPassword').addEventListener('keypress', function(e) {
-        if(e.key === 'Enter') login();
-    });
-    document.getElementById('gatekeeperPassword').addEventListener('keypress', function(e) {
-        if(e.key === 'Enter') gatekeeperLogin();
-    });
-    document.getElementById('userDisplayName').addEventListener('keypress', function(e) {
-        if(e.key === 'Enter') enterChat();
-    });
-    
-    document.getElementById('messageInput').addEventListener('input', function() {
-        this.style.height = 'auto';
-        this.style.height = Math.min(this.scrollHeight, 120) + 'px';
-    });
-});
+    // Execute the callback after a small delay for animation
+    setTimeout(async () => {
+        try {
+            await callback();
+        } catch (e) {
+            console.error('Error in callback:', e);
+        } finally {
+            // Don't hide overlay immediately for async operations
+            // It will be hidden when the operation completes
+            if (!document.querySelector('.chat-container.active') && 
+                !document.querySelector('.admin-panel.active') &&
+                !document.querySelector('.gatekeeper-container.active') &&
+                !document.querySelector('.user-setup-container.active')) {
+                // If no screen is active, hide overlay after a delay
+                setTimeout(() => {
+                    overlay.classList.remove('active');
+                }, 500);
+            }
+        }
+    }, 300);
+}
+
+function hideLoading() {
+    document.getElementById('loadingOverlay').classList.remove('active');
+}
 
 // ========== PWA: Service Worker Registration ==========
 if ('serviceWorker' in navigator) {
@@ -1059,20 +1187,15 @@ let deferredPrompt;
 const installBtn = document.getElementById('installBtn');
 
 window.addEventListener('beforeinstallprompt', (e) => {
-    // Prevent Chrome 67+ from automatically showing the prompt
     e.preventDefault();
-    // Stash the event so it can be triggered later
     deferredPrompt = e;
-    // Show the install button
     installBtn.classList.add('show');
     console.log('📱 App can be installed');
 });
 
-installBtn.addEventListener('click', async () => {
+async function installApp() {
     if (deferredPrompt) {
-        // Show the install prompt
         deferredPrompt.prompt();
-        // Wait for the user to respond to the prompt
         const choiceResult = await deferredPrompt.userChoice;
         if (choiceResult.outcome === 'accepted') {
             console.log('✅ User accepted the install prompt');
@@ -1080,28 +1203,66 @@ installBtn.addEventListener('click', async () => {
         } else {
             console.log('❌ User dismissed the install prompt');
         }
-        // Clear the deferredPrompt variable
         deferredPrompt = null;
     }
-});
+    hideLoading();
+}
 
-// Hide install button if already installed
 window.addEventListener('appinstalled', (evt) => {
     console.log('✅ ABAVANDIMWE was installed');
     installBtn.classList.remove('show');
+    hideLoading();
 });
 
-// Check if app is running in standalone mode (already installed)
 if (window.matchMedia('(display-mode: standalone)').matches) {
     installBtn.classList.remove('show');
     console.log('📱 ABAVANDIMWE is running as installed app');
 }
 
-// Also check for iOS Safari
 if (navigator.standalone) {
     installBtn.classList.remove('show');
     console.log('📱 ABAVANDIMWE is running as iOS standalone app');
 }
+
+// ========== DOM READY ==========
+document.addEventListener('DOMContentLoaded', function() {
+    document.getElementById('loginBtn').addEventListener('click', function(e) {
+        // Prevent double click
+        if (this.classList.contains('btn-loading')) return;
+        showLoading('Logging in', login);
+    });
+    
+    document.getElementById('gatekeeperBtn').addEventListener('click', function(e) {
+        if (this.classList.contains('btn-loading')) return;
+        showLoading('Verifying', gatekeeperLogin);
+    });
+    
+    document.getElementById('enterChatBtn').addEventListener('click', function(e) {
+        if (this.classList.contains('btn-loading')) return;
+        showLoading('Entering Chat', enterChat);
+    });
+    
+    document.getElementById('loginPassword').addEventListener('keypress', function(e) {
+        if(e.key === 'Enter') {
+            showLoading('Logging in', login);
+        }
+    });
+    document.getElementById('gatekeeperPassword').addEventListener('keypress', function(e) {
+        if(e.key === 'Enter') {
+            showLoading('Verifying', gatekeeperLogin);
+        }
+    });
+    document.getElementById('userDisplayName').addEventListener('keypress', function(e) {
+        if(e.key === 'Enter') {
+            showLoading('Entering Chat', enterChat);
+        }
+    });
+    
+    document.getElementById('messageInput').addEventListener('input', function() {
+        this.style.height = 'auto';
+        this.style.height = Math.min(this.scrollHeight, 120) + 'px';
+    });
+});
 
 // ========== REST OF THE APP ==========
 async function login() {
@@ -1110,6 +1271,7 @@ async function login() {
     
     if(!username || !password) {
         showError('Please enter username and password');
+        hideLoading();
         return;
     }
     
@@ -1124,6 +1286,7 @@ async function login() {
         
         if(data.success) {
             currentUser = {username: data.username, role: data.role};
+            hideLoading();
             
             if(data.role === 'admin') {
                 document.getElementById('loginScreen').style.display = 'none';
@@ -1149,10 +1312,12 @@ async function login() {
             }
         } else {
             showError(data.message || 'Invalid credentials. Request access via WhatsApp if you need an account.');
+            hideLoading();
         }
     } catch(e) {
         console.error('Login error:', e);
         showError('Connection error. Please try again.');
+        hideLoading();
     }
 }
 
@@ -1162,6 +1327,7 @@ async function gatekeeperLogin() {
     
     if(!username || !password) {
         showGatekeeperError('Please enter your password');
+        hideLoading();
         return;
     }
     
@@ -1190,12 +1356,15 @@ async function gatekeeperLogin() {
                 document.getElementById('userDisplayName').value = '';
                 showSetupSuccess('✅ Verified! Enter your display name to start chatting.');
             }
+            hideLoading();
         } else {
             showGatekeeperError(data.message || 'Invalid credentials');
+            hideLoading();
         }
     } catch(e) {
         console.error('Gatekeeper error:', e);
         showGatekeeperError('Connection error. Please try again.');
+        hideLoading();
     }
 }
 
@@ -1205,11 +1374,13 @@ async function enterChat() {
     
     if(!displayName) {
         showSetupError('Please enter your display name');
+        hideLoading();
         return;
     }
     
     if(!groupName) {
         showSetupError('Group missing. Please contact admin.');
+        hideLoading();
         return;
     }
     
@@ -1234,6 +1405,7 @@ async function enterChat() {
     document.getElementById('chatScreen').classList.add('active');
     document.getElementById('messages').innerHTML = '';
     messagesData = {};
+    hideLoading();
     
     connectToChat(displayName, groupName);
 }
@@ -1568,14 +1740,17 @@ document.getElementById('messageInput')?.addEventListener('input', function() {
 document.getElementById('messageInput')?.addEventListener('keydown', function(e) {
     if(e.key === 'Enter' && !e.shiftKey) {
         e.preventDefault();
-        sendMessage();
+        showLoading('Sending', sendMessage);
     }
 });
 
 async function sendMessage() {
     let input = document.getElementById('messageInput');
     let text = input.value.trim();
-    if(!text || !ws || ws.readyState !== WebSocket.OPEN || !groupSalt) return;
+    if(!text || !ws || ws.readyState !== WebSocket.OPEN || !groupSalt) {
+        hideLoading();
+        return;
+    }
     
     try {
         let cipher = await encrypt(text, window.groupPassword, groupSalt);
@@ -1598,8 +1773,10 @@ async function sendMessage() {
         }));
         
         cancelReply();
+        hideLoading();
     } catch(e) {
         alert('Failed to send message');
+        hideLoading();
     }
 }
 
@@ -1609,6 +1786,7 @@ function requestAccess() {
     const url = `https://wa.me/${phone}?text=${encodeURIComponent(message)}`;
     window.open(url, '_blank');
     showSuccess('📱 Opening WhatsApp... Please send your request.');
+    hideLoading();
 }
 
 function showError(msg) {
@@ -1680,6 +1858,7 @@ async function logout() {
     gatekeeperData = null;
     replyingToMessageId = null;
     messagesData = {};
+    hideLoading();
 }
 
 async function loadAdminData() {
@@ -1700,7 +1879,7 @@ async function loadAdminData() {
                 <td>${escapeHtml(u.display_name || u.username)}</td>
                 <td>${u.status}</td>
                 <td>
-                    ${u.username !== 'Mpc' ? `<button class="action-btn" onclick="deleteUser('${u.username}')">Delete</button>` : '⭐ Admin'}
+                    ${u.username !== 'Mpc' ? `<button class="action-btn" onclick="showLoading('Deleting User', function(){deleteUser('${u.username}')})">Delete</button>` : '⭐ Admin'}
                 </td>
             </tr>`;
         });
@@ -1711,7 +1890,7 @@ async function loadAdminData() {
             groupsHtml += `<tr>
                 <td>${escapeHtml(g.name)}</td>
                 <td>${escapeHtml(g.created_by)}</td>
-                <td><button class="action-btn" onclick="deleteGroup('${g.name}')">Delete</button></td>
+                <td><button class="action-btn" onclick="showLoading('Deleting Group', function(){deleteGroup('${g.name}')})">Delete</button></td>
             </tr>`;
         });
         document.getElementById('groupsTableBody').innerHTML = groupsHtml;
@@ -1723,7 +1902,7 @@ async function loadAdminData() {
                 <td>${escapeHtml(m.sender)}</td>
                 <td>${escapeHtml(m.group)}</td>
                 <td>${time}</td>
-                <td><button class="action-btn" onclick="deleteMessage(${m.id})">Delete</button></td>
+                <td><button class="action-btn" onclick="showLoading('Deleting Message', function(){deleteMessage(${m.id})})">Delete</button></td>
             </tr>`;
         });
         document.getElementById('messagesTableBody').innerHTML = messagesHtml;
@@ -1753,6 +1932,7 @@ async function createUser() {
     
     if(!username || !password || !group_name || !group_password) {
         alert('Please fill all fields');
+        hideLoading();
         return;
     }
     
@@ -1773,13 +1953,15 @@ async function createUser() {
         } else {
             alert(data.message || 'Failed to create user');
         }
+        hideLoading();
     } catch(e) {
         alert('Error creating user');
+        hideLoading();
     }
 }
 
 async function deleteUser(username) {
-    if(!confirm(`Delete user "${username}"?`)) return;
+    if(!confirm(`Delete user "${username}"?`)) { hideLoading(); return; }
     try {
         const response = await fetch('/admin/delete_user', {
             method: 'POST',
@@ -1793,13 +1975,15 @@ async function deleteUser(username) {
         } else {
             alert(data.message || 'Failed to delete user');
         }
+        hideLoading();
     } catch(e) {
         alert('Error deleting user');
+        hideLoading();
     }
 }
 
 async function deleteGroup(name) {
-    if(!confirm(`Delete group "${name}"? This will delete all messages in this group.`)) return;
+    if(!confirm(`Delete group "${name}"? This will delete all messages in this group.`)) { hideLoading(); return; }
     try {
         const response = await fetch('/admin/delete_group', {
             method: 'POST',
@@ -1813,13 +1997,15 @@ async function deleteGroup(name) {
         } else {
             alert(data.message || 'Failed to delete group');
         }
+        hideLoading();
     } catch(e) {
         alert('Error deleting group');
+        hideLoading();
     }
 }
 
 async function deleteMessage(id) {
-    if(!confirm('Delete this message?')) return;
+    if(!confirm('Delete this message?')) { hideLoading(); return; }
     try {
         const response = await fetch('/admin/delete_message', {
             method: 'POST',
@@ -1833,8 +2019,10 @@ async function deleteMessage(id) {
         } else {
             alert(data.message || 'Failed to delete message');
         }
+        hideLoading();
     } catch(e) {
         alert('Error deleting message');
+        hideLoading();
     }
 }
 
@@ -1842,6 +2030,7 @@ console.log('🔐 ABAVANDIMWE Secure Messaging System');
 console.log('📱 Developed by Mugisha Pc');
 console.log('💬 Reply feature: Swipe any message left to right to reply');
 console.log('📱 PWA: Click "Install ABAVANDIMWE App" to install as Android app');
+console.log('🔄 Loading animation: Shows when any button is clicked');
 </script>
 </body>
 </html>'''
@@ -2195,6 +2384,7 @@ if __name__ == "__main__":
     print(f"   ✅ Offline support")
     print(f"   ✅ Custom app icon")
     print(f"   ✅ Splash screen ready")
+    print(f"   ✅ Loading animation on all button clicks")
     print(f"\n📋 Features:")
     print(f"   ✅ Multiline message input")
     print(f"   ✅ Reply to messages (swipe left to right)")
