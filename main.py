@@ -246,8 +246,11 @@ def reset_login_attempts(username):
     if username in login_blocks:
         del login_blocks[username]
 
-def check_rate_limit(username):
+# ========== MESSAGE RATE LIMITING ==========
+def check_message_rate_limit(username):
+    """Check if user has exceeded message rate limit (10 messages per 5 seconds)"""
     now = time.time()
+    # Clean old entries
     message_limits[username] = [t for t in message_limits[username] if t > now - 5]
     if len(message_limits[username]) >= 10:
         return False
@@ -2331,7 +2334,7 @@ async def ws_endpoint(websocket: WebSocket):
                 salt = data.get('salt')
                 reply_to = data.get('reply_to')
                 
-                if username and group_name and check_rate_limit(username):
+                if username and group_name and check_message_rate_limit(username):
                     result = await save_message(cipher, group_name, username, salt, reply_to)
                     message_id = result['id']
                     created_at = result['created_at']
