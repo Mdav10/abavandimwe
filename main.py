@@ -216,6 +216,35 @@ def decrypt(encrypted, password, salt):
         decrypted.append(ciphertext[i] ^ key[i % len(key)])
     return decrypted.decode()
 
+# ========== RATE LIMITING ==========
+login_attempts = defaultdict(list)
+login_blocks = {}
+
+def check_login_rate_limit(username):
+    now = time.time()
+    
+    if username in login_blocks and login_blocks[username] > now:
+        return False, f"Too many failed attempts. Try again in {int((login_blocks[username] - now) / 60)} minutes."
+    
+    login_attempts[username] = [t for t in login_attempts[username] if t > now - 300]
+    
+    if len(login_attempts[username]) >= 5:
+        login_blocks[username] = now + 900
+        login_attempts[username] = []
+        return False, "Too many failed attempts. Account blocked for 15 minutes."
+    
+    return True, None
+
+def record_failed_login(username):
+    now = time.time()
+    login_attempts[username].append(now)
+
+def reset_login_attempts(username):
+    if username in login_attempts:
+        login_attempts[username] = []
+    if username in login_blocks:
+        del login_blocks[username]
+
 # ========== DATABASE INIT ==========
 async def init_db():
     global ADMIN_PASSWORD_HASH
@@ -223,7 +252,7 @@ async def init_db():
     conn = await get_db_connection()
     
     try:
-        # Create tables with reply_to
+        # Create tables
         await conn.execute('''
             CREATE TABLE IF NOT EXISTS users (
                 username TEXT PRIMARY KEY,
@@ -259,6 +288,7 @@ async def init_db():
                 group_name TEXT PRIMARY KEY,
                 salt TEXT NOT NULL,
                 password_hash TEXT NOT NULL,
+                group_password TEXT,
                 created_by TEXT NOT NULL,
                 created_at DOUBLE PRECISION NOT NULL
             )
@@ -276,6 +306,15 @@ async def init_db():
         ''')
         
         print("[✓] PostgreSQL database ready")
+        
+        # Add group_password column if it doesn't exist
+        try:
+            await conn.execute('''
+                ALTER TABLE groups ADD COLUMN IF NOT EXISTS group_password TEXT
+            ''')
+            print("[✓] group_password column verified")
+        except Exception as e:
+            print(f"[!] group_password column: {e}")
         
         # Add reply_to column if it doesn't exist
         try:
@@ -367,10 +406,9 @@ async def authenticate_user(username, password):
     locked_until = row['locked_until']
     
     if locked_until and locked_until > time.time():
-        return {"error": "Account locked. Try again later."}
+        return {"error": f"Account locked. Try again in {int((locked_until - time.time()) / 60)} minutes."}
     
     if verify_password_argon2(password, stored_hash):
-        await reset_login_attempts(username)
         return {
             "username": username, 
             "role": role,
@@ -378,24 +416,13 @@ async def authenticate_user(username, password):
             "display_name": display_name
         }
     else:
-        await increment_login_attempts(username)
         return None
 
-async def increment_login_attempts(username):
+async def get_group_password(group_name):
     conn = await get_db_connection()
     try:
-        await conn.execute("UPDATE users SET login_attempts = login_attempts + 1 WHERE username = $1", username)
-        await conn.execute(
-            "UPDATE users SET locked_until = $1 WHERE username = $2 AND login_attempts >= 5",
-            time.time() + 900, username
-        )
-    finally:
-        await return_db_connection(conn)
-
-async def reset_login_attempts(username):
-    conn = await get_db_connection()
-    try:
-        await conn.execute("UPDATE users SET login_attempts = 0, locked_until = NULL WHERE username = $1", username)
+        row = await conn.fetchrow("SELECT group_password FROM groups WHERE group_name = $1", group_name)
+        return row[0] if row else None
     finally:
         await return_db_connection(conn)
 
@@ -411,8 +438,15 @@ async def create_user_with_group(username, password, group_name, group_password)
             group_salt = generate_salt()
             group_pwd_hash = hash_password_argon2(group_password)
             await conn.execute(
-                "INSERT INTO groups (group_name, salt, password_hash, created_by, created_at) VALUES ($1, $2, $3, $4, $5)",
-                group_name, group_salt, group_pwd_hash, "admin", time.time()
+                "INSERT INTO groups (group_name, salt, password_hash, group_password, created_by, created_at) VALUES ($1, $2, $3, $4, $5, $6)",
+                group_name, group_salt, group_pwd_hash, group_password, "admin", time.time()
+            )
+            print(f"[✓] Group created: {group_name}")
+        else:
+            # Update group password if it doesn't have one
+            await conn.execute(
+                "UPDATE groups SET group_password = $1 WHERE group_name = $2 AND group_password IS NULL",
+                group_password, group_name
             )
         
         await conn.execute(
@@ -576,12 +610,6 @@ async def delete_group(group_name):
     finally:
         await return_db_connection(conn)
 
-async def verify_group_password(password, group_name):
-    group_info = await get_group_info(group_name)
-    if not group_info:
-        return False
-    return verify_password_argon2(password, group_info['password_hash'])
-
 # ========== WEBSOCKET MANAGER ==========
 class ConnectionManager:
     def __init__(self):
@@ -609,26 +637,6 @@ class ConnectionManager:
                     pass
 
 manager = ConnectionManager()
-
-# ========== RATE LIMITING ==========
-login_attempts = defaultdict(list)
-message_limits = defaultdict(list)
-
-def check_login_rate_limit(username):
-    now = time.time()
-    login_attempts[username] = [t for t in login_attempts[username] if t > now - 300]
-    if len(login_attempts[username]) >= 5:
-        return False
-    login_attempts[username].append(now)
-    return True
-
-def check_rate_limit(username):
-    now = time.time()
-    message_limits[username] = [t for t in message_limits[username] if t > now - 5]
-    if len(message_limits[username]) >= 10:
-        return False
-    message_limits[username].append(now)
-    return True
 
 # ========== INIT DATABASE ==========
 @app.on_event("startup")
@@ -909,27 +917,14 @@ HTML = '''<!DOCTYPE html>
             40% { transform: scale(1); opacity: 1; }
         }
         
-        /* Button loading ripple effect */
-        .btn-loading {
-            pointer-events: none;
-            opacity: 0.7;
-        }
-        .btn-loading::after {
-            content: '';
-            position: absolute;
-            top: 50%;
-            left: 50%;
-            width: 24px;
-            height: 24px;
-            margin-top: -12px;
-            margin-left: -12px;
-            border: 2px solid rgba(255,255,255,0.2);
-            border-top: 2px solid currentColor;
-            border-radius: 50%;
-            animation: spin 0.6s linear infinite;
-        }
-        .btn-loading .btn-text {
-            opacity: 0;
+        .group-info {
+            font-size: 10px;
+            color: #ffaa00;
+            padding: 8px;
+            background: rgba(255, 170, 0, 0.08);
+            border-radius: 6px;
+            margin-top: 8px;
+            border-left: 2px solid #ffaa00;
         }
     </style>
 </head>
@@ -959,11 +954,11 @@ HTML = '''<!DOCTYPE html>
             <input type="text" id="loginUsername" placeholder="Username" autocomplete="username">
             <input type="password" id="loginPassword" placeholder="Password" autocomplete="current-password">
             
-            <button id="loginBtn" onclick="showLoading('Logging in', login)">▶ Login</button>
+            <button id="loginBtn">▶ Login</button>
             
             <div class="separator"><span>OR</span></div>
             
-            <button class="btn-whatsapp" onclick="showLoading('Opening WhatsApp', requestAccess)">
+            <button class="btn-whatsapp" onclick="requestAccess()">
                 💬 Request Access on WhatsApp
             </button>
             
@@ -982,7 +977,7 @@ HTML = '''<!DOCTYPE html>
     <div class="admin-panel-header">
         <h2>⚙️ Admin Dashboard <span class="admin-username">(Logged in as: <span id="adminUsername">Mpc</span>)</span></h2>
         <div>
-            <button class="close-admin" onclick="showLoading('Logging out', logout)">🚪 Logout</button>
+            <button class="close-admin" onclick="logout()">🚪 Logout</button>
         </div>
     </div>
     
@@ -1001,10 +996,10 @@ HTML = '''<!DOCTYPE html>
                 <input type="text" id="newPassword" placeholder="Password" style="width:100%;">
                 <input type="text" id="newGroupName" placeholder="Group Name" style="width:100%;">
                 <input type="text" id="newGroupPassword" placeholder="Group Password" style="width:100%;">
-                <button onclick="showLoading('Creating User', createUser)" class="action-btn-green">➕ Create User</button>
+                <button onclick="createUser()" class="action-btn-green">➕ Create User</button>
             </div>
-            <div style="font-size:10px;color:#666;margin-top:8px;">
-                💡 Users will use these credentials to login
+            <div class="group-info">
+                ⚠️ IMPORTANT: All users in the same group must use the SAME Group Password to see messages!
             </div>
         </div>
         
@@ -1058,7 +1053,7 @@ HTML = '''<!DOCTYPE html>
         <input type="text" id="gatekeeperUsername" placeholder="Username" readonly>
         <input type="password" id="gatekeeperPassword" placeholder="Password">
         
-        <button id="gatekeeperBtn" onclick="showLoading('Verifying', gatekeeperLogin)">▶ Verify</button>
+        <button id="gatekeeperBtn">▶ Verify</button>
         
         <div id="gatekeeperError" class="error-message"></div>
         
@@ -1077,7 +1072,7 @@ HTML = '''<!DOCTYPE html>
         <input type="text" id="userGroupName" placeholder="Group Name" readonly>
         <input type="password" id="userGroupPassword" placeholder="Group Password" readonly>
         
-        <button id="enterChatBtn" onclick="showLoading('Entering Chat', enterChat)">▶ Enter Chat</button>
+        <button id="enterChatBtn">▶ Enter Chat</button>
         
         <div id="setupError" class="error-message"></div>
         <div id="setupSuccess" class="success-message"></div>
@@ -1095,7 +1090,7 @@ HTML = '''<!DOCTYPE html>
             <span class="online-badge" id="connectionBadge">● Online</span>
         </div>
         <h2 id="groupTitle"># LOADING</h2>
-        <button class="logout-btn" onclick="showLoading('Leaving', logout)">Leave</button>
+        <button class="logout-btn" onclick="logout()">Leave</button>
     </div>
     
     <div class="main-content">
@@ -1117,7 +1112,7 @@ HTML = '''<!DOCTYPE html>
                 </div>
                 <div class="input-row">
                     <textarea id="messageInput" placeholder="Type a message..." rows="2"></textarea>
-                    <button onclick="showLoading('Sending', sendMessage)">Send</button>
+                    <button onclick="sendMessage()">Send</button>
                 </div>
             </div>
             <div class="footer">🔐 End-to-End Encrypted | Messages self-destruct after 24 hours</div>
@@ -1127,7 +1122,7 @@ HTML = '''<!DOCTYPE html>
 </div>
 
 <!-- Install App Button -->
-<button id="installBtn" class="install-btn" onclick="showLoading('Installing App', installApp)">📲 Install ABAVANDIMWE App</button>
+<button id="installBtn" class="install-btn">📲 Install ABAVANDIMWE App</button>
 
 <script>
 let ws, username, groupName, groupPassword, groupSalt, typingTimeout, reconnectAttempts = 0;
@@ -1143,20 +1138,16 @@ function showLoading(text, callback) {
     loadingText.textContent = text;
     overlay.classList.add('active');
     
-    // Execute the callback after a small delay for animation
     setTimeout(async () => {
         try {
             await callback();
         } catch (e) {
             console.error('Error in callback:', e);
         } finally {
-            // Don't hide overlay immediately for async operations
-            // It will be hidden when the operation completes
             if (!document.querySelector('.chat-container.active') && 
                 !document.querySelector('.admin-panel.active') &&
                 !document.querySelector('.gatekeeper-container.active') &&
                 !document.querySelector('.user-setup-container.active')) {
-                // If no screen is active, hide overlay after a delay
                 setTimeout(() => {
                     overlay.classList.remove('active');
                 }, 500);
@@ -1227,7 +1218,6 @@ if (navigator.standalone) {
 // ========== DOM READY ==========
 document.addEventListener('DOMContentLoaded', function() {
     document.getElementById('loginBtn').addEventListener('click', function(e) {
-        // Prevent double click
         if (this.classList.contains('btn-loading')) return;
         showLoading('Logging in', login);
     });
@@ -1264,7 +1254,7 @@ document.addEventListener('DOMContentLoaded', function() {
     });
 });
 
-// ========== REST OF THE APP ==========
+// ========== LOGIN ==========
 async function login() {
     const username = document.getElementById('loginUsername').value.trim();
     const password = document.getElementById('loginPassword').value;
@@ -1321,6 +1311,7 @@ async function login() {
     }
 }
 
+// ========== GATEKEEPER ==========
 async function gatekeeperLogin() {
     const username = document.getElementById('gatekeeperUsername').value.trim();
     const password = document.getElementById('gatekeeperPassword').value;
@@ -1368,6 +1359,7 @@ async function gatekeeperLogin() {
     }
 }
 
+// ========== ENTER CHAT ==========
 async function enterChat() {
     const displayName = document.getElementById('userDisplayName').value.trim();
     const groupName = document.getElementById('userGroupName').value.trim();
@@ -1410,6 +1402,7 @@ async function enterChat() {
     connectToChat(displayName, groupName);
 }
 
+// ========== CONNECT TO CHAT ==========
 function connectToChat(username, group) {
     document.getElementById('groupTitle').innerHTML = '# ' + group;
     
@@ -1506,6 +1499,7 @@ function connectToChat(username, group) {
     };
 }
 
+// ========== UI FUNCTIONS ==========
 function toggleSidebar() {
     document.getElementById('sidebar').classList.toggle('open');
     document.getElementById('overlay').classList.toggle('active');
@@ -1695,6 +1689,7 @@ function escapeHtml(t) {
     return d.innerHTML;
 }
 
+// ========== ENCRYPTION ==========
 async function encrypt(text, pwd, salt) {
     const e = new TextEncoder();
     const km = await crypto.subtle.importKey('raw', e.encode(pwd), 'PBKDF2', false, ['deriveKey']);
@@ -1723,6 +1718,7 @@ async function decrypt(enc, pwd, salt) {
     return new TextDecoder().decode(dec);
 }
 
+// ========== MESSAGING ==========
 document.getElementById('messageInput')?.addEventListener('input', function() {
     this.style.height = 'auto';
     this.style.height = Math.min(this.scrollHeight, 120) + 'px';
@@ -1879,7 +1875,7 @@ async function loadAdminData() {
                 <td>${escapeHtml(u.display_name || u.username)}</td>
                 <td>${u.status}</td>
                 <td>
-                    ${u.username !== 'Mpc' ? `<button class="action-btn" onclick="showLoading('Deleting User', function(){deleteUser('${u.username}')})">Delete</button>` : '⭐ Admin'}
+                    ${u.username !== 'Mpc' ? `<button class="action-btn" onclick="deleteUser('${u.username}')">Delete</button>` : '⭐ Admin'}
                 </td>
             </tr>`;
         });
@@ -1890,7 +1886,7 @@ async function loadAdminData() {
             groupsHtml += `<tr>
                 <td>${escapeHtml(g.name)}</td>
                 <td>${escapeHtml(g.created_by)}</td>
-                <td><button class="action-btn" onclick="showLoading('Deleting Group', function(){deleteGroup('${g.name}')})">Delete</button></td>
+                <td><button class="action-btn" onclick="deleteGroup('${g.name}')">Delete</button></td>
             </tr>`;
         });
         document.getElementById('groupsTableBody').innerHTML = groupsHtml;
@@ -1902,7 +1898,7 @@ async function loadAdminData() {
                 <td>${escapeHtml(m.sender)}</td>
                 <td>${escapeHtml(m.group)}</td>
                 <td>${time}</td>
-                <td><button class="action-btn" onclick="showLoading('Deleting Message', function(){deleteMessage(${m.id})})">Delete</button></td>
+                <td><button class="action-btn" onclick="deleteMessage(${m.id})">Delete</button></td>
             </tr>`;
         });
         document.getElementById('messagesTableBody').innerHTML = messagesHtml;
@@ -1944,7 +1940,7 @@ async function createUser() {
         });
         const data = await response.json();
         if(data.success) {
-            alert('✅ User created successfully!\\n\\nUsername: ' + username + '\\nPassword: ' + password + '\\nGroup: ' + group_name);
+            alert('✅ User created successfully!\\n\\nUsername: ' + username + '\\nPassword: ' + password + '\\nGroup: ' + group_name + '\\nGroup Password: ' + group_password);
             document.getElementById('newUsername').value = '';
             document.getElementById('newPassword').value = '';
             document.getElementById('newGroupName').value = '';
@@ -2030,7 +2026,7 @@ console.log('🔐 ABAVANDIMWE Secure Messaging System');
 console.log('📱 Developed by Mugisha Pc');
 console.log('💬 Reply feature: Swipe any message left to right to reply');
 console.log('📱 PWA: Click "Install ABAVANDIMWE App" to install as Android app');
-console.log('🔄 Loading animation: Shows when any button is clicked');
+console.log('⚠️ IMPORTANT: All users in a group must use the SAME group password');
 </script>
 </body>
 </html>'''
@@ -2042,10 +2038,12 @@ async def root():
 
 @app.post("/login")
 async def login(request: Request, login_data: LoginRequest):
-    if not check_login_rate_limit(login_data.username):
+    # Check rate limit
+    allowed, message = check_login_rate_limit(login_data.username)
+    if not allowed:
         return JSONResponse(
             status_code=429,
-            content={"success": False, "message": "Too many login attempts. Please wait 5 minutes."}
+            content={"success": False, "message": message}
         )
     
     conn = await get_db_connection()
@@ -2058,6 +2056,7 @@ async def login(request: Request, login_data: LoginRequest):
         await return_db_connection(conn)
     
     if not row:
+        record_failed_login(login_data.username)
         return JSONResponse(
             status_code=401,
             content={"success": False, "message": "Invalid credentials"}
@@ -2072,21 +2071,19 @@ async def login(request: Request, login_data: LoginRequest):
     if locked_until and locked_until > time.time():
         return JSONResponse(
             status_code=429,
-            content={"success": False, "message": "Account locked. Please try again later."}
+            content={"success": False, "message": f"Account locked. Try again in {int((locked_until - time.time()) / 60)} minutes."}
         )
     
     if verify_password_argon2(login_data.password, stored_hash):
-        await reset_login_attempts(login_data.username)
+        # Reset attempts on successful login
+        reset_login_attempts(login_data.username)
         
+        # Get the actual group password
         group_password = None
         if assigned_group:
-            conn2 = await get_db_connection()
-            try:
-                row2 = await conn2.fetchrow("SELECT password_hash FROM groups WHERE group_name = $1", assigned_group)
-                if row2:
-                    group_password = login_data.password
-            finally:
-                await return_db_connection(conn2)
+            group_password = await get_group_password(assigned_group)
+            if not group_password:
+                group_password = login_data.password
         
         session_id = create_session(login_data.username, role, assigned_group, group_password)
         
@@ -2107,7 +2104,7 @@ async def login(request: Request, login_data: LoginRequest):
         )
         return response
     else:
-        await increment_login_attempts(login_data.username)
+        record_failed_login(login_data.username)
         return JSONResponse(
             status_code=401,
             content={"success": False, "message": "Invalid credentials"}
@@ -2115,14 +2112,16 @@ async def login(request: Request, login_data: LoginRequest):
 
 @app.post("/gatekeeper")
 async def gatekeeper(login_data: LoginRequest):
-    if not check_login_rate_limit(login_data.username):
+    allowed, message = check_login_rate_limit(login_data.username)
+    if not allowed:
         return JSONResponse(
             status_code=429,
-            content={"success": False, "message": "Too many attempts. Please wait 5 minutes."}
+            content={"success": False, "message": message}
         )
     
     user = await authenticate_user(login_data.username, login_data.password)
     if not user:
+        record_failed_login(login_data.username)
         return JSONResponse(
             status_code=401,
             content={"success": False, "message": "Invalid credentials"}
@@ -2147,11 +2146,19 @@ async def gatekeeper(login_data: LoginRequest):
             content={"success": False, "message": "No group assigned to this user"}
         )
     
+    # Get the actual group password from the groups table
+    group_password = await get_group_password(assigned_group)
+    
+    # If no group password stored, use the user's login password
+    if not group_password:
+        group_password = login_data.password
+        print(f"[!] No group password found for '{assigned_group}', using login password")
+    
     return {
         "success": True,
         "username": login_data.username,
         "assigned_group": assigned_group,
-        "assigned_group_password": login_data.password,
+        "assigned_group_password": group_password,
         "display_name": user.get("display_name")
     }
 
@@ -2383,8 +2390,11 @@ if __name__ == "__main__":
     print(f"   ✅ No Chrome browser UI after install")
     print(f"   ✅ Offline support")
     print(f"   ✅ Custom app icon")
-    print(f"   ✅ Splash screen ready")
     print(f"   ✅ Loading animation on all button clicks")
+    print(f"\n🔐 Group Encryption:")
+    print(f"   ✅ All users in same group must use SAME group password")
+    print(f"   ✅ Group password stored for consistent decryption")
+    print(f"   ✅ Messages encrypted with group password")
     print(f"\n📋 Features:")
     print(f"   ✅ Multiline message input")
     print(f"   ✅ Reply to messages (swipe left to right)")
