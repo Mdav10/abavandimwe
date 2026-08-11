@@ -31,7 +31,9 @@ app = FastAPI()
 DATABASE_URL = os.getenv('DATABASE_URL', 'postgresql://neondb_owner:npg_CmR51yqfMxNZ@ep-plain-salad-axxvh942-pooler.c-4.us-east-2.aws.neon.tech/neondb?sslmode=require')
 
 # Database connection pool
-db_pool = Noneasync def init_db_pool():
+db_pool = None
+
+async def init_db_pool():
     global db_pool
     db_pool = await create_pool(
         DATABASE_URL,
@@ -724,7 +726,7 @@ HTML = '''<!DOCTYPE html>
         .user-setup-card .sub{text-align:center;margin-bottom:24px;font-size:11px;color:#666;}
         .user-setup-card input[readonly]{opacity:0.7;cursor:not-allowed;}
         
-        .reply-indicator{position:fixed;bottom:80px;left:50%;transform:translateX(-50%);background:#050508;border:1px solid #ffaa00;border-radius:12px;padding:8px 16px;font-size:11px;color:#ffaa00;z-index:20;display:none;align-items:center;gap:10px;}
+        .reply-indicator{position:fixed;bottom:80px;left:50%;transform:translateX(-50%);background:#050508;border:1px solid #ffaa00;border-radius:12px;padding:8px 16px;font-size:11px;color:#ffaa00;z-index:20;display:none;align-items:center;gap:10px;max-width:90%;}
         .reply-indicator .close-reply{color:#ff0041;cursor:pointer;font-weight:bold;padding:0 4px;}
         .reply-indicator .close-reply:hover{color:#ff6666;}
     </style>
