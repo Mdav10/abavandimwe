@@ -642,7 +642,7 @@ HTML = '''<!DOCTYPE html>
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
-    <title>ABAVANDIMWE | Secure Messaging</title>
+    <title>MugiChat | Secure Messaging</title>
     
     <!-- PWA Meta Tags -->
     <link rel="manifest" href="/manifest.json">
@@ -952,7 +952,7 @@ HTML = '''<!DOCTYPE html>
 <div id="loginScreen" class="login-container">
     <div class="login-card">
         <div class="login-card-inner">
-            <h1># ABAVANDIMWE</h1>
+            <h1># MugiChat</h1>
             <div class="sub">Secure Messaging System</div>
             <div style="text-align:center;"><span class="admin-badge">🔐 Gatekeeper</span></div>
             
@@ -1209,19 +1209,19 @@ async function installApp() {
 }
 
 window.addEventListener('appinstalled', (evt) => {
-    console.log('✅ ABAVANDIMWE was installed');
+    console.log('✅ MugiChat was installed');
     installBtn.classList.remove('show');
     hideLoading();
 });
 
 if (window.matchMedia('(display-mode: standalone)').matches) {
     installBtn.classList.remove('show');
-    console.log('📱 ABAVANDIMWE is running as installed app');
+    console.log('📱 MugiChat is running as installed app');
 }
 
 if (navigator.standalone) {
     installBtn.classList.remove('show');
-    console.log('📱 ABAVANDIMWE is running as iOS standalone app');
+    console.log('📱 MugiChat is running as iOS standalone app');
 }
 
 // ========== DOM READY ==========
@@ -1781,8 +1781,8 @@ async function sendMessage() {
 }
 
 function requestAccess() {
-    const phone = '256762117982';
-    const message = 'Hello, I would like to get access to ABAVANDIMWE secure messaging platform. Please send me login credentials.';
+    const phone = '256705749118';
+    const message = 'Hello, I would like to get access to MugiChat secure messaging platform. Please send me login credentials.';
     const url = `https://wa.me/${phone}?text=${encodeURIComponent(message)}`;
     window.open(url, '_blank');
     showSuccess('📱 Opening WhatsApp... Please send your request.');
@@ -2026,10 +2026,10 @@ async function deleteMessage(id) {
     }
 }
 
-console.log('🔐 ABAVANDIMWE Secure Messaging System');
+console.log('🔐 MugiChat Secure Messaging System');
 console.log('📱 Developed by Mugisha Pc');
 console.log('💬 Reply feature: Swipe any message left to right to reply');
-console.log('📱 PWA: Click "Install ABAVANDIMWE App" to install as Android app');
+console.log('📱 PWA: Click "Install MugiChat App" to install as Android app');
 console.log('🔄 Loading animation: Shows when any button is clicked');
 </script>
 </body>
@@ -2236,7 +2236,7 @@ async def ws_endpoint(websocket: WebSocket):
     session_id = None
     for item in cookie_header.split(";"):
         item = item.strip()
-        if item.startswith("abavandimwe_session="):
+        if item.startswith("mugichat_session="):
             session_id = item.split("=")[1]
             break
     
@@ -2365,7 +2365,7 @@ if __name__ == "__main__":
 ║  ██║  ██║██████╔╝██║  ██║ ╚████╔╝ ██║  ██║██║ ╚████║    ║
 ║  ╚═╝  ╚═╝╚═════╝ ╚═╝  ╚═╝  ╚═══╝  ╚═╝  ╚═╝╚═╝  ╚═══╝    ║
 ║                                                            ║
-║              ABAVANDIMWE SECURE MESSAGING                  ║
+║              MugiChat SECURE MESSAGING                  ║
 ║           Messages auto-delete after 24 hours              ║
 ║                    Author: Mugisha Pc                      ║
 ║                                                            ║
