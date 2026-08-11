@@ -325,6 +325,20 @@ async def init_db():
         except Exception as e:
             print(f"[!] reply_to column: {e}")
         
+        # ========== CLEAN UP CORRUPT DATA ==========
+        # Delete any corrupt groups
+        try:
+            await conn.execute("DELETE FROM groups WHERE group_name = 'admin' AND created_by != 'Mpc'")
+            print("[🧹] Cleaned up corrupt groups")
+        except Exception as e:
+            print(f"[!] Cleanup error: {e}")
+        
+        # Delete any messages in corrupt groups
+        try:
+            await conn.execute("DELETE FROM messages WHERE group_name = 'admin'")
+        except Exception as e:
+            print(f"[!] Cleanup error: {e}")
+        
         # Create admin if not exists
         row = await conn.fetchrow("SELECT username FROM users WHERE username = $1", ADMIN_USERNAME)
         if not row:
@@ -440,17 +454,16 @@ async def create_user_with_group(username, password, group_name, group_password)
             group_pwd_hash = hash_password_argon2(group_password)
             await conn.execute(
                 "INSERT INTO groups (group_name, salt, password_hash, group_password, created_by, created_at) VALUES ($1, $2, $3, $4, $5, $6)",
-                group_name, group_salt, group_pwd_hash, group_password, username, time.time()
+                group_name, group_salt, group_pwd_hash, group_password, "admin", time.time()
             )
-            print(f"[✓] Group created: '{group_name}' with password: '{group_password}'")
+            print(f"[✓] Group created: '{group_name}'")
         else:
             # Update group password if it doesn't have one
-            result = await conn.execute(
+            await conn.execute(
                 "UPDATE groups SET group_password = $1 WHERE group_name = $2 AND (group_password IS NULL OR group_password = '')",
                 group_password, group_name
             )
-            if result == "UPDATE 1":
-                print(f"[✓] Updated group password for '{group_name}'")
+            print(f"[✓] Group '{group_name}' already exists, password updated")
         
         await conn.execute(
             "INSERT INTO users (username, password_hash, salt, role, assigned_group, created_at) VALUES ($1, $2, $3, $4, $5, $6)",
@@ -581,19 +594,6 @@ async def get_group_info(group):
     try:
         row = await conn.fetchrow("SELECT salt, password_hash FROM groups WHERE group_name = $1", group)
         return dict(row) if row else None
-    finally:
-        await return_db_connection(conn)
-
-async def create_group(group, salt, password_hash, creator):
-    conn = await get_db_connection()
-    try:
-        await conn.execute(
-            "INSERT INTO groups (group_name, salt, password_hash, created_by, created_at) VALUES ($1, $2, $3, $4, $5)",
-            group, salt, password_hash, creator, time.time()
-        )
-        return True
-    except:
-        return False
     finally:
         await return_db_connection(conn)
 
