@@ -60,12 +60,13 @@ ADMIN_PASSWORD_HASH = None
 sessions: Dict[str, Dict] = {}
 SESSION_TIMEOUT = 3600 * 24 * 7  # 7 days
 
-def create_session(username: str, role: str, assigned_group: str = None) -> str:
+def create_session(username: str, role: str, assigned_group: str = None, group_password: str = None) -> str:
     session_id = secrets.token_urlsafe(32)
     sessions[session_id] = {
         "username": username,
         "role": role,
         "assigned_group": assigned_group,
+        "group_password": group_password,
         "created_at": time.time(),
         "expires_at": time.time() + SESSION_TIMEOUT
     }
@@ -436,6 +437,7 @@ async def save_message(ciphertext, group, sender, salt):
             "INSERT INTO messages (ciphertext, group_name, sender, salt, created_at, expires_at) VALUES ($1, $2, $3, $4, $5, $6)",
             ciphertext, group, sender, salt, now, expiry
         )
+        return now
     finally:
         await return_db_connection(conn)
 
@@ -897,7 +899,6 @@ HTML = '''<!DOCTYPE html>
 let ws, username, groupName, groupPassword, groupSalt, typingTimeout, reconnectAttempts = 0;
 let currentUser = null;
 let gatekeeperData = null;
-let messageHistory = []; // Store all messages locally
 
 document.addEventListener('DOMContentLoaded', function() {
     document.getElementById('loginBtn').addEventListener('click', login);
@@ -991,7 +992,8 @@ async function gatekeeperLogin() {
             document.getElementById('userSetupScreen').classList.add('active');
             
             document.getElementById('userGroupName').value = data.assigned_group;
-            document.getElementById('userGroupPassword').value = '';
+            document.getElementById('userGroupPassword').value = data.assigned_group_password;
+            groupPassword = data.assigned_group_password;
             
             if(data.display_name) {
                 document.getElementById('userDisplayName').value = data.display_name;
@@ -1038,12 +1040,10 @@ async function enterChat() {
     
     window.chatUsername = displayName;
     window.chatGroup = groupName;
+    window.groupPassword = groupPassword;
     
     document.getElementById('userSetupScreen').classList.remove('active');
     document.getElementById('chatScreen').classList.add('active');
-    
-    // Clear message history when entering chat
-    messageHistory = [];
     document.getElementById('messages').innerHTML = '';
     
     connectToChat(displayName, groupName);
@@ -1081,7 +1081,6 @@ function connectToChat(username, group) {
             } else if(d.type === 'history') {
                 // Clear messages before showing history
                 document.getElementById('messages').innerHTML = '';
-                messageHistory = [];
                 
                 // Add all history messages
                 for(let msg of d.messages) {
@@ -1090,11 +1089,13 @@ function connectToChat(username, group) {
                         let isSent = msg.sender === window.chatUsername;
                         addMessage(msg.sender, dec, isSent, msg.timestamp);
                     } catch(e) {
-                        addMessage(msg.sender, '🔒 Encrypted', msg.sender === window.chatUsername, msg.timestamp);
+                        console.error('Decryption error:', e);
+                        let isSent = msg.sender === window.chatUsername;
+                        addMessage(msg.sender, '🔒 Encrypted', isSent, msg.timestamp);
                     }
                 }
             } else if(d.type === 'message') {
-                // Only show new messages from others (self messages already shown immediately)
+                // Only show messages from other users (self already shown)
                 if (d.sender !== window.chatUsername) {
                     try {
                         let dec = await decrypt(d.ciphertext, window.groupPassword, d.salt);
@@ -1243,7 +1244,6 @@ document.getElementById('messageInput')?.addEventListener('keypress', function(e
     if(e.key === 'Enter') sendMessage();
 });
 
-// ========== FIXED: Send Message ==========
 async function sendMessage() {
     let input = document.getElementById('messageInput');
     let text = input.value.trim();
@@ -1252,11 +1252,10 @@ async function sendMessage() {
         let cipher = await encrypt(text, window.groupPassword, groupSalt);
         let timestamp = Date.now() / 1000;
         
-        // Show message immediately on client side
+        // Show message immediately
         addMessage(window.chatUsername, text, true, timestamp);
         input.value = '';
         
-        // Send to server (server will NOT broadcast back to sender)
         ws.send(JSON.stringify({
             type:'message',
             ciphertext:cipher,
@@ -1342,7 +1341,6 @@ async function logout() {
     reconnectAttempts = 0;
     currentUser = null;
     gatekeeperData = null;
-    messageHistory = [];
 }
 
 async function loadAdminData() {
@@ -1550,7 +1548,18 @@ async def login(request: Request, login_data: LoginRequest):
     if verify_password_argon2(login_data.password, stored_hash):
         await reset_login_attempts(login_data.username)
         
-        session_id = create_session(login_data.username, role, assigned_group)
+        # Get group password
+        group_password = None
+        if assigned_group:
+            conn2 = await get_db_connection()
+            try:
+                row2 = await conn2.fetchrow("SELECT password_hash FROM groups WHERE group_name = $1", assigned_group)
+                if row2:
+                    group_password = login_data.password  # Use the login password for group
+            finally:
+                await return_db_connection(conn2)
+        
+        session_id = create_session(login_data.username, role, assigned_group, group_password)
         
         response = JSONResponse({
             "success": True, 
@@ -1613,6 +1622,7 @@ async def gatekeeper(login_data: LoginRequest):
         "success": True,
         "username": login_data.username,
         "assigned_group": assigned_group,
+        "assigned_group_password": login_data.password,
         "display_name": user.get("display_name")
     }
 
@@ -1766,24 +1776,14 @@ async def ws_endpoint(websocket: WebSocket):
                 cipher = data.get('ciphertext')
                 salt = data.get('salt')
                 if username and group_name and check_rate_limit(username):
-                    await save_message(cipher, group_name, username, salt)
-                    # Get the saved message with its timestamp
-                    conn = await get_db_connection()
-                    try:
-                        row = await conn.fetchrow(
-                            "SELECT created_at FROM messages WHERE group_name = $1 AND sender = $2 ORDER BY id DESC LIMIT 1",
-                            group_name, username
-                        )
-                        timestamp = row[0] if row else time.time()
-                    finally:
-                        await return_db_connection(conn)
+                    created_at = await save_message(cipher, group_name, username, salt)
                     
                     await manager.broadcast(group_name, {
                         'type': 'message',
                         'ciphertext': cipher,
                         'sender': username,
                         'salt': salt,
-                        'timestamp': timestamp
+                        'timestamp': created_at
                     }, exclude=username)
             
             elif msg_type == 'typing':
