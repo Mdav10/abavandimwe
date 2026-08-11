@@ -31,9 +31,7 @@ app = FastAPI()
 DATABASE_URL = os.getenv('DATABASE_URL', 'postgresql://neondb_owner:npg_CmR51yqfMxNZ@ep-plain-salad-axxvh942-pooler.c-4.us-east-2.aws.neon.tech/neondb?sslmode=require')
 
 # Database connection pool
-db_pool = None
-
-async def init_db_pool():
+db_pool = Noneasync def init_db_pool():
     global db_pool
     db_pool = await create_pool(
         DATABASE_URL,
@@ -215,7 +213,8 @@ async def init_db():
                 sender TEXT NOT NULL,
                 salt TEXT NOT NULL,
                 created_at DOUBLE PRECISION NOT NULL,
-                expires_at DOUBLE PRECISION NOT NULL
+                expires_at DOUBLE PRECISION NOT NULL,
+                reply_to INTEGER DEFAULT NULL
             )
         ''')
         
@@ -428,16 +427,16 @@ async def get_user_assigned_group(username):
     finally:
         await return_db_connection(conn)
 
-async def save_message(ciphertext, group, sender, salt):
+async def save_message(ciphertext, group, sender, salt, reply_to=None):
     now = time.time()
     expiry = now + (24 * 3600)
     conn = await get_db_connection()
     try:
-        await conn.execute(
-            "INSERT INTO messages (ciphertext, group_name, sender, salt, created_at, expires_at) VALUES ($1, $2, $3, $4, $5, $6)",
-            ciphertext, group, sender, salt, now, expiry
+        result = await conn.fetchrow(
+            "INSERT INTO messages (ciphertext, group_name, sender, salt, created_at, expires_at, reply_to) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id, created_at",
+            ciphertext, group, sender, salt, now, expiry, reply_to
         )
-        return now
+        return dict(result)
     finally:
         await return_db_connection(conn)
 
@@ -446,7 +445,7 @@ async def get_messages(group):
     conn = await get_db_connection()
     try:
         rows = await conn.fetch(
-            "SELECT ciphertext, sender, salt, created_at FROM messages WHERE group_name = $1 AND created_at > $2 ORDER BY id ASC",
+            "SELECT id, ciphertext, sender, salt, created_at, reply_to FROM messages WHERE group_name = $1 AND created_at > $2 ORDER BY id ASC",
             group, cutoff
         )
         return [dict(row) for row in rows]
@@ -654,20 +653,23 @@ HTML = '''<!DOCTYPE html>
         
         .chat-area{flex:1;display:flex;flex-direction:column;}
         .messages-container{flex:1;padding:16px;overflow-y:auto;display:flex;flex-direction:column;gap:12px;}
-        .message{max-width:85%;display:flex;flex-direction:column;animation:fadeIn 0.2s ease;}
+        .message{max-width:85%;display:flex;flex-direction:column;animation:fadeIn 0.2s ease;position:relative;padding:8px 0;}
         .message.sent{align-self:flex-end;}
         .message.received{align-self:flex-start;}
-        .message-bubble{padding:10px 14px;border-radius:18px;font-size:14px;word-wrap:break-word;}
+        .message-bubble{padding:10px 14px;border-radius:18px;font-size:14px;word-wrap:break-word;position:relative;}
         .message.sent .message-bubble{background:#0f0;color:#000;border-bottom-right-radius:4px;}
         .message.received .message-bubble{background:#1a1a2e;border:1px solid #0f0;border-bottom-left-radius:4px;}
         .message-sender{font-size:10px;margin-bottom:4px;opacity:0.7;padding-left:4px;}
         .message-time{font-size:9px;margin-top:4px;opacity:0.5;}
+        .message-reply{font-size:9px;color:#ffaa00;margin-bottom:4px;padding:4px 8px;background:rgba(255,170,0,0.1);border-left:2px solid #ffaa00;border-radius:4px;}
         .system-message{text-align:center;font-size:11px;color:#ffaa00;margin:8px 0;font-style:italic;animation:fadeIn 0.3s ease;}
         .typing-indicator{padding:8px 16px;color:#0f0;font-style:italic;font-size:11px;min-height:36px;}
         
-        .input-area{padding:12px 16px;background:#050508;border-top:1px solid #0f0;display:flex;gap:10px;}
-        .input-area input{flex:1;margin:0;padding:12px 16px;font-size:14px;}
-        .input-area button{width:auto;margin:0;padding:12px 20px;}
+        .input-area{padding:12px 16px;background:#050508;border-top:1px solid #0f0;display:flex;gap:10px;align-items:flex-end;}
+        .input-area textarea{flex:1;margin:0;padding:12px 16px;background:#111;border:1px solid #0f0;border-radius:12px;color:#0f0;font-family:monospace;font-size:14px;resize:vertical;min-height:45px;max-height:120px;line-height:1.5;}
+        .input-area textarea:focus{outline:none;box-shadow:0 0 20px rgba(0,255,65,0.2);border-color:#0f0;}
+        .input-area textarea::placeholder{color:#444;}
+        .input-area button{width:auto;margin:0;padding:12px 20px;height:45px;}
         .footer{text-align:center;padding:6px;font-size:8px;color:#333;border-top:1px solid #0f0;}
         
         ::-webkit-scrollbar{width:3px;}
@@ -721,6 +723,10 @@ HTML = '''<!DOCTYPE html>
         .user-setup-card h2{text-align:center;margin-bottom:8px;font-size:24px;}
         .user-setup-card .sub{text-align:center;margin-bottom:24px;font-size:11px;color:#666;}
         .user-setup-card input[readonly]{opacity:0.7;cursor:not-allowed;}
+        
+        .reply-indicator{position:fixed;bottom:80px;left:50%;transform:translateX(-50%);background:#050508;border:1px solid #ffaa00;border-radius:12px;padding:8px 16px;font-size:11px;color:#ffaa00;z-index:20;display:none;align-items:center;gap:10px;}
+        .reply-indicator .close-reply{color:#ff0041;cursor:pointer;font-weight:bold;padding:0 4px;}
+        .reply-indicator .close-reply:hover{color:#ff6666;}
     </style>
 </head>
 <body>
@@ -886,7 +892,7 @@ HTML = '''<!DOCTYPE html>
             </div>
             <div class="typing-indicator" id="typingIndicator"></div>
             <div class="input-area">
-                <input type="text" id="messageInput" placeholder="Type a message...">
+                <textarea id="messageInput" placeholder="Type a message..." rows="1"></textarea>
                 <button onclick="sendMessage()">Send</button>
             </div>
             <div class="footer">🔐 End-to-End Encrypted | Messages self-destruct after 24 hours</div>
@@ -895,10 +901,17 @@ HTML = '''<!DOCTYPE html>
     <div class="connection-status status-online" id="connectionStatus">🟢 Connected</div>
 </div>
 
+<!-- Reply Indicator -->
+<div id="replyIndicator" class="reply-indicator">
+    <span>↩️ Replying to: <span id="replyToText"></span></span>
+    <span class="close-reply" onclick="cancelReply()">✕</span>
+</div>
+
 <script>
 let ws, username, groupName, groupPassword, groupSalt, typingTimeout, reconnectAttempts = 0;
 let currentUser = null;
 let gatekeeperData = null;
+let replyToMessage = null;
 
 document.addEventListener('DOMContentLoaded', function() {
     document.getElementById('loginBtn').addEventListener('click', login);
@@ -913,6 +926,12 @@ document.addEventListener('DOMContentLoaded', function() {
     });
     document.getElementById('userDisplayName').addEventListener('keypress', function(e) {
         if(e.key === 'Enter') enterChat();
+    });
+    
+    // Auto-resize textarea
+    document.getElementById('messageInput').addEventListener('input', function() {
+        this.style.height = 'auto';
+        this.style.height = Math.min(this.scrollHeight, 120) + 'px';
     });
 });
 
@@ -1079,29 +1098,26 @@ function connectToChat(username, group) {
                 groupSalt = d.salt;
                 addSystemMessage('🔐 Connected - Messages last 24 hours');
             } else if(d.type === 'history') {
-                // Clear messages before showing history
                 document.getElementById('messages').innerHTML = '';
                 
-                // Add all history messages
                 for(let msg of d.messages) {
                     try {
                         let dec = await decrypt(msg.ciphertext, window.groupPassword, msg.salt);
                         let isSent = msg.sender === window.chatUsername;
-                        addMessage(msg.sender, dec, isSent, msg.timestamp);
+                        addMessage(msg.sender, dec, isSent, msg.timestamp, msg.id, msg.reply_to);
                     } catch(e) {
                         console.error('Decryption error:', e);
                         let isSent = msg.sender === window.chatUsername;
-                        addMessage(msg.sender, '🔒 Encrypted', isSent, msg.timestamp);
+                        addMessage(msg.sender, '🔒 Encrypted', isSent, msg.timestamp, msg.id, msg.reply_to);
                     }
                 }
             } else if(d.type === 'message') {
-                // Only show messages from other users (self already shown)
                 if (d.sender !== window.chatUsername) {
                     try {
                         let dec = await decrypt(d.ciphertext, window.groupPassword, d.salt);
-                        addMessage(d.sender, dec, false, d.timestamp);
+                        addMessage(d.sender, dec, false, d.timestamp, d.message_id, d.reply_to);
                     } catch(e) {
-                        addMessage(d.sender, '🔒 Encrypted', false, d.timestamp);
+                        addMessage(d.sender, '🔒 Encrypted', false, d.timestamp, d.message_id, d.reply_to);
                     }
                 }
             } else if(d.type === 'users') {
@@ -1171,10 +1187,13 @@ function addSystemMessage(text) {
     msgs.scrollTop = msgs.scrollHeight;
 }
 
-function addMessage(sender, text, isSent, timestamp) {
+function addMessage(sender, text, isSent, timestamp, messageId, replyTo) {
     let msgs = document.getElementById('messages');
     let div = document.createElement('div');
     div.className = 'message ' + (isSent ? 'sent' : 'received');
+    div.dataset.messageId = messageId;
+    div.dataset.sender = sender;
+    div.dataset.text = text;
     
     let time;
     if(timestamp) {
@@ -1184,9 +1203,105 @@ function addMessage(sender, text, isSent, timestamp) {
         time = new Date().toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
     }
     
-    div.innerHTML = '<div class="message-sender">' + (isSent ? 'YOU' : escapeHtml(sender)) + '</div><div class="message-bubble">' + escapeHtml(text) + '</div><div class="message-time">' + time + '</div>';
+    let replyHtml = '';
+    if(replyTo) {
+        replyHtml = '<div class="message-reply">↩️ Replying to a message</div>';
+    }
+    
+    div.innerHTML = '<div class="message-sender">' + (isSent ? 'YOU' : escapeHtml(sender)) + '</div>' + 
+                    replyHtml +
+                    '<div class="message-bubble">' + escapeHtml(text) + '</div>' + 
+                    '<div class="message-time">' + time + '</div>';
+    
+    // Swipe to reply on mobile/desktop
+    let touchStartX = 0;
+    let touchStartY = 0;
+    let isSwiping = false;
+    
+    div.addEventListener('touchstart', function(e) {
+        touchStartX = e.changedTouches[0].screenX;
+        touchStartY = e.changedTouches[0].screenY;
+        isSwiping = false;
+    }, {passive: true});
+    
+    div.addEventListener('touchmove', function(e) {
+        let touchEndX = e.changedTouches[0].screenX;
+        let touchEndY = e.changedTouches[0].screenY;
+        let diffX = touchEndX - touchStartX;
+        let diffY = touchEndY - touchStartY;
+        
+        if (Math.abs(diffX) > Math.abs(diffY) && diffX > 50) {
+            isSwiping = true;
+            e.preventDefault();
+        }
+    }, {passive: false});
+    
+    div.addEventListener('touchend', function(e) {
+        if (isSwiping) {
+            let touchEndX = e.changedTouches[0].screenX;
+            let diffX = touchEndX - touchStartX;
+            if (diffX > 50) {
+                // Swipe right to reply
+                replyToMessage = {
+                    id: messageId,
+                    sender: sender,
+                    text: text
+                };
+                document.getElementById('replyToText').textContent = sender + ': ' + text.substring(0, 30) + (text.length > 30 ? '...' : '');
+                document.getElementById('replyIndicator').style.display = 'flex';
+                document.getElementById('messageInput').focus();
+            }
+            isSwiping = false;
+        }
+    }, {passive: true});
+    
+    // Mouse swipe for desktop
+    let mouseStartX = 0;
+    let mouseStartY = 0;
+    let isMouseSwiping = false;
+    
+    div.addEventListener('mousedown', function(e) {
+        mouseStartX = e.screenX;
+        mouseStartY = e.screenY;
+        isMouseSwiping = false;
+    });
+    
+    div.addEventListener('mousemove', function(e) {
+        let mouseEndX = e.screenX;
+        let mouseEndY = e.screenY;
+        let diffX = mouseEndX - mouseStartX;
+        let diffY = mouseEndY - mouseStartY;
+        
+        if (Math.abs(diffX) > Math.abs(diffY) && diffX > 50) {
+            isMouseSwiping = true;
+        }
+    });
+    
+    div.addEventListener('mouseup', function(e) {
+        if (isMouseSwiping) {
+            let mouseEndX = e.screenX;
+            let diffX = mouseEndX - mouseStartX;
+            if (diffX > 50) {
+                replyToMessage = {
+                    id: messageId,
+                    sender: sender,
+                    text: text
+                };
+                document.getElementById('replyToText').textContent = sender + ': ' + text.substring(0, 30) + (text.length > 30 ? '...' : '');
+                document.getElementById('replyIndicator').style.display = 'flex';
+                document.getElementById('messageInput').focus();
+            }
+            isMouseSwiping = false;
+        }
+    });
+    
     msgs.appendChild(div);
     msgs.scrollTop = msgs.scrollHeight;
+}
+
+function cancelReply() {
+    replyToMessage = null;
+    document.getElementById('replyIndicator').style.display = 'none';
 }
 
 function updateUsers(users) {
@@ -1230,6 +1345,10 @@ async function decrypt(enc, pwd, salt) {
 }
 
 document.getElementById('messageInput')?.addEventListener('input', function() {
+    // Auto-resize
+    this.style.height = 'auto';
+    this.style.height = Math.min(this.scrollHeight, 120) + 'px';
+    
     if(ws && ws.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify({type:'typing'}));
         clearTimeout(typingTimeout);
@@ -1240,28 +1359,39 @@ document.getElementById('messageInput')?.addEventListener('input', function() {
     }
 });
 
-document.getElementById('messageInput')?.addEventListener('keypress', function(e) {
-    if(e.key === 'Enter') sendMessage();
+document.getElementById('messageInput')?.addEventListener('keydown', function(e) {
+    if(e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        sendMessage();
+    }
 });
 
 async function sendMessage() {
     let input = document.getElementById('messageInput');
     let text = input.value.trim();
     if(!text || !ws || ws.readyState !== WebSocket.OPEN || !groupSalt) return;
+    
     try {
         let cipher = await encrypt(text, window.groupPassword, groupSalt);
         let timestamp = Date.now() / 1000;
         
+        let replyToId = replyToMessage ? replyToMessage.id : null;
+        
         // Show message immediately
-        addMessage(window.chatUsername, text, true, timestamp);
+        addMessage(window.chatUsername, text, true, timestamp, null, replyToId);
         input.value = '';
+        input.style.height = 'auto';
         
         ws.send(JSON.stringify({
             type:'message',
             ciphertext:cipher,
             salt:groupSalt,
-            timestamp: timestamp
+            timestamp: timestamp,
+            reply_to: replyToId
         }));
+        
+        // Clear reply indicator
+        cancelReply();
     } catch(e) {
         alert('Failed to send message');
     }
@@ -1338,9 +1468,11 @@ async function logout() {
     document.getElementById('userGroupPassword').value = '';
     document.getElementById('gatekeeperSuccess')?.remove();
     document.getElementById('setupSuccess').style.display = 'none';
+    document.getElementById('replyIndicator').style.display = 'none';
     reconnectAttempts = 0;
     currentUser = null;
     gatekeeperData = null;
+    replyToMessage = null;
 }
 
 async function loadAdminData() {
@@ -1548,14 +1680,13 @@ async def login(request: Request, login_data: LoginRequest):
     if verify_password_argon2(login_data.password, stored_hash):
         await reset_login_attempts(login_data.username)
         
-        # Get group password
         group_password = None
         if assigned_group:
             conn2 = await get_db_connection()
             try:
                 row2 = await conn2.fetchrow("SELECT password_hash FROM groups WHERE group_name = $1", assigned_group)
                 if row2:
-                    group_password = login_data.password  # Use the login password for group
+                    group_password = login_data.password
             finally:
                 await return_db_connection(conn2)
         
@@ -1743,17 +1874,17 @@ async def ws_endpoint(websocket: WebSocket):
     await manager.add(group_name, username, websocket)
     await set_user_status(username, 'online', group_name)
     
-    # Get all messages for this group
     messages = await get_messages(group_name)
     
-    # Send all history as a single batch
     history_messages = []
     for msg in messages:
         history_messages.append({
+            'id': msg['id'],
             'ciphertext': msg['ciphertext'],
             'sender': msg['sender'],
             'salt': msg['salt'],
-            'timestamp': msg['created_at']
+            'timestamp': msg['created_at'],
+            'reply_to': msg.get('reply_to')
         })
     
     await websocket.send_json({
@@ -1775,15 +1906,21 @@ async def ws_endpoint(websocket: WebSocket):
             if msg_type == 'message':
                 cipher = data.get('ciphertext')
                 salt = data.get('salt')
+                reply_to = data.get('reply_to')
+                
                 if username and group_name and check_rate_limit(username):
-                    created_at = await save_message(cipher, group_name, username, salt)
+                    result = await save_message(cipher, group_name, username, salt, reply_to)
+                    message_id = result['id']
+                    created_at = result['created_at']
                     
                     await manager.broadcast(group_name, {
                         'type': 'message',
+                        'message_id': message_id,
                         'ciphertext': cipher,
                         'sender': username,
                         'salt': salt,
-                        'timestamp': created_at
+                        'timestamp': created_at,
+                        'reply_to': reply_to
                     }, exclude=username)
             
             elif msg_type == 'typing':
@@ -1837,13 +1974,9 @@ if __name__ == "__main__":
     print(f"[✓] Database: PostgreSQL (Neon) with asyncpg")
     print(f"[✓] Messages expire after 24 hours")
     print(f"[✓] Open: http://localhost:{port}")
-    print(f"\n📋 Security Features:")
-    print(f"   ✅ Argon2id password hashing")
-    print(f"   ✅ Server-side sessions")
-    print(f"   ✅ Login rate limiting")
-    print(f"   ✅ Account lockout after 5 attempts")
-    print(f"   ✅ CORS restricted to allowed origins")
-    print(f"   ✅ WebSocket authentication via session")
-    print(f"   ✅ Admin-only endpoints protected")
-    print(f"   ✅ PostgreSQL with asyncpg")
+    print(f"\n📋 Features Added:")
+    print(f"   ✅ Multiline message input (resizable)")
+    print(f"   ✅ Swipe left to right on any message to reply")
+    print(f"   ✅ Reply indicator shows while replying")
+    print(f"   ✅ Shift+Enter for new line, Enter to send")
     uvicorn.run(app, host="0.0.0.0", port=port)
