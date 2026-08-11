@@ -189,7 +189,7 @@ async def init_db():
     conn = await get_db_connection()
     
     try:
-        # Create tables
+        # Create tables (without reply_to for now)
         await conn.execute('''
             CREATE TABLE IF NOT EXISTS users (
                 username TEXT PRIMARY KEY,
@@ -215,8 +215,7 @@ async def init_db():
                 sender TEXT NOT NULL,
                 salt TEXT NOT NULL,
                 created_at DOUBLE PRECISION NOT NULL,
-                expires_at DOUBLE PRECISION NOT NULL,
-                reply_to INTEGER DEFAULT NULL
+                expires_at DOUBLE PRECISION NOT NULL
             )
         ''')
         
@@ -429,14 +428,14 @@ async def get_user_assigned_group(username):
     finally:
         await return_db_connection(conn)
 
-async def save_message(ciphertext, group, sender, salt, reply_to=None):
+async def save_message(ciphertext, group, sender, salt):
     now = time.time()
     expiry = now + (24 * 3600)
     conn = await get_db_connection()
     try:
         result = await conn.fetchrow(
-            "INSERT INTO messages (ciphertext, group_name, sender, salt, created_at, expires_at, reply_to) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id, created_at",
-            ciphertext, group, sender, salt, now, expiry, reply_to
+            "INSERT INTO messages (ciphertext, group_name, sender, salt, created_at, expires_at) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id, created_at",
+            ciphertext, group, sender, salt, now, expiry
         )
         return dict(result)
     finally:
@@ -447,7 +446,7 @@ async def get_messages(group):
     conn = await get_db_connection()
     try:
         rows = await conn.fetch(
-            "SELECT id, ciphertext, sender, salt, created_at, reply_to FROM messages WHERE group_name = $1 AND created_at > $2 ORDER BY id ASC",
+            "SELECT id, ciphertext, sender, salt, created_at FROM messages WHERE group_name = $1 AND created_at > $2 ORDER BY id ASC",
             group, cutoff
         )
         return [dict(row) for row in rows]
@@ -663,7 +662,6 @@ HTML = '''<!DOCTYPE html>
         .message.received .message-bubble{background:#1a1a2e;border:1px solid #0f0;border-bottom-left-radius:4px;}
         .message-sender{font-size:10px;margin-bottom:4px;opacity:0.7;padding-left:4px;}
         .message-time{font-size:9px;margin-top:4px;opacity:0.5;}
-        .message-reply{font-size:9px;color:#ffaa00;margin-bottom:4px;padding:4px 8px;background:rgba(255,170,0,0.1);border-left:2px solid #ffaa00;border-radius:4px;}
         .system-message{text-align:center;font-size:11px;color:#ffaa00;margin:8px 0;font-style:italic;animation:fadeIn 0.3s ease;}
         .typing-indicator{padding:8px 16px;color:#0f0;font-style:italic;font-size:11px;min-height:36px;}
         
@@ -725,10 +723,6 @@ HTML = '''<!DOCTYPE html>
         .user-setup-card h2{text-align:center;margin-bottom:8px;font-size:24px;}
         .user-setup-card .sub{text-align:center;margin-bottom:24px;font-size:11px;color:#666;}
         .user-setup-card input[readonly]{opacity:0.7;cursor:not-allowed;}
-        
-        .reply-indicator{position:fixed;bottom:80px;left:50%;transform:translateX(-50%);background:#050508;border:1px solid #ffaa00;border-radius:12px;padding:8px 16px;font-size:11px;color:#ffaa00;z-index:20;display:none;align-items:center;gap:10px;max-width:90%;}
-        .reply-indicator .close-reply{color:#ff0041;cursor:pointer;font-weight:bold;padding:0 4px;}
-        .reply-indicator .close-reply:hover{color:#ff6666;}
     </style>
 </head>
 <body>
@@ -903,18 +897,10 @@ HTML = '''<!DOCTYPE html>
     <div class="connection-status status-online" id="connectionStatus">🟢 Connected</div>
 </div>
 
-<!-- Reply Indicator -->
-<div id="replyIndicator" class="reply-indicator">
-    <span>↩️ Replying to: <span id="replyToText"></span></span>
-    <span class="close-reply" onclick="cancelReply()">✕</span>
-</div>
-
 <script>
 let ws, username, groupName, groupPassword, groupSalt, typingTimeout, reconnectAttempts = 0;
 let currentUser = null;
 let gatekeeperData = null;
-let replyToMessage = null;
-let isConnected = false;
 
 document.addEventListener('DOMContentLoaded', function() {
     document.getElementById('loginBtn').addEventListener('click', login);
@@ -1080,7 +1066,6 @@ function connectToChat(username, group) {
     ws = new WebSocket(url);
     
     ws.onopen = function() {
-        isConnected = true;
         updateStatus(true);
         ws.send(JSON.stringify({
             type: 'join',
@@ -1111,11 +1096,11 @@ function connectToChat(username, group) {
                         try {
                             let dec = await decrypt(msg.ciphertext, window.groupPassword, msg.salt);
                             let isSent = msg.sender === window.chatUsername;
-                            addMessage(msg.sender, dec, isSent, msg.timestamp, msg.id, msg.reply_to);
+                            addMessage(msg.sender, dec, isSent, msg.timestamp);
                         } catch(e) {
                             console.error('Decryption error:', e);
                             let isSent = msg.sender === window.chatUsername;
-                            addMessage(msg.sender, '🔒 Encrypted', isSent, msg.timestamp, msg.id, msg.reply_to);
+                            addMessage(msg.sender, '🔒 Encrypted', isSent, msg.timestamp);
                         }
                     }
                 }
@@ -1123,9 +1108,9 @@ function connectToChat(username, group) {
                 if (d.sender !== window.chatUsername) {
                     try {
                         let dec = await decrypt(d.ciphertext, window.groupPassword, d.salt);
-                        addMessage(d.sender, dec, false, d.timestamp, d.message_id, d.reply_to);
+                        addMessage(d.sender, dec, false, d.timestamp);
                     } catch(e) {
-                        addMessage(d.sender, '🔒 Encrypted', false, d.timestamp, d.message_id, d.reply_to);
+                        addMessage(d.sender, '🔒 Encrypted', false, d.timestamp);
                     }
                 }
             } else if(d.type === 'users') {
@@ -1148,12 +1133,10 @@ function connectToChat(username, group) {
     
     ws.onerror = function(e) {
         console.error('WebSocket error:', e);
-        isConnected = false;
         updateStatus(false);
     };
     
     ws.onclose = function() {
-        isConnected = false;
         updateStatus(false);
         if(document.getElementById('chatScreen').classList.contains('active')) {
             addSystemMessage('⚠️ Connection lost. Reconnecting...');
@@ -1197,13 +1180,10 @@ function addSystemMessage(text) {
     msgs.scrollTop = msgs.scrollHeight;
 }
 
-function addMessage(sender, text, isSent, timestamp, messageId, replyTo) {
+function addMessage(sender, text, isSent, timestamp) {
     let msgs = document.getElementById('messages');
     let div = document.createElement('div');
     div.className = 'message ' + (isSent ? 'sent' : 'received');
-    div.dataset.messageId = messageId;
-    div.dataset.sender = sender;
-    div.dataset.text = text;
     
     let time;
     if(timestamp) {
@@ -1213,104 +1193,12 @@ function addMessage(sender, text, isSent, timestamp, messageId, replyTo) {
         time = new Date().toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
     }
     
-    let replyHtml = '';
-    if(replyTo) {
-        replyHtml = '<div class="message-reply">↩️ Replying to a message</div>';
-    }
-    
     div.innerHTML = '<div class="message-sender">' + (isSent ? 'YOU' : escapeHtml(sender)) + '</div>' + 
-                    replyHtml +
                     '<div class="message-bubble">' + escapeHtml(text) + '</div>' + 
                     '<div class="message-time">' + time + '</div>';
     
-    // Swipe to reply on mobile/desktop
-    let touchStartX = 0;
-    let touchStartY = 0;
-    let isSwiping = false;
-    
-    div.addEventListener('touchstart', function(e) {
-        touchStartX = e.changedTouches[0].screenX;
-        touchStartY = e.changedTouches[0].screenY;
-        isSwiping = false;
-    }, {passive: true});
-    
-    div.addEventListener('touchmove', function(e) {
-        let touchEndX = e.changedTouches[0].screenX;
-        let touchEndY = e.changedTouches[0].screenY;
-        let diffX = touchEndX - touchStartX;
-        let diffY = touchEndY - touchStartY;
-        
-        if (Math.abs(diffX) > Math.abs(diffY) && diffX > 50) {
-            isSwiping = true;
-            e.preventDefault();
-        }
-    }, {passive: false});
-    
-    div.addEventListener('touchend', function(e) {
-        if (isSwiping) {
-            let touchEndX = e.changedTouches[0].screenX;
-            let diffX = touchEndX - touchStartX;
-            if (diffX > 50) {
-                replyToMessage = {
-                    id: messageId,
-                    sender: sender,
-                    text: text
-                };
-                document.getElementById('replyToText').textContent = sender + ': ' + text.substring(0, 30) + (text.length > 30 ? '...' : '');
-                document.getElementById('replyIndicator').style.display = 'flex';
-                document.getElementById('messageInput').focus();
-            }
-            isSwiping = false;
-        }
-    }, {passive: true});
-    
-    // Mouse swipe for desktop
-    let mouseStartX = 0;
-    let mouseStartY = 0;
-    let isMouseSwiping = false;
-    
-    div.addEventListener('mousedown', function(e) {
-        mouseStartX = e.screenX;
-        mouseStartY = e.screenY;
-        isMouseSwiping = false;
-    });
-    
-    div.addEventListener('mousemove', function(e) {
-        let mouseEndX = e.screenX;
-        let mouseEndY = e.screenY;
-        let diffX = mouseEndX - mouseStartX;
-        let diffY = mouseEndY - mouseStartY;
-        
-        if (Math.abs(diffX) > Math.abs(diffY) && diffX > 50) {
-            isMouseSwiping = true;
-        }
-    });
-    
-    div.addEventListener('mouseup', function(e) {
-        if (isMouseSwiping) {
-            let mouseEndX = e.screenX;
-            let diffX = mouseEndX - mouseStartX;
-            if (diffX > 50) {
-                replyToMessage = {
-                    id: messageId,
-                    sender: sender,
-                    text: text
-                };
-                document.getElementById('replyToText').textContent = sender + ': ' + text.substring(0, 30) + (text.length > 30 ? '...' : '');
-                document.getElementById('replyIndicator').style.display = 'flex';
-                document.getElementById('messageInput').focus();
-            }
-            isMouseSwiping = false;
-        }
-    });
-    
     msgs.appendChild(div);
     msgs.scrollTop = msgs.scrollHeight;
-}
-
-function cancelReply() {
-    replyToMessage = null;
-    document.getElementById('replyIndicator').style.display = 'none';
 }
 
 function updateUsers(users) {
@@ -1357,7 +1245,6 @@ async function decrypt(enc, pwd, salt) {
 }
 
 document.getElementById('messageInput')?.addEventListener('input', function() {
-    // Auto-resize
     this.style.height = 'auto';
     this.style.height = Math.min(this.scrollHeight, 120) + 'px';
     
@@ -1387,10 +1274,7 @@ async function sendMessage() {
         let cipher = await encrypt(text, window.groupPassword, groupSalt);
         let timestamp = Date.now() / 1000;
         
-        let replyToId = replyToMessage ? replyToMessage.id : null;
-        
-        // Show message immediately
-        addMessage(window.chatUsername, text, true, timestamp, null, replyToId);
+        addMessage(window.chatUsername, text, true, timestamp);
         input.value = '';
         input.style.height = 'auto';
         
@@ -1398,12 +1282,8 @@ async function sendMessage() {
             type:'message',
             ciphertext:cipher,
             salt:groupSalt,
-            timestamp: timestamp,
-            reply_to: replyToId
+            timestamp: timestamp
         }));
-        
-        // Clear reply indicator
-        cancelReply();
     } catch(e) {
         alert('Failed to send message');
     }
@@ -1459,7 +1339,6 @@ function showSetupSuccess(msg) {
 async function logout() {
     if(ws) ws.close();
     ws = null;
-    isConnected = false;
     
     try {
         await fetch('/logout', {method: 'POST'});
@@ -1481,11 +1360,9 @@ async function logout() {
     document.getElementById('userGroupPassword').value = '';
     document.getElementById('gatekeeperSuccess')?.remove();
     document.getElementById('setupSuccess').style.display = 'none';
-    document.getElementById('replyIndicator').style.display = 'none';
     reconnectAttempts = 0;
     currentUser = null;
     gatekeeperData = null;
-    replyToMessage = null;
 }
 
 async function loadAdminData() {
@@ -1887,7 +1764,7 @@ async def ws_endpoint(websocket: WebSocket):
     await manager.add(group_name, username, websocket)
     await set_user_status(username, 'online', group_name)
     
-    # Send users list first
+    # Send users list
     online = await get_online_users(group_name)
     await websocket.send_json({'type': 'users', 'users': online})
     
@@ -1901,8 +1778,7 @@ async def ws_endpoint(websocket: WebSocket):
             'ciphertext': msg['ciphertext'],
             'sender': msg['sender'],
             'salt': msg['salt'],
-            'timestamp': msg['created_at'],
-            'reply_to': msg.get('reply_to')
+            'timestamp': msg['created_at']
         })
     
     await websocket.send_json({
@@ -1923,10 +1799,9 @@ async def ws_endpoint(websocket: WebSocket):
             if msg_type == 'message':
                 cipher = data.get('ciphertext')
                 salt = data.get('salt')
-                reply_to = data.get('reply_to')
                 
                 if username and group_name and check_rate_limit(username):
-                    result = await save_message(cipher, group_name, username, salt, reply_to)
+                    result = await save_message(cipher, group_name, username, salt)
                     message_id = result['id']
                     created_at = result['created_at']
                     
@@ -1936,8 +1811,7 @@ async def ws_endpoint(websocket: WebSocket):
                         'ciphertext': cipher,
                         'sender': username,
                         'salt': salt,
-                        'timestamp': created_at,
-                        'reply_to': reply_to
+                        'timestamp': created_at
                     }, exclude=username)
             
             elif msg_type == 'typing':
@@ -1993,8 +1867,6 @@ if __name__ == "__main__":
     print(f"[✓] Open: http://localhost:{port}")
     print(f"\n📋 Features:")
     print(f"   ✅ Multiline message input (resizable)")
-    print(f"   ✅ Swipe left to right on any message to reply")
-    print(f"   ✅ Reply indicator shows while replying")
     print(f"   ✅ Shift+Enter for new line, Enter to send")
     print(f"   ✅ Messages load on connect")
     print(f"   ✅ Online users list updates")
