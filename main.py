@@ -3,11 +3,13 @@ ABAVANDIMWE - Secure Messaging System
 Author: Mugisha Pc
 Messages stay for 24 hours then auto-delete
 Database: PostgreSQL (Neon) with asyncpg
+PWA Ready - Can be installed as Android App
 """
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request, Depends, HTTPException
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 import asyncio
 import json
 import os
@@ -26,6 +28,38 @@ import asyncpg
 from asyncpg import create_pool
 
 app = FastAPI()
+
+# ========== SERVE STATIC FILES FOR PWA ==========
+os.makedirs("static/icons", exist_ok=True)
+os.makedirs("static/screenshots", exist_ok=True)
+
+app.mount("/icons", StaticFiles(directory="static/icons"), name="icons")
+app.mount("/screenshots", StaticFiles(directory="static/screenshots"), name="screenshots")
+
+# ========== SERVE PWA FILES ==========
+@app.get("/manifest.json")
+async def serve_manifest():
+    try:
+        with open("manifest.json", "r") as f:
+            return Response(content=f.read(), media_type="application/json")
+    except FileNotFoundError:
+        return JSONResponse({"error": "manifest.json not found"}, status_code=404)
+
+@app.get("/sw.js")
+async def serve_sw():
+    try:
+        with open("sw.js", "r") as f:
+            return Response(content=f.read(), media_type="text/javascript")
+    except FileNotFoundError:
+        return JSONResponse({"error": "sw.js not found"}, status_code=404)
+
+@app.get("/offline.html")
+async def serve_offline():
+    try:
+        with open("offline.html", "r") as f:
+            return Response(content=f.read(), media_type="text/html")
+    except FileNotFoundError:
+        return JSONResponse({"error": "offline.html not found"}, status_code=404)
 
 # ========== DATABASE CONFIG ==========
 DATABASE_URL = os.getenv('DATABASE_URL', 'postgresql://neondb_owner:npg_CmR51yqfMxNZ@ep-plain-salad-axxvh942-pooler.c-4.us-east-2.aws.neon.tech/neondb?sslmode=require')
@@ -243,14 +277,14 @@ async def init_db():
         
         print("[✓] PostgreSQL database ready")
         
-        # Add reply_to column if it doesn't exist (for existing databases)
+        # Add reply_to column if it doesn't exist
         try:
             await conn.execute('''
                 ALTER TABLE messages ADD COLUMN IF NOT EXISTS reply_to INTEGER DEFAULT NULL
             ''')
-            print("[✓] reply_to column added/verified")
+            print("[✓] reply_to column verified")
         except Exception as e:
-            print(f"[!] reply_to column already exists or error: {e}")
+            print(f"[!] reply_to column: {e}")
         
         # Create admin if not exists
         row = await conn.fetchrow("SELECT username FROM users WHERE username = $1", ADMIN_USERNAME)
@@ -463,17 +497,6 @@ async def get_messages(group):
     finally:
         await return_db_connection(conn)
 
-async def get_message_by_id(message_id):
-    conn = await get_db_connection()
-    try:
-        row = await conn.fetchrow(
-            "SELECT id, ciphertext, sender, salt, created_at, reply_to FROM messages WHERE id = $1",
-            message_id
-        )
-        return dict(row) if row else None
-    finally:
-        await return_db_connection(conn)
-
 async def get_all_messages(limit=100):
     conn = await get_db_connection()
     try:
@@ -620,6 +643,30 @@ HTML = '''<!DOCTYPE html>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
     <title>ABAVANDIMWE | Secure Messaging</title>
+    
+    <!-- PWA Meta Tags -->
+    <link rel="manifest" href="/manifest.json">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="ABAVANDIMWE">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="theme-color" content="#0a0a0f">
+    <meta name="msapplication-TileColor" content="#0a0a0f">
+    <meta name="msapplication-TileImage" content="/icons/icon-144x144.png">
+    
+    <!-- Icons -->
+    <link rel="icon" type="image/png" sizes="72x72" href="/icons/icon-72x72.png">
+    <link rel="icon" type="image/png" sizes="96x96" href="/icons/icon-96x96.png">
+    <link rel="icon" type="image/png" sizes="128x128" href="/icons/icon-128x128.png">
+    <link rel="icon" type="image/png" sizes="144x144" href="/icons/icon-144x144.png">
+    <link rel="icon" type="image/png" sizes="152x152" href="/icons/icon-152x152.png">
+    <link rel="icon" type="image/png" sizes="192x192" href="/icons/icon-192x192.png">
+    <link rel="icon" type="image/png" sizes="384x384" href="/icons/icon-384x384.png">
+    <link rel="icon" type="image/png" sizes="512x512" href="/icons/icon-512x512.png">
+    
+    <!-- Apple Touch Icon -->
+    <link rel="apple-touch-icon" href="/icons/icon-192x192.png">
+    
     <style>
         *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent;}
         body{font-family:monospace;background:#0a0a0f;height:100vh;overflow:hidden;color:#0f0;}
@@ -936,7 +983,7 @@ let ws, username, groupName, groupPassword, groupSalt, typingTimeout, reconnectA
 let currentUser = null;
 let gatekeeperData = null;
 let replyingToMessageId = null;
-let messagesData = {}; // Store messages by ID for reply previews
+let messagesData = {};
 
 document.addEventListener('DOMContentLoaded', function() {
     document.getElementById('loginBtn').addEventListener('click', login);
@@ -953,12 +1000,29 @@ document.addEventListener('DOMContentLoaded', function() {
         if(e.key === 'Enter') enterChat();
     });
     
-    // Auto-resize textarea
     document.getElementById('messageInput').addEventListener('input', function() {
         this.style.height = 'auto';
         this.style.height = Math.min(this.scrollHeight, 120) + 'px';
     });
 });
+
+// PWA: Service Worker Registration
+if ('serviceWorker' in navigator) {
+    window.addEventListener('load', () => {
+        navigator.serviceWorker.register('/sw.js')
+            .then((registration) => {
+                console.log('Service Worker registered successfully');
+            })
+            .catch((error) => {
+                console.log('Service Worker registration failed:', error);
+            });
+    });
+}
+
+// Check if app is installed (standalone mode)
+if (window.matchMedia('(display-mode: standalone)').matches) {
+    console.log('ABAVANDIMWE is running in standalone mode (installed)');
+}
 
 async function login() {
     const username = document.getElementById('loginUsername').value.trim();
@@ -1089,6 +1153,7 @@ async function enterChat() {
     document.getElementById('userSetupScreen').classList.remove('active');
     document.getElementById('chatScreen').classList.add('active');
     document.getElementById('messages').innerHTML = '';
+    messagesData = {};
     
     connectToChat(displayName, groupName);
 }
@@ -1114,7 +1179,6 @@ function connectToChat(username, group) {
     ws.onmessage = async function(e) {
         try {
             let d = JSON.parse(e.data);
-            console.log('Received:', d.type);
             
             if(d.type === 'error') {
                 showError(d.message);
@@ -1351,7 +1415,6 @@ function cancelReply() {
 }
 
 function scrollToMessage(messageId) {
-    // Find the message element and scroll to it
     let messages = document.querySelectorAll('.message');
     for (let msg of messages) {
         if (msg.dataset.messageId == messageId) {
@@ -1440,7 +1503,6 @@ async function sendMessage() {
         
         let replyToId = replyingToMessageId;
         
-        // Show message immediately
         let newId = Date.now();
         messagesData[newId] = {sender: window.chatUsername, text: text, timestamp: timestamp};
         addMessage(window.chatUsername, text, true, timestamp, newId, replyToId);
@@ -1455,7 +1517,6 @@ async function sendMessage() {
             reply_to: replyToId
         }));
         
-        // Clear reply indicator
         cancelReply();
     } catch(e) {
         alert('Failed to send message');
@@ -1700,6 +1761,7 @@ async function deleteMessage(id) {
 console.log('🔐 ABAVANDIMWE Secure Messaging System');
 console.log('📱 Developed by Mugisha Pc');
 console.log('💬 Reply feature: Swipe any message left to right to reply');
+console.log('📱 PWA Ready: Install as Android App from browser');
 </script>
 </body>
 </html>'''
@@ -2038,6 +2100,8 @@ if __name__ == "__main__":
 ║           Messages auto-delete after 24 hours              ║
 ║                    Author: Mugisha Pc                      ║
 ║                                                            ║
+║                   📱 PWA Ready - Install as App!           ║
+║                                                            ║
 ╚════════════════════════════════════════════════════════════╝
 """)
     print(f"[✓] Server running on port {port}")
@@ -2045,11 +2109,13 @@ if __name__ == "__main__":
     print(f"[✓] Database: PostgreSQL (Neon) with asyncpg")
     print(f"[✓] Messages expire after 24 hours")
     print(f"[✓] Open: http://localhost:{port}")
+    print(f"\n📱 PWA Features:")
+    print(f"   ✅ Install as Android App")
+    print(f"   ✅ Offline support")
+    print(f"   ✅ Custom app icon")
+    print(f"   ✅ Splash screen ready")
     print(f"\n📋 Features:")
-    print(f"   ✅ Multiline message input (resizable)")
-    print(f"   ✅ Shift+Enter for new line, Enter to send")
-    print(f"   ✅ Messages load on connect")
-    print(f"   ✅ Online users list updates")
+    print(f"   ✅ Multiline message input")
     print(f"   ✅ Reply to messages (swipe left to right)")
     print(f"   ✅ Reply previews with original message")
     print(f"   ✅ Click reply preview to scroll to original")

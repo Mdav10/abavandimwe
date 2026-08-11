@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ABAVANDIMWE - Offline</title>
+    <style>
+        *{margin:0;padding:0;box-sizing:border-box;}
+        body{font-family:monospace;background:#0a0a0f;height:100vh;display:flex;justify-content:center;align-items:center;color:#0f0;}
+        .offline-container{text-align:center;padding:40px;border:2px solid #0f0;border-radius:24px;max-width:400px;background:#050508;}
+        h1{font-size:28px;margin-bottom:16px;letter-spacing:2px;}
+        .sub{color:#666;font-size:12px;margin-bottom:24px;}
+        .icon{font-size:64px;margin-bottom:20px;}
+        .retry-btn{padding:14px 40px;background:transparent;border:2px solid #0f0;border-radius:12px;color:#0f0;font-size:16px;cursor:pointer;transition:all 0.3s;}
+        .retry-btn:hover{background:#0f0;color:#000;}
+        .footer{color:#333;font-size:9px;margin-top:20px;border-top:1px solid #1a1a2e;padding-top:16px;}
+    </style>
+</head>
+<body>
+    <div class="offline-container">
+        <div class="icon">📡</div>
+        <h1># ABAVANDIMWE</h1>
+        <div class="sub">You are offline</div>
+        <p style="font-size:14px;color:#888;margin-bottom:20px;">Please check your internet connection and try again.</p>
+        <button class="retry-btn" onclick="location.reload()">↻ Retry</button>
+        <div class="footer">🔐 Secure Messaging | Mugisha Pc</div>
+    </div>
+</body>
+</html>
