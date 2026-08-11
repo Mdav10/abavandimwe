@@ -1,6 +1,6 @@
 {
-  "name": "ABAVANDIMWE",
-  "short_name": "ABAVANDIMWE",
+  "name": "MugiChat",
+  "short_name": "MugiChat",
   "description": "Secure Messaging System - End-to-End Encrypted",
   "start_url": "/",
   "display": "standalone",
