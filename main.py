@@ -1117,13 +1117,13 @@ HTML = '''<!DOCTYPE html>
                 </div>
                 <div class="input-row">
                     <textarea id="messageInput" placeholder="Type a message..." rows="2"></textarea>
-                    <button onclick="showLoading('Sending', sendMessage)">Send</button>
+                    <button onclick="showLoading('Sending', sendMessage)"> ➤ </button>
                 </div>
             </div>
             <div class="footer">🔐 End-to-End Encrypted | Messages self-destruct after 24 hours</div>
         </div>
     </div>
-    <div class="connection-status status-online" id="connectionStatus">🟢 Connected</div>
+    <div class="connection-status status-online" id="connectionStatus">🟢 </div>
 </div>
 
 <!-- Install App Button -->
@@ -1515,12 +1515,12 @@ function updateStatus(online) {
     let status = document.getElementById('connectionStatus');
     let badge = document.getElementById('connectionBadge');
     if(online) {
-        status.innerHTML = '🟢 Connected';
+        status.innerHTML = '🟢 ';
         status.className = 'connection-status status-online';
         badge.innerHTML = '● Online';
         badge.style.color = '#0f0';
     } else {
-        status.innerHTML = '🔴 Disconnected';
+        status.innerHTML = '🔴 ';
         status.className = 'connection-status status-offline';
         badge.innerHTML = '● Offline';
         badge.style.color = '#ff4444';
