@@ -3,7 +3,7 @@ ABAVANDIMWE - Secure Messaging System
 Author: Mugisha Pc
 Messages stay for 24 hours then auto-delete
 Database: PostgreSQL (Neon) with asyncpg
-PWA Ready - Can be installed as Android App
+PWA Ready - Install as Android App with one click
 """
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request, Depends, HTTPException
@@ -798,6 +798,38 @@ HTML = '''<!DOCTYPE html>
         .user-setup-card h2{text-align:center;margin-bottom:8px;font-size:24px;}
         .user-setup-card .sub{text-align:center;margin-bottom:24px;font-size:11px;color:#666;}
         .user-setup-card input[readonly]{opacity:0.7;cursor:not-allowed;}
+        
+        /* Install Button */
+        .install-btn {
+            position: fixed;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: 100;
+            padding: 14px 28px;
+            background: #0f0;
+            color: #000;
+            border: none;
+            border-radius: 14px;
+            font-size: 15px;
+            font-weight: bold;
+            cursor: pointer;
+            display: none;
+            box-shadow: 0 4px 30px rgba(0, 255, 65, 0.4);
+            transition: all 0.3s;
+            font-family: monospace;
+            letter-spacing: 0.5px;
+        }
+        .install-btn:hover {
+            transform: translateX(-50%) scale(1.05);
+            box-shadow: 0 6px 40px rgba(0, 255, 65, 0.6);
+        }
+        .install-btn:active {
+            transform: translateX(-50%) scale(0.95);
+        }
+        .install-btn.show {
+            display: block;
+        }
     </style>
 </head>
 <body>
@@ -978,6 +1010,9 @@ HTML = '''<!DOCTYPE html>
     <div class="connection-status status-online" id="connectionStatus">🟢 Connected</div>
 </div>
 
+<!-- Install App Button -->
+<button id="installBtn" class="install-btn">📲 Install ABAVANDIMWE App</button>
+
 <script>
 let ws, username, groupName, groupPassword, groupSalt, typingTimeout, reconnectAttempts = 0;
 let currentUser = null;
@@ -1006,24 +1041,69 @@ document.addEventListener('DOMContentLoaded', function() {
     });
 });
 
-// PWA: Service Worker Registration
+// ========== PWA: Service Worker Registration ==========
 if ('serviceWorker' in navigator) {
     window.addEventListener('load', () => {
         navigator.serviceWorker.register('/sw.js')
             .then((registration) => {
-                console.log('Service Worker registered successfully');
+                console.log('✅ Service Worker registered successfully');
             })
             .catch((error) => {
-                console.log('Service Worker registration failed:', error);
+                console.log('❌ Service Worker registration failed:', error);
             });
     });
 }
 
-// Check if app is installed (standalone mode)
+// ========== PWA: Install Button ==========
+let deferredPrompt;
+const installBtn = document.getElementById('installBtn');
+
+window.addEventListener('beforeinstallprompt', (e) => {
+    // Prevent Chrome 67+ from automatically showing the prompt
+    e.preventDefault();
+    // Stash the event so it can be triggered later
+    deferredPrompt = e;
+    // Show the install button
+    installBtn.classList.add('show');
+    console.log('📱 App can be installed');
+});
+
+installBtn.addEventListener('click', async () => {
+    if (deferredPrompt) {
+        // Show the install prompt
+        deferredPrompt.prompt();
+        // Wait for the user to respond to the prompt
+        const choiceResult = await deferredPrompt.userChoice;
+        if (choiceResult.outcome === 'accepted') {
+            console.log('✅ User accepted the install prompt');
+            installBtn.classList.remove('show');
+        } else {
+            console.log('❌ User dismissed the install prompt');
+        }
+        // Clear the deferredPrompt variable
+        deferredPrompt = null;
+    }
+});
+
+// Hide install button if already installed
+window.addEventListener('appinstalled', (evt) => {
+    console.log('✅ ABAVANDIMWE was installed');
+    installBtn.classList.remove('show');
+});
+
+// Check if app is running in standalone mode (already installed)
 if (window.matchMedia('(display-mode: standalone)').matches) {
-    console.log('ABAVANDIMWE is running in standalone mode (installed)');
+    installBtn.classList.remove('show');
+    console.log('📱 ABAVANDIMWE is running as installed app');
 }
 
+// Also check for iOS Safari
+if (navigator.standalone) {
+    installBtn.classList.remove('show');
+    console.log('📱 ABAVANDIMWE is running as iOS standalone app');
+}
+
+// ========== REST OF THE APP ==========
 async function login() {
     const username = document.getElementById('loginUsername').value.trim();
     const password = document.getElementById('loginPassword').value;
@@ -1761,7 +1841,7 @@ async function deleteMessage(id) {
 console.log('🔐 ABAVANDIMWE Secure Messaging System');
 console.log('📱 Developed by Mugisha Pc');
 console.log('💬 Reply feature: Swipe any message left to right to reply');
-console.log('📱 PWA Ready: Install as Android App from browser');
+console.log('📱 PWA: Click "Install ABAVANDIMWE App" to install as Android app');
 </script>
 </body>
 </html>'''
@@ -2110,7 +2190,8 @@ if __name__ == "__main__":
     print(f"[✓] Messages expire after 24 hours")
     print(f"[✓] Open: http://localhost:{port}")
     print(f"\n📱 PWA Features:")
-    print(f"   ✅ Install as Android App")
+    print(f"   ✅ One-click Install as Android App")
+    print(f"   ✅ No Chrome browser UI after install")
     print(f"   ✅ Offline support")
     print(f"   ✅ Custom app icon")
     print(f"   ✅ Splash screen ready")
