@@ -435,24 +435,28 @@ async def create_user_with_group(username, password, group_name, group_password)
         # Check if group exists
         row = await conn.fetchrow("SELECT group_name FROM groups WHERE group_name = $1", group_name)
         if not row:
+            # Create the group with the ACTUAL group name
             group_salt = generate_salt()
             group_pwd_hash = hash_password_argon2(group_password)
             await conn.execute(
                 "INSERT INTO groups (group_name, salt, password_hash, group_password, created_by, created_at) VALUES ($1, $2, $3, $4, $5, $6)",
-                group_name, group_salt, group_pwd_hash, group_password, "admin", time.time()
+                group_name, group_salt, group_pwd_hash, group_password, username, time.time()
             )
-            print(f"[✓] Group created: {group_name}")
+            print(f"[✓] Group created: '{group_name}' with password: '{group_password}'")
         else:
             # Update group password if it doesn't have one
-            await conn.execute(
-                "UPDATE groups SET group_password = $1 WHERE group_name = $2 AND group_password IS NULL",
+            result = await conn.execute(
+                "UPDATE groups SET group_password = $1 WHERE group_name = $2 AND (group_password IS NULL OR group_password = '')",
                 group_password, group_name
             )
+            if result == "UPDATE 1":
+                print(f"[✓] Updated group password for '{group_name}'")
         
         await conn.execute(
             "INSERT INTO users (username, password_hash, salt, role, assigned_group, created_at) VALUES ($1, $2, $3, $4, $5, $6)",
             username, password_hash, salt, "user", group_name, time.time()
         )
+        print(f"[✓] User created: '{username}' in group '{group_name}'")
         return True
     except Exception as e:
         print(f"Error creating user: {e}")
