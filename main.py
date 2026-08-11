@@ -219,6 +219,7 @@ def decrypt(encrypted, password, salt):
 # ========== RATE LIMITING ==========
 login_attempts = defaultdict(list)
 login_blocks = {}
+message_limits = defaultdict(list)
 
 def check_login_rate_limit(username):
     now = time.time()
@@ -244,6 +245,14 @@ def reset_login_attempts(username):
         login_attempts[username] = []
     if username in login_blocks:
         del login_blocks[username]
+
+def check_rate_limit(username):
+    now = time.time()
+    message_limits[username] = [t for t in message_limits[username] if t > now - 5]
+    if len(message_limits[username]) >= 10:
+        return False
+    message_limits[username].append(now)
+    return True
 
 # ========== DATABASE INIT ==========
 async def init_db():
