@@ -897,6 +897,7 @@ HTML = '''<!DOCTYPE html>
 let ws, username, groupName, groupPassword, groupSalt, typingTimeout, reconnectAttempts = 0;
 let currentUser = null;
 let gatekeeperData = null;
+let messageHistory = []; // Store all messages locally
 
 document.addEventListener('DOMContentLoaded', function() {
     document.getElementById('loginBtn').addEventListener('click', login);
@@ -1041,6 +1042,10 @@ async function enterChat() {
     document.getElementById('userSetupScreen').classList.remove('active');
     document.getElementById('chatScreen').classList.add('active');
     
+    // Clear message history when entering chat
+    messageHistory = [];
+    document.getElementById('messages').innerHTML = '';
+    
     connectToChat(displayName, groupName);
 }
 
@@ -1073,16 +1078,28 @@ function connectToChat(username, group) {
             if(d.type === 'ready') {
                 groupSalt = d.salt;
                 addSystemMessage('🔐 Connected - Messages last 24 hours');
-            } else if(d.type === 'message' || d.type === 'history') {
-                try {
-                    let dec = await decrypt(d.ciphertext, window.groupPassword, d.salt);
-                    // Only show messages from other users
-                    // Self messages are shown immediately in sendMessage()
-                    if (d.sender !== window.chatUsername) {
-                        addMessage(d.sender, dec, false, d.timestamp);
+            } else if(d.type === 'history') {
+                // Clear messages before showing history
+                document.getElementById('messages').innerHTML = '';
+                messageHistory = [];
+                
+                // Add all history messages
+                for(let msg of d.messages) {
+                    try {
+                        let dec = await decrypt(msg.ciphertext, window.groupPassword, msg.salt);
+                        let isSent = msg.sender === window.chatUsername;
+                        addMessage(msg.sender, dec, isSent, msg.timestamp);
+                    } catch(e) {
+                        addMessage(msg.sender, '🔒 Encrypted', msg.sender === window.chatUsername, msg.timestamp);
                     }
-                } catch(e) {
-                    if (d.sender !== window.chatUsername) {
+                }
+            } else if(d.type === 'message') {
+                // Only show new messages from others (self messages already shown immediately)
+                if (d.sender !== window.chatUsername) {
+                    try {
+                        let dec = await decrypt(d.ciphertext, window.groupPassword, d.salt);
+                        addMessage(d.sender, dec, false, d.timestamp);
+                    } catch(e) {
                         addMessage(d.sender, '🔒 Encrypted', false, d.timestamp);
                     }
                 }
@@ -1146,7 +1163,6 @@ function updateStatus(online) {
 
 function addSystemMessage(text) {
     let msgs = document.getElementById('messages');
-    if(msgs.children.length === 1 && msgs.children[0].innerText.includes('Connecting')) msgs.innerHTML = '';
     let div = document.createElement('div');
     div.className = 'system-message';
     div.textContent = text;
@@ -1156,7 +1172,6 @@ function addSystemMessage(text) {
 
 function addMessage(sender, text, isSent, timestamp) {
     let msgs = document.getElementById('messages');
-    if(msgs.children.length === 1 && msgs.children[0].innerText.includes('Connecting')) msgs.innerHTML = '';
     let div = document.createElement('div');
     div.className = 'message ' + (isSent ? 'sent' : 'received');
     
@@ -1327,6 +1342,7 @@ async function logout() {
     reconnectAttempts = 0;
     currentUser = null;
     gatekeeperData = null;
+    messageHistory = [];
 }
 
 async function loadAdminData() {
@@ -1717,15 +1733,23 @@ async def ws_endpoint(websocket: WebSocket):
     await manager.add(group_name, username, websocket)
     await set_user_status(username, 'online', group_name)
     
-    # Send message history with timestamps
-    for msg in await get_messages(group_name):
-        await websocket.send_json({
-            'type': 'history',
+    # Get all messages for this group
+    messages = await get_messages(group_name)
+    
+    # Send all history as a single batch
+    history_messages = []
+    for msg in messages:
+        history_messages.append({
             'ciphertext': msg['ciphertext'],
             'sender': msg['sender'],
             'salt': msg['salt'],
             'timestamp': msg['created_at']
         })
+    
+    await websocket.send_json({
+        'type': 'history',
+        'messages': history_messages
+    })
     
     online = await get_online_users(group_name)
     await manager.broadcast(group_name, {'type': 'users', 'users': online})
