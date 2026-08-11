@@ -668,10 +668,10 @@ HTML = '''<!DOCTYPE html>
         .typing-indicator{padding:8px 16px;color:#0f0;font-style:italic;font-size:11px;min-height:36px;}
         
         .input-area{padding:12px 16px;background:#050508;border-top:1px solid #0f0;display:flex;gap:10px;align-items:flex-end;}
-        .input-area textarea{flex:1;margin:0;padding:12px 16px;background:#111;border:1px solid #0f0;border-radius:12px;color:#0f0;font-family:monospace;font-size:14px;resize:vertical;min-height:45px;max-height:120px;line-height:1.5;}
+        .input-area textarea{flex:1;margin:0;padding:12px 16px;background:#111;border:1px solid #0f0;border-radius:12px;color:#0f0;font-family:monospace;font-size:14px;resize:vertical;min-height:50px;max-height:120px;line-height:1.5;overflow-y:auto;}
         .input-area textarea:focus{outline:none;box-shadow:0 0 20px rgba(0,255,65,0.2);border-color:#0f0;}
         .input-area textarea::placeholder{color:#444;}
-        .input-area button{width:auto;margin:0;padding:12px 20px;height:45px;}
+        .input-area button{width:auto;margin:0;padding:12px 20px;height:50px;align-self:flex-end;}
         .footer{text-align:center;padding:6px;font-size:8px;color:#333;border-top:1px solid #0f0;}
         
         ::-webkit-scrollbar{width:3px;}
@@ -894,7 +894,7 @@ HTML = '''<!DOCTYPE html>
             </div>
             <div class="typing-indicator" id="typingIndicator"></div>
             <div class="input-area">
-                <textarea id="messageInput" placeholder="Type a message..." rows="1"></textarea>
+                <textarea id="messageInput" placeholder="Type a message..." rows="2"></textarea>
                 <button onclick="sendMessage()">Send</button>
             </div>
             <div class="footer">🔐 End-to-End Encrypted | Messages self-destruct after 24 hours</div>
@@ -914,6 +914,7 @@ let ws, username, groupName, groupPassword, groupSalt, typingTimeout, reconnectA
 let currentUser = null;
 let gatekeeperData = null;
 let replyToMessage = null;
+let isConnected = false;
 
 document.addEventListener('DOMContentLoaded', function() {
     document.getElementById('loginBtn').addEventListener('click', login);
@@ -1079,6 +1080,7 @@ function connectToChat(username, group) {
     ws = new WebSocket(url);
     
     ws.onopen = function() {
+        isConnected = true;
         updateStatus(true);
         ws.send(JSON.stringify({
             type: 'join',
@@ -1091,6 +1093,8 @@ function connectToChat(username, group) {
     ws.onmessage = async function(e) {
         try {
             let d = JSON.parse(e.data);
+            console.log('Received:', d.type);
+            
             if(d.type === 'error') {
                 showError(d.message);
                 ws.close();
@@ -1102,15 +1106,17 @@ function connectToChat(username, group) {
             } else if(d.type === 'history') {
                 document.getElementById('messages').innerHTML = '';
                 
-                for(let msg of d.messages) {
-                    try {
-                        let dec = await decrypt(msg.ciphertext, window.groupPassword, msg.salt);
-                        let isSent = msg.sender === window.chatUsername;
-                        addMessage(msg.sender, dec, isSent, msg.timestamp, msg.id, msg.reply_to);
-                    } catch(e) {
-                        console.error('Decryption error:', e);
-                        let isSent = msg.sender === window.chatUsername;
-                        addMessage(msg.sender, '🔒 Encrypted', isSent, msg.timestamp, msg.id, msg.reply_to);
+                if(d.messages && d.messages.length > 0) {
+                    for(let msg of d.messages) {
+                        try {
+                            let dec = await decrypt(msg.ciphertext, window.groupPassword, msg.salt);
+                            let isSent = msg.sender === window.chatUsername;
+                            addMessage(msg.sender, dec, isSent, msg.timestamp, msg.id, msg.reply_to);
+                        } catch(e) {
+                            console.error('Decryption error:', e);
+                            let isSent = msg.sender === window.chatUsername;
+                            addMessage(msg.sender, '🔒 Encrypted', isSent, msg.timestamp, msg.id, msg.reply_to);
+                        }
                     }
                 }
             } else if(d.type === 'message') {
@@ -1142,10 +1148,12 @@ function connectToChat(username, group) {
     
     ws.onerror = function(e) {
         console.error('WebSocket error:', e);
+        isConnected = false;
         updateStatus(false);
     };
     
     ws.onclose = function() {
+        isConnected = false;
         updateStatus(false);
         if(document.getElementById('chatScreen').classList.contains('active')) {
             addSystemMessage('⚠️ Connection lost. Reconnecting...');
@@ -1243,7 +1251,6 @@ function addMessage(sender, text, isSent, timestamp, messageId, replyTo) {
             let touchEndX = e.changedTouches[0].screenX;
             let diffX = touchEndX - touchStartX;
             if (diffX > 50) {
-                // Swipe right to reply
                 replyToMessage = {
                     id: messageId,
                     sender: sender,
@@ -1308,8 +1315,11 @@ function cancelReply() {
 
 function updateUsers(users) {
     let ul = document.getElementById('usersList');
-    if(users.length === 0) ul.innerHTML = '<div class="user-item">No users online</div>';
-    else ul.innerHTML = users.map(u => '<div class="user-item">' + escapeHtml(u) + '</div>').join('');
+    if(!users || users.length === 0) {
+        ul.innerHTML = '<div class="user-item">No users online</div>';
+    } else {
+        ul.innerHTML = users.map(u => '<div class="user-item">' + escapeHtml(u) + '</div>').join('');
+    }
 }
 
 function escapeHtml(t) {
@@ -1449,6 +1459,7 @@ function showSetupSuccess(msg) {
 async function logout() {
     if(ws) ws.close();
     ws = null;
+    isConnected = false;
     
     try {
         await fetch('/logout', {method: 'POST'});
@@ -1876,6 +1887,11 @@ async def ws_endpoint(websocket: WebSocket):
     await manager.add(group_name, username, websocket)
     await set_user_status(username, 'online', group_name)
     
+    # Send users list first
+    online = await get_online_users(group_name)
+    await websocket.send_json({'type': 'users', 'users': online})
+    
+    # Send message history
     messages = await get_messages(group_name)
     
     history_messages = []
@@ -1894,8 +1910,7 @@ async def ws_endpoint(websocket: WebSocket):
         'messages': history_messages
     })
     
-    online = await get_online_users(group_name)
-    await manager.broadcast(group_name, {'type': 'users', 'users': online})
+    # Broadcast user joined
     await manager.broadcast(group_name, {'type': 'user_joined', 'user': username}, exclude=username)
     await websocket.send_json({'type': 'ready', 'salt': group_salt, 'group': group_name})
     print(f"[+] {username} joined {group_name}")
@@ -1976,9 +1991,11 @@ if __name__ == "__main__":
     print(f"[✓] Database: PostgreSQL (Neon) with asyncpg")
     print(f"[✓] Messages expire after 24 hours")
     print(f"[✓] Open: http://localhost:{port}")
-    print(f"\n📋 Features Added:")
+    print(f"\n📋 Features:")
     print(f"   ✅ Multiline message input (resizable)")
     print(f"   ✅ Swipe left to right on any message to reply")
     print(f"   ✅ Reply indicator shows while replying")
     print(f"   ✅ Shift+Enter for new line, Enter to send")
+    print(f"   ✅ Messages load on connect")
+    print(f"   ✅ Online users list updates")
     uvicorn.run(app, host="0.0.0.0", port=port)
