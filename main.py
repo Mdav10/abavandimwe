@@ -325,19 +325,17 @@ async def init_db():
         except Exception as e:
             print(f"[!] reply_to column: {e}")
         
-        # ========== CLEAN UP CORRUPT DATA ==========
-        # Delete any corrupt groups
+        # Clean up corrupt data
         try:
             await conn.execute("DELETE FROM groups WHERE group_name = 'admin' AND created_by != 'Mpc'")
             print("[🧹] Cleaned up corrupt groups")
         except Exception as e:
-            print(f"[!] Cleanup error: {e}")
+            pass
         
-        # Delete any messages in corrupt groups
         try:
             await conn.execute("DELETE FROM messages WHERE group_name = 'admin'")
         except Exception as e:
-            print(f"[!] Cleanup error: {e}")
+            pass
         
         # Create admin if not exists
         row = await conn.fetchrow("SELECT username FROM users WHERE username = $1", ADMIN_USERNAME)
@@ -446,6 +444,8 @@ async def create_user_with_group(username, password, group_name, group_password)
         salt = generate_salt()
         password_hash = hash_password_argon2(password)
         
+        print(f"[DEBUG] Creating user: {username}, Group: {group_name}, Group Password: {group_password}")
+        
         # Check if group exists
         row = await conn.fetchrow("SELECT group_name FROM groups WHERE group_name = $1", group_name)
         if not row:
@@ -465,6 +465,7 @@ async def create_user_with_group(username, password, group_name, group_password)
             )
             print(f"[✓] Group '{group_name}' already exists, password updated")
         
+        # Insert the user with the assigned_group
         await conn.execute(
             "INSERT INTO users (username, password_hash, salt, role, assigned_group, created_at) VALUES ($1, $2, $3, $4, $5, $6)",
             username, password_hash, salt, "user", group_name, time.time()
