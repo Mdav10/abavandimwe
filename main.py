@@ -39,11 +39,38 @@ app.mount("/screenshots", StaticFiles(directory="static/screenshots"), name="scr
 # ========== SERVE PWA FILES ==========
 @app.get("/manifest.json")
 async def serve_manifest():
-    try:
-        with open("manifest.json", "r") as f:
-            return Response(content=f.read(), media_type="application/json")
-    except FileNotFoundError:
-        return JSONResponse({"error": "manifest.json not found"}, status_code=404)
+    # Updated manifest without screenshots to avoid 404s
+    manifest = {
+        "name": "ABAVANDIMWE",
+        "short_name": "ABAVANDIMWE",
+        "description": "Secure Messaging System - End-to-End Encrypted",
+        "start_url": "/",
+        "display": "standalone",
+        "orientation": "portrait",
+        "background_color": "#0a0a0f",
+        "theme_color": "#0a0a0f",
+        "categories": ["communication", "messaging", "security"],
+        "icons": [
+            {"src": "/icons/icon-72x72.png", "sizes": "72x72", "type": "image/png", "purpose": "any maskable"},
+            {"src": "/icons/icon-96x96.png", "sizes": "96x96", "type": "image/png", "purpose": "any maskable"},
+            {"src": "/icons/icon-128x128.png", "sizes": "128x128", "type": "image/png", "purpose": "any maskable"},
+            {"src": "/icons/icon-144x144.png", "sizes": "144x144", "type": "image/png", "purpose": "any maskable"},
+            {"src": "/icons/icon-152x152.png", "sizes": "152x152", "type": "image/png", "purpose": "any maskable"},
+            {"src": "/icons/icon-192x192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable"},
+            {"src": "/icons/icon-384x384.png", "sizes": "384x384", "type": "image/png", "purpose": "any maskable"},
+            {"src": "/icons/icon-512x512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable"}
+        ],
+        "shortcuts": [
+            {
+                "name": "Open Chat",
+                "short_name": "Chat",
+                "description": "Open ABAVANDIMWE chat",
+                "url": "/",
+                "icons": [{"src": "/icons/icon-96x96.png", "sizes": "96x96"}]
+            }
+        ]
+    }
+    return Response(content=json.dumps(manifest), media_type="application/json")
 
 @app.get("/sw.js")
 async def serve_sw():
@@ -51,7 +78,7 @@ async def serve_sw():
         with open("sw.js", "r") as f:
             return Response(content=f.read(), media_type="text/javascript")
     except FileNotFoundError:
-        return JSONResponse({"error": "sw.js not found"}, status_code=404)
+        return Response(content="// Service worker not found", media_type="text/javascript")
 
 @app.get("/offline.html")
 async def serve_offline():
@@ -59,12 +86,11 @@ async def serve_offline():
         with open("offline.html", "r") as f:
             return Response(content=f.read(), media_type="text/html")
     except FileNotFoundError:
-        return JSONResponse({"error": "offline.html not found"}, status_code=404)
+        return HTMLResponse("<h1>You are offline</h1>")
 
 # ========== DATABASE CONFIG ==========
 DATABASE_URL = os.getenv('DATABASE_URL', 'postgresql://neondb_owner:npg_CmR51yqfMxNZ@ep-plain-salad-axxvh942-pooler.c-4.us-east-2.aws.neon.tech/neondb?sslmode=require')
 
-# Database connection pool
 db_pool = None
 
 async def init_db_pool():
@@ -78,11 +104,9 @@ async def init_db_pool():
     return db_pool
 
 async def get_db_connection():
-    """Get a connection from the pool"""
     return await db_pool.acquire()
 
 async def return_db_connection(conn):
-    """Return connection to the pool"""
     await db_pool.release(conn)
 
 # ========== SECURITY CONFIG ==========
@@ -92,7 +116,7 @@ ADMIN_PASSWORD_HASH = None
 
 # ========== SESSION MANAGEMENT ==========
 sessions: Dict[str, Dict] = {}
-SESSION_TIMEOUT = 3600 * 24 * 7  # 7 days
+SESSION_TIMEOUT = 3600 * 24 * 7
 
 def create_session(username: str, role: str, assigned_group: str = None, group_password: str = None) -> str:
     session_id = secrets.token_urlsafe(32)
@@ -137,7 +161,7 @@ async def require_admin(request: Request) -> Dict:
 async def require_auth(request: Request) -> Dict:
     return await get_session_from_cookie(request)
 
-# ========== CORS CONFIG ==========
+# ========== CORS ==========
 ALLOWED_ORIGINS = [
     "https://abavandimwe.onrender.com",
     "https://abavandimwe-production.up.railway.app",
@@ -145,7 +169,6 @@ ALLOWED_ORIGINS = [
     "http://localhost:8000",
     "http://localhost:3000",
 ]
-
 app.add_middleware(
     CORSMiddleware,
     allow_origins=ALLOWED_ORIGINS,
@@ -178,7 +201,7 @@ class SaveDisplayNameRequest(BaseModel):
     username: str
     display_name: str
 
-# ========== CRYPTO FUNCTIONS ==========
+# ========== CRYPTO ==========
 ph = PasswordHasher()
 
 def generate_salt():
@@ -223,17 +246,13 @@ message_limits = defaultdict(list)
 
 def check_login_rate_limit(username):
     now = time.time()
-    
     if username in login_blocks and login_blocks[username] > now:
         return False, f"Too many failed attempts. Try again in {int((login_blocks[username] - now) / 60)} minutes."
-    
     login_attempts[username] = [t for t in login_attempts[username] if t > now - 300]
-    
     if len(login_attempts[username]) >= 5:
         login_blocks[username] = now + 900
         login_attempts[username] = []
         return False, "Too many failed attempts. Account blocked for 15 minutes."
-    
     return True, None
 
 def record_failed_login(username):
@@ -259,9 +278,7 @@ async def init_db():
     global ADMIN_PASSWORD_HASH
     await init_db_pool()
     conn = await get_db_connection()
-    
     try:
-        # Create tables
         await conn.execute('''
             CREATE TABLE IF NOT EXISTS users (
                 username TEXT PRIMARY KEY,
@@ -278,7 +295,6 @@ async def init_db():
                 locked_until DOUBLE PRECISION
             )
         ''')
-        
         await conn.execute('''
             CREATE TABLE IF NOT EXISTS messages (
                 id SERIAL PRIMARY KEY,
@@ -291,7 +307,6 @@ async def init_db():
                 reply_to INTEGER DEFAULT NULL
             )
         ''')
-        
         await conn.execute('''
             CREATE TABLE IF NOT EXISTS groups (
                 group_name TEXT PRIMARY KEY,
@@ -302,7 +317,6 @@ async def init_db():
                 created_at DOUBLE PRECISION NOT NULL
             )
         ''')
-        
         await conn.execute('''
             CREATE TABLE IF NOT EXISTS admin_logs (
                 id SERIAL PRIMARY KEY,
@@ -313,40 +327,20 @@ async def init_db():
                 created_at DOUBLE PRECISION NOT NULL
             )
         ''')
-        
         print("[✓] PostgreSQL database ready")
-        
-        # Add group_password column if it doesn't exist
         try:
-            await conn.execute('''
-                ALTER TABLE groups ADD COLUMN IF NOT EXISTS group_password TEXT
-            ''')
-            print("[✓] group_password column verified")
-        except Exception as e:
-            print(f"[!] group_password column: {e}")
-        
-        # Add reply_to column if it doesn't exist
+            await conn.execute('ALTER TABLE groups ADD COLUMN IF NOT EXISTS group_password TEXT')
+        except: pass
         try:
-            await conn.execute('''
-                ALTER TABLE messages ADD COLUMN IF NOT EXISTS reply_to INTEGER DEFAULT NULL
-            ''')
-            print("[✓] reply_to column verified")
-        except Exception as e:
-            print(f"[!] reply_to column: {e}")
-        
-        # Clean up corrupt data
+            await conn.execute('ALTER TABLE messages ADD COLUMN IF NOT EXISTS reply_to INTEGER DEFAULT NULL')
+        except: pass
         try:
             await conn.execute("DELETE FROM groups WHERE group_name = 'admin' AND created_by != 'Mpc'")
-            print("[🧹] Cleaned up corrupt groups")
-        except Exception as e:
-            pass
-        
+        except: pass
         try:
             await conn.execute("DELETE FROM messages WHERE group_name = 'admin'")
-        except Exception as e:
-            pass
-        
-        # Create admin if not exists
+        except: pass
+
         row = await conn.fetchrow("SELECT username FROM users WHERE username = $1", ADMIN_USERNAME)
         if not row:
             ADMIN_PASSWORD_HASH = hash_password_argon2(ADMIN_PASSWORD)
@@ -356,14 +350,11 @@ async def init_db():
             )
             print(f"[✓] Admin created: {ADMIN_USERNAME}")
             print(f"[✓] Admin Password: {ADMIN_PASSWORD}")
-            print(f"⚠️  Keep this password safe!")
         else:
             row = await conn.fetchrow("SELECT password_hash FROM users WHERE username = $1", ADMIN_USERNAME)
             ADMIN_PASSWORD_HASH = row[0]
-        
     finally:
         await return_db_connection(conn)
-    
     print("[✓] Admin account ready")
 
 # ========== DATABASE FUNCTIONS ==========
@@ -416,22 +407,18 @@ async def authenticate_user(username, password):
         )
     finally:
         await return_db_connection(conn)
-    
     if not row:
         return None
-    
     stored_hash = row['password_hash']
     role = row['role']
     assigned_group = row['assigned_group']
     display_name = row['display_name']
     locked_until = row['locked_until']
-    
     if locked_until and locked_until > time.time():
         return {"error": f"Account locked. Try again in {int((locked_until - time.time()) / 60)} minutes."}
-    
     if verify_password_argon2(password, stored_hash):
         return {
-            "username": username, 
+            "username": username,
             "role": role,
             "assigned_group": assigned_group,
             "display_name": display_name
@@ -452,8 +439,6 @@ async def create_user_with_group(username, password, group_name, group_password)
     try:
         salt = generate_salt()
         user_password_hash = hash_password_argon2(password)
-        
-        # Check if group exists
         row = await conn.fetchrow("SELECT group_name, group_password FROM groups WHERE group_name = $1", group_name)
         if row:
             stored_group_password = row['group_password']
@@ -464,7 +449,6 @@ async def create_user_with_group(username, password, group_name, group_password)
                     "UPDATE groups SET group_password = $1 WHERE group_name = $2",
                     group_password, group_name
                 )
-            group_salt = None
         else:
             group_salt = generate_salt()
             group_pwd_hash = hash_password_argon2(group_password)
@@ -473,7 +457,6 @@ async def create_user_with_group(username, password, group_name, group_password)
                 group_name, group_salt, group_pwd_hash, group_password, "admin", time.time()
             )
             print(f"[✓] New group created: '{group_name}'")
-        
         await conn.execute(
             "INSERT INTO users (username, password_hash, salt, role, assigned_group, created_at) VALUES ($1, $2, $3, $4, $5, $6)",
             username, user_password_hash, salt, "user", group_name, time.time()
@@ -499,14 +482,6 @@ async def delete_user(username):
     conn = await get_db_connection()
     try:
         result = await conn.execute("DELETE FROM users WHERE username = $1", username)
-        return result != "DELETE 0"
-    finally:
-        await return_db_connection(conn)
-
-async def delete_users_by_group(group_name):
-    conn = await get_db_connection()
-    try:
-        result = await conn.execute("DELETE FROM users WHERE assigned_group = $1", group_name)
         return result != "DELETE 0"
     finally:
         await return_db_connection(conn)
@@ -1282,7 +1257,7 @@ if (navigator.standalone) {
 
 // ========== DOM READY ==========
 document.addEventListener('DOMContentLoaded', function() {
-    // Login button - attach click event
+    // Login button
     document.getElementById('loginBtn').addEventListener('click', function(e) {
         if (this.classList.contains('btn-loading')) return;
         showLoading('Logging in', login);
@@ -1300,7 +1275,7 @@ document.addEventListener('DOMContentLoaded', function() {
         showLoading('Entering Chat', enterChat);
     });
     
-    // Enter key support on password fields
+    // Enter key support
     document.getElementById('loginPassword').addEventListener('keypress', function(e) {
         if(e.key === 'Enter') {
             showLoading('Logging in', login);
@@ -2084,11 +2059,7 @@ async def root():
 async def login(request: Request, login_data: LoginRequest):
     allowed, message = check_login_rate_limit(login_data.username)
     if not allowed:
-        return JSONResponse(
-            status_code=429,
-            content={"success": False, "message": message}
-        )
-    
+        return JSONResponse(status_code=429, content={"success": False, "message": message})
     conn = await get_db_connection()
     try:
         row = await conn.fetchrow(
@@ -2097,26 +2068,16 @@ async def login(request: Request, login_data: LoginRequest):
         )
     finally:
         await return_db_connection(conn)
-    
     if not row:
         record_failed_login(login_data.username)
-        return JSONResponse(
-            status_code=401,
-            content={"success": False, "message": "Invalid credentials"}
-        )
-    
+        return JSONResponse(status_code=401, content={"success": False, "message": "Invalid credentials"})
     stored_hash = row['password_hash']
     role = row['role']
     assigned_group = row['assigned_group']
     display_name = row['display_name']
     locked_until = row['locked_until']
-    
     if locked_until and locked_until > time.time():
-        return JSONResponse(
-            status_code=429,
-            content={"success": False, "message": f"Account locked. Try again in {int((locked_until - time.time()) / 60)} minutes."}
-        )
-    
+        return JSONResponse(status_code=429, content={"success": False, "message": f"Account locked. Try again in {int((locked_until - time.time()) / 60)} minutes."})
     if verify_password_argon2(login_data.password, stored_hash):
         reset_login_attempts(login_data.username)
         group_password = None
@@ -2124,11 +2085,10 @@ async def login(request: Request, login_data: LoginRequest):
             group_password = await get_group_password(assigned_group)
             if not group_password:
                 group_password = login_data.password
-        
         session_id = create_session(login_data.username, role, assigned_group, group_password)
         response = JSONResponse({
-            "success": True, 
-            "username": login_data.username, 
+            "success": True,
+            "username": login_data.username,
             "role": role,
             "display_name": display_name
         })
@@ -2144,52 +2104,28 @@ async def login(request: Request, login_data: LoginRequest):
         return response
     else:
         record_failed_login(login_data.username)
-        return JSONResponse(
-            status_code=401,
-            content={"success": False, "message": "Invalid credentials"}
-        )
+        return JSONResponse(status_code=401, content={"success": False, "message": "Invalid credentials"})
 
 @app.post("/gatekeeper")
 async def gatekeeper(login_data: LoginRequest):
     allowed, message = check_login_rate_limit(login_data.username)
     if not allowed:
-        return JSONResponse(
-            status_code=429,
-            content={"success": False, "message": message}
-        )
-    
+        return JSONResponse(status_code=429, content={"success": False, "message": message})
     user = await authenticate_user(login_data.username, login_data.password)
     if not user:
         record_failed_login(login_data.username)
-        return JSONResponse(
-            status_code=401,
-            content={"success": False, "message": "Invalid credentials"}
-        )
-    
+        return JSONResponse(status_code=401, content={"success": False, "message": "Invalid credentials"})
     if "error" in user:
-        return JSONResponse(
-            status_code=429,
-            content={"success": False, "message": user["error"]}
-        )
-    
+        return JSONResponse(status_code=429, content={"success": False, "message": user["error"]})
     if user["role"] == "admin":
-        return JSONResponse(
-            status_code=403,
-            content={"success": False, "message": "Admin cannot access chat"}
-        )
-    
+        return JSONResponse(status_code=403, content={"success": False, "message": "Admin cannot access chat"})
     assigned_group = user["assigned_group"]
     if not assigned_group:
-        return JSONResponse(
-            status_code=404,
-            content={"success": False, "message": "No group assigned to this user"}
-        )
-    
+        return JSONResponse(status_code=404, content={"success": False, "message": "No group assigned to this user"})
     group_password = await get_group_password(assigned_group)
     if not group_password:
         group_password = login_data.password
         print(f"[!] No group password found for '{assigned_group}', using login password")
-    
     return {
         "success": True,
         "username": login_data.username,
@@ -2274,7 +2210,6 @@ async def health():
 @app.websocket("/ws")
 async def ws_endpoint(websocket: WebSocket):
     await websocket.accept()
-    
     cookie_header = websocket.headers.get("cookie", "")
     session_id = None
     for item in cookie_header.split(";"):
@@ -2282,42 +2217,32 @@ async def ws_endpoint(websocket: WebSocket):
         if item.startswith("abavandimwe_session="):
             session_id = item.split("=")[1]
             break
-    
     if not session_id:
         await websocket.send_json({'type': 'error', 'message': 'No session found'})
         await websocket.close()
         return
-    
     session = get_session(session_id)
     if not session:
         await websocket.send_json({'type': 'error', 'message': 'Invalid session'})
         await websocket.close()
         return
-    
     username = session["username"]
     assigned_group = session["assigned_group"]
-    
     if not assigned_group:
         await websocket.send_json({'type': 'error', 'message': 'No group assigned'})
         await websocket.close()
         return
-    
     group_name = assigned_group
     group_info = await get_group_info(group_name)
-    
     if not group_info:
         await websocket.send_json({'type': 'error', 'message': 'Group not found'})
         await websocket.close()
         return
-    
     group_salt = group_info['salt']
-    
     await manager.add(group_name, username, websocket)
     await set_user_status(username, 'online', group_name)
-    
     online = await get_online_users(group_name)
     await websocket.send_json({'type': 'users', 'users': online})
-    
     messages = await get_messages(group_name)
     history_messages = []
     for msg in messages:
@@ -2329,31 +2254,22 @@ async def ws_endpoint(websocket: WebSocket):
             'timestamp': msg['created_at'],
             'reply_to': msg.get('reply_to')
         })
-    
-    await websocket.send_json({
-        'type': 'history',
-        'messages': history_messages
-    })
-    
+    await websocket.send_json({'type': 'history', 'messages': history_messages})
     await manager.broadcast(group_name, {'type': 'user_joined', 'user': username}, exclude=username)
     await websocket.send_json({'type': 'ready', 'salt': group_salt, 'group': group_name})
     print(f"[+] {username} joined {group_name}")
-    
     try:
         while True:
             data = await websocket.receive_json()
             msg_type = data.get('type')
-            
             if msg_type == 'message':
                 cipher = data.get('ciphertext')
                 salt = data.get('salt')
                 reply_to = data.get('reply_to')
-                
                 if username and group_name and check_message_rate_limit(username):
                     result = await save_message(cipher, group_name, username, salt, reply_to)
                     message_id = result['id']
                     created_at = result['created_at']
-                    
                     await manager.broadcast(group_name, {
                         'type': 'message',
                         'message_id': message_id,
@@ -2363,24 +2279,19 @@ async def ws_endpoint(websocket: WebSocket):
                         'timestamp': created_at,
                         'reply_to': reply_to
                     }, exclude=username)
-            
             elif msg_type == 'typing':
                 if username and group_name:
                     await manager.broadcast(group_name, {'type': 'typing', 'user': username}, exclude=username)
-            
             elif msg_type == 'stop_typing':
                 if username and group_name:
                     await manager.broadcast(group_name, {'type': 'stop_typing', 'user': username}, exclude=username)
-            
             elif msg_type == 'ping':
                 await set_user_status(username, 'online', group_name)
                 await websocket.send_json({'type': 'pong'})
-    
     except WebSocketDisconnect:
         pass
     except Exception as e:
         print(f"[!] WebSocket error: {e}")
-    
     finally:
         if username and group_name:
             manager.remove(group_name, username)
@@ -2417,32 +2328,30 @@ if __name__ == "__main__":
     print(f"[✓] Database: PostgreSQL (Neon) with asyncpg")
     print(f"[✓] Messages expire after 24 hours")
     print(f"[✓] Open: http://localhost:{port}")
-    print(f"\n📱 PWA Features:")
-    print(f"   ✅ One-click Install as Android App")
-    print(f"   ✅ No Chrome browser UI after install")
-    print(f"   ✅ Offline support")
-    print(f"   ✅ Custom app icon")
-    print(f"   ✅ Loading animation on all button clicks")
-    print(f"\n🔐 Group Encryption:")
-    print(f"   ✅ All users in same group must use SAME group password")
-    print(f"   ✅ Group password stored for consistent decryption")
-    print(f"   ✅ Messages encrypted with group password")
-    print(f"\n📋 Features:")
-    print(f"   ✅ Multiline message input (max 80px height)")
-    print(f"   ✅ Reply to messages (swipe left to right)")
-    print(f"   ✅ Reply previews with original message")
-    print(f"   ✅ Click reply preview to scroll to original")
-    print(f"   ✅ Enter: New line, Shift+Enter: New line, Send button to send")
-    print(f"   ✅ Offline status bar with reconnect button")
-    print(f"   ✅ Send button with ➥ icon")
-    print(f"   ✅ Messages hidden when offline")
-    print(f"   ✅ Group deletion deletes users and messages, logged in admin logs")
-    print(f"   ✅ Fixed groups table: now shows proper group names")
-    print(f"   ✅ Fixed install button: now responds to clicks")
-    print(f"\n🔒 Security:")
-    print(f"   ✅ Argon2id password hashing")
-    print(f"   ✅ Secure HTTP-only session cookies")
-    print(f"   ✅ Rate limiting on login and message sending")
-    print(f"   ✅ CORS restricted to allowed origins")
-    print(f"   ✅ All endpoints protected by session checks")
+    print("\n📱 PWA Features:")
+    print("   ✅ One-click Install as Android App")
+    print("   ✅ No Chrome browser UI after install")
+    print("   ✅ Offline support")
+    print("   ✅ Custom app icon")
+    print("   ✅ Loading animation on all button clicks")
+    print("\n🔐 Group Encryption:")
+    print("   ✅ All users in same group must use SAME group password")
+    print("   ✅ Group password stored for consistent decryption")
+    print("   ✅ Messages encrypted with group password")
+    print("\n📋 Features:")
+    print("   ✅ Multiline message input (max 80px height)")
+    print("   ✅ Reply to messages (swipe left to right)")
+    print("   ✅ Reply previews with original message")
+    print("   ✅ Click reply preview to scroll to original")
+    print("   ✅ Enter: New line, Shift+Enter: New line, Send button to send")
+    print("   ✅ Offline status bar with reconnect button")
+    print("   ✅ Send button with ➥ icon")
+    print("   ✅ Messages hidden when offline")
+    print("   ✅ Group deletion deletes users and messages, logged in admin logs")
+    print("\n🔒 Security:")
+    print("   ✅ Argon2id password hashing")
+    print("   ✅ Secure HTTP-only session cookies")
+    print("   ✅ Rate limiting on login and message sending")
+    print("   ✅ CORS restricted to allowed origins")
+    print("   ✅ All endpoints protected by session checks")
     uvicorn.run(app, host="0.0.0.0", port=port)
