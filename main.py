@@ -1011,7 +1011,6 @@ HTML = '''<!DOCTYPE html>
             <input type="text" id="loginUsername" placeholder="Username" autocomplete="username">
             <input type="password" id="loginPassword" placeholder="Password" autocomplete="current-password">
             
-            <!-- Removed inline onclick, will attach via JS -->
             <button id="loginBtn">▶ Login</button>
             
             <div class="separator"><span>OR</span></div>
@@ -2077,8 +2076,319 @@ console.log('📝 Enter key inserts new line. Use Send button to send.');
 </html>'''
 
 # ========== FASTAPI ENDPOINTS ==========
-# (All endpoints remain the same as in the previous version - not duplicated for brevity)
-# They are included in the complete code above.
+@app.get("/")
+async def root():
+    return HTMLResponse(HTML)
+
+@app.post("/login")
+async def login(request: Request, login_data: LoginRequest):
+    allowed, message = check_login_rate_limit(login_data.username)
+    if not allowed:
+        return JSONResponse(
+            status_code=429,
+            content={"success": False, "message": message}
+        )
+    
+    conn = await get_db_connection()
+    try:
+        row = await conn.fetchrow(
+            "SELECT password_hash, role, assigned_group, display_name, login_attempts, locked_until FROM users WHERE username = $1",
+            login_data.username
+        )
+    finally:
+        await return_db_connection(conn)
+    
+    if not row:
+        record_failed_login(login_data.username)
+        return JSONResponse(
+            status_code=401,
+            content={"success": False, "message": "Invalid credentials"}
+        )
+    
+    stored_hash = row['password_hash']
+    role = row['role']
+    assigned_group = row['assigned_group']
+    display_name = row['display_name']
+    locked_until = row['locked_until']
+    
+    if locked_until and locked_until > time.time():
+        return JSONResponse(
+            status_code=429,
+            content={"success": False, "message": f"Account locked. Try again in {int((locked_until - time.time()) / 60)} minutes."}
+        )
+    
+    if verify_password_argon2(login_data.password, stored_hash):
+        reset_login_attempts(login_data.username)
+        group_password = None
+        if assigned_group:
+            group_password = await get_group_password(assigned_group)
+            if not group_password:
+                group_password = login_data.password
+        
+        session_id = create_session(login_data.username, role, assigned_group, group_password)
+        response = JSONResponse({
+            "success": True, 
+            "username": login_data.username, 
+            "role": role,
+            "display_name": display_name
+        })
+        response.set_cookie(
+            key="abavandimwe_session",
+            value=session_id,
+            httponly=True,
+            secure=True,
+            samesite="lax",
+            max_age=SESSION_TIMEOUT,
+            path="/"
+        )
+        return response
+    else:
+        record_failed_login(login_data.username)
+        return JSONResponse(
+            status_code=401,
+            content={"success": False, "message": "Invalid credentials"}
+        )
+
+@app.post("/gatekeeper")
+async def gatekeeper(login_data: LoginRequest):
+    allowed, message = check_login_rate_limit(login_data.username)
+    if not allowed:
+        return JSONResponse(
+            status_code=429,
+            content={"success": False, "message": message}
+        )
+    
+    user = await authenticate_user(login_data.username, login_data.password)
+    if not user:
+        record_failed_login(login_data.username)
+        return JSONResponse(
+            status_code=401,
+            content={"success": False, "message": "Invalid credentials"}
+        )
+    
+    if "error" in user:
+        return JSONResponse(
+            status_code=429,
+            content={"success": False, "message": user["error"]}
+        )
+    
+    if user["role"] == "admin":
+        return JSONResponse(
+            status_code=403,
+            content={"success": False, "message": "Admin cannot access chat"}
+        )
+    
+    assigned_group = user["assigned_group"]
+    if not assigned_group:
+        return JSONResponse(
+            status_code=404,
+            content={"success": False, "message": "No group assigned to this user"}
+        )
+    
+    group_password = await get_group_password(assigned_group)
+    if not group_password:
+        group_password = login_data.password
+        print(f"[!] No group password found for '{assigned_group}', using login password")
+    
+    return {
+        "success": True,
+        "username": login_data.username,
+        "assigned_group": assigned_group,
+        "assigned_group_password": group_password,
+        "display_name": user.get("display_name")
+    }
+
+@app.post("/save_display_name")
+async def save_display_name(data: SaveDisplayNameRequest, request: Request):
+    session = await get_session_from_cookie(request)
+    if session["username"] != data.username:
+        raise HTTPException(status_code=403, detail="Cannot modify other users")
+    await save_user_display_name(data.username, data.display_name)
+    return {"success": True}
+
+@app.get("/admin/data")
+async def admin_data(request: Request):
+    await require_admin(request)
+    users = await get_all_users()
+    messages = await get_all_messages()
+    groups = await get_all_groups()
+    logs = await get_admin_logs()
+    online_users = await get_online_users("Main")
+    return {
+        "users": users,
+        "messages": messages,
+        "messages_count": len(messages),
+        "groups": groups,
+        "online_count": len(online_users),
+        "logs": logs
+    }
+
+@app.post("/admin/create_user")
+async def admin_create_user(data: CreateUserRequest, request: Request):
+    session = await require_admin(request)
+    result = await create_user_with_group(data.username, data.password, data.group_name, data.group_password)
+    if result.get("success"):
+        await log_admin_action(session["username"], "create_user", data.username, f"Group: {data.group_name}")
+        return {"success": True}
+    else:
+        return {"success": False, "error": result.get("error", "Unknown error")}
+
+@app.post("/admin/delete_user")
+async def admin_delete_user(data: DeleteUserRequest, request: Request):
+    session = await require_admin(request)
+    if await delete_user(data.username):
+        await log_admin_action(session["username"], "delete_user", data.username)
+        return {"success": True}
+    return {"success": False, "message": "Cannot delete admin or user not found"}
+
+@app.post("/admin/delete_group")
+async def admin_delete_group(data: DeleteGroupRequest, request: Request):
+    session = await require_admin(request)
+    if await delete_group(data.name):
+        await log_admin_action(session["username"], "delete_group", data.name, f"Deleted group and all associated users and messages")
+        return {"success": True}
+    return {"success": False, "message": "Group not found"}
+
+@app.post("/admin/delete_message")
+async def admin_delete_message(data: DeleteMessageRequest, request: Request):
+    session = await require_admin(request)
+    if await delete_message(data.id):
+        await log_admin_action(session["username"], "delete_message", str(data.id))
+        return {"success": True}
+    return {"success": False, "message": "Message not found"}
+
+@app.post("/logout")
+async def logout(request: Request):
+    session_id = request.cookies.get("abavandimwe_session")
+    if session_id:
+        delete_session(session_id)
+    response = JSONResponse({"success": True})
+    response.delete_cookie("abavandimwe_session")
+    return response
+
+@app.get("/health")
+async def health():
+    return {"status": "ok", "system": "ABAVANDIMWE", "author": "Mugisha Pc"}
+
+# ========== WEBSOCKET ==========
+@app.websocket("/ws")
+async def ws_endpoint(websocket: WebSocket):
+    await websocket.accept()
+    
+    cookie_header = websocket.headers.get("cookie", "")
+    session_id = None
+    for item in cookie_header.split(";"):
+        item = item.strip()
+        if item.startswith("abavandimwe_session="):
+            session_id = item.split("=")[1]
+            break
+    
+    if not session_id:
+        await websocket.send_json({'type': 'error', 'message': 'No session found'})
+        await websocket.close()
+        return
+    
+    session = get_session(session_id)
+    if not session:
+        await websocket.send_json({'type': 'error', 'message': 'Invalid session'})
+        await websocket.close()
+        return
+    
+    username = session["username"]
+    assigned_group = session["assigned_group"]
+    
+    if not assigned_group:
+        await websocket.send_json({'type': 'error', 'message': 'No group assigned'})
+        await websocket.close()
+        return
+    
+    group_name = assigned_group
+    group_info = await get_group_info(group_name)
+    
+    if not group_info:
+        await websocket.send_json({'type': 'error', 'message': 'Group not found'})
+        await websocket.close()
+        return
+    
+    group_salt = group_info['salt']
+    
+    await manager.add(group_name, username, websocket)
+    await set_user_status(username, 'online', group_name)
+    
+    online = await get_online_users(group_name)
+    await websocket.send_json({'type': 'users', 'users': online})
+    
+    messages = await get_messages(group_name)
+    history_messages = []
+    for msg in messages:
+        history_messages.append({
+            'id': msg['id'],
+            'ciphertext': msg['ciphertext'],
+            'sender': msg['sender'],
+            'salt': msg['salt'],
+            'timestamp': msg['created_at'],
+            'reply_to': msg.get('reply_to')
+        })
+    
+    await websocket.send_json({
+        'type': 'history',
+        'messages': history_messages
+    })
+    
+    await manager.broadcast(group_name, {'type': 'user_joined', 'user': username}, exclude=username)
+    await websocket.send_json({'type': 'ready', 'salt': group_salt, 'group': group_name})
+    print(f"[+] {username} joined {group_name}")
+    
+    try:
+        while True:
+            data = await websocket.receive_json()
+            msg_type = data.get('type')
+            
+            if msg_type == 'message':
+                cipher = data.get('ciphertext')
+                salt = data.get('salt')
+                reply_to = data.get('reply_to')
+                
+                if username and group_name and check_message_rate_limit(username):
+                    result = await save_message(cipher, group_name, username, salt, reply_to)
+                    message_id = result['id']
+                    created_at = result['created_at']
+                    
+                    await manager.broadcast(group_name, {
+                        'type': 'message',
+                        'message_id': message_id,
+                        'ciphertext': cipher,
+                        'sender': username,
+                        'salt': salt,
+                        'timestamp': created_at,
+                        'reply_to': reply_to
+                    }, exclude=username)
+            
+            elif msg_type == 'typing':
+                if username and group_name:
+                    await manager.broadcast(group_name, {'type': 'typing', 'user': username}, exclude=username)
+            
+            elif msg_type == 'stop_typing':
+                if username and group_name:
+                    await manager.broadcast(group_name, {'type': 'stop_typing', 'user': username}, exclude=username)
+            
+            elif msg_type == 'ping':
+                await set_user_status(username, 'online', group_name)
+                await websocket.send_json({'type': 'pong'})
+    
+    except WebSocketDisconnect:
+        pass
+    except Exception as e:
+        print(f"[!] WebSocket error: {e}")
+    
+    finally:
+        if username and group_name:
+            manager.remove(group_name, username)
+            await set_user_status(username, 'offline', group_name)
+            online = await get_online_users(group_name)
+            await manager.broadcast(group_name, {'type': 'users', 'users': online})
+            await manager.broadcast(group_name, {'type': 'user_left', 'user': username})
+            print(f"[-] {username} left {group_name}")
 
 # ========== MAIN ==========
 if __name__ == "__main__":
