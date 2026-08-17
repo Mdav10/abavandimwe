@@ -507,6 +507,14 @@ async def delete_user(username):
     finally:
         await return_db_connection(conn)
 
+async def delete_users_by_group(group_name):
+    conn = await get_db_connection()
+    try:
+        result = await conn.execute("DELETE FROM users WHERE assigned_group = $1", group_name)
+        return result != "DELETE 0"
+    finally:
+        await return_db_connection(conn)
+
 async def get_all_users():
     conn = await get_db_connection()
     try:
@@ -621,8 +629,12 @@ async def get_all_groups():
 async def delete_group(group_name):
     conn = await get_db_connection()
     try:
-        await conn.execute("DELETE FROM groups WHERE group_name = $1", group_name)
-        result = await conn.execute("DELETE FROM messages WHERE group_name = $1", group_name)
+        # Delete all users assigned to this group
+        await conn.execute("DELETE FROM users WHERE assigned_group = $1", group_name)
+        # Delete all messages in this group
+        await conn.execute("DELETE FROM messages WHERE group_name = $1", group_name)
+        # Delete the group itself
+        result = await conn.execute("DELETE FROM groups WHERE group_name = $1", group_name)
         return result != "DELETE 0"
     finally:
         await return_db_connection(conn)
@@ -2064,13 +2076,13 @@ async function deleteUser(username) {
     }
 }
 
-async function deleteGroup(name) {
-    if(!confirm(`Delete group "${name}"? This will delete all messages in this group.`)) { hideLoading(); return; }
+async function deleteGroup(groupName) {
+    if(!confirm(`Delete group "${groupName}"? This will delete all messages and users in this group.`)) { hideLoading(); return; }
     try {
         const response = await fetch('/admin/delete_group', {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({name})
+            body: JSON.stringify({name: groupName})
         });
         const data = await response.json();
         if(data.success) {
@@ -2298,7 +2310,7 @@ async def admin_delete_user(data: DeleteUserRequest, request: Request):
 async def admin_delete_group(data: DeleteGroupRequest, request: Request):
     session = await require_admin(request)
     if await delete_group(data.name):
-        await log_admin_action(session["username"], "delete_group", data.name)
+        await log_admin_action(session["username"], "delete_group", data.name, f"Deleted group and all associated users and messages")
         return {"success": True}
     return {"success": False, "message": "Group not found"}
 
@@ -2493,4 +2505,11 @@ if __name__ == "__main__":
     print(f"   ✅ Offline status bar with reconnect button")
     print(f"   ✅ Send button with ➥ icon")
     print(f"   ✅ Messages hidden when offline")
+    print(f"   ✅ Group deletion deletes users and messages, logged in admin logs")
+    print(f"\n🔒 Security:")
+    print(f"   ✅ Argon2id password hashing")
+    print(f"   ✅ Secure HTTP-only session cookies")
+    print(f"   ✅ Rate limiting on login and message sending")
+    print(f"   ✅ CORS restricted to allowed origins")
+    print(f"   ✅ All endpoints protected by session checks")
     uvicorn.run(app, host="0.0.0.0", port=port)
