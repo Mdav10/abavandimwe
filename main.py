@@ -1255,7 +1255,8 @@ window.addEventListener('beforeinstallprompt', (e) => {
     console.log('📱 App can be installed');
 });
 
-async function installApp() {
+// Add click event listener for install button
+installBtn.addEventListener('click', async function() {
     if (deferredPrompt) {
         deferredPrompt.prompt();
         const choiceResult = await deferredPrompt.userChoice;
@@ -1266,9 +1267,11 @@ async function installApp() {
             console.log('❌ User dismissed the install prompt');
         }
         deferredPrompt = null;
+    } else {
+        console.log('Install prompt not available');
+        alert('App installation is not available. Please use the browser\'s "Add to Home Screen" feature.');
     }
-    hideLoading();
-}
+});
 
 window.addEventListener('appinstalled', (evt) => {
     console.log('✅ ABAVANDIMWE was installed');
@@ -1979,12 +1982,13 @@ async function loadAdminData() {
         });
         document.getElementById('usersTableBody').innerHTML = usersHtml;
         
+        // FIX: groups data uses 'group_name' key from backend
         let groupsHtml = '';
         data.groups.forEach(g => {
             groupsHtml += `<tr>
-                <td>${escapeHtml(g.name)}</td>
+                <td>${escapeHtml(g.group_name)}</td>
                 <td>${escapeHtml(g.created_by)}</td>
-                <td><button class="action-btn" onclick="deleteGroup('${g.name}')">Delete</button></td>
+                <td><button class="action-btn" onclick="deleteGroup('${g.group_name}')">Delete</button></td>
             </tr>`;
         });
         document.getElementById('groupsTableBody').innerHTML = groupsHtml;
@@ -2506,6 +2510,8 @@ if __name__ == "__main__":
     print(f"   ✅ Send button with ➥ icon")
     print(f"   ✅ Messages hidden when offline")
     print(f"   ✅ Group deletion deletes users and messages, logged in admin logs")
+    print(f"   ✅ Fixed groups table: now shows proper group names")
+    print(f"   ✅ Fixed install button: now responds to clicks")
     print(f"\n🔒 Security:")
     print(f"   ✅ Argon2id password hashing")
     print(f"   ✅ Secure HTTP-only session cookies")
