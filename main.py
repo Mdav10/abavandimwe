@@ -246,11 +246,8 @@ def reset_login_attempts(username):
     if username in login_blocks:
         del login_blocks[username]
 
-# ========== MESSAGE RATE LIMITING ==========
 def check_message_rate_limit(username):
-    """Check if user has exceeded message rate limit (10 messages per 5 seconds)"""
     now = time.time()
-    # Clean old entries
     message_limits[username] = [t for t in message_limits[username] if t > now - 5]
     if len(message_limits[username]) >= 10:
         return False
@@ -766,10 +763,11 @@ HTML = '''<!DOCTYPE html>
         .reply-preview .reply-cancel{color:#ff4444;cursor:pointer;font-weight:bold;padding:0 8px;}
         .reply-preview .reply-cancel:hover{color:#ff6666;}
         .input-row{display:flex;gap:10px;align-items:flex-end;}
-        .input-row textarea{flex:1;margin:0;padding:12px 16px;background:#111;border:1px solid #0f0;border-radius:12px;color:#0f0;font-family:monospace;font-size:14px;resize:vertical;min-height:50px;max-height:120px;line-height:1.5;overflow-y:auto;}
+        .input-row textarea{flex:1;margin:0;padding:12px 16px;background:#111;border:1px solid #0f0;border-radius:12px;color:#0f0;font-family:monospace;font-size:14px;resize:vertical;min-height:50px;max-height:80px;line-height:1.5;overflow-y:auto;}
         .input-row textarea:focus{outline:none;box-shadow:0 0 20px rgba(0,255,65,0.2);border-color:#0f0;}
         .input-row textarea::placeholder{color:#444;}
-        .input-row button{width:auto;margin:0;padding:12px 20px;height:50px;align-self:flex-end;position:relative;overflow:hidden;}
+        .input-row button{width:60px;min-width:60px;margin:0;padding:12px 0;height:50px;align-self:flex-end;position:relative;overflow:hidden;font-size:20px;display:flex;align-items:center;justify-content:center;}
+        .input-row button .btn-text{font-size:20px;line-height:1;}
         .footer{text-align:center;padding:6px;font-size:8px;color:#333;border-top:1px solid #0f0;}
         
         ::-webkit-scrollbar{width:3px;}
@@ -943,6 +941,34 @@ HTML = '''<!DOCTYPE html>
             margin-top: 8px;
             border-left: 2px solid #ffaa00;
         }
+        
+        /* Offline Status Bar */
+        .offline-bar {
+            display: none;
+            background: #ff0041;
+            color: white;
+            text-align: center;
+            padding: 6px;
+            font-size: 11px;
+            font-weight: bold;
+            position: sticky;
+            top: 0;
+            z-index: 5;
+        }
+        .offline-bar.active {
+            display: block;
+        }
+        .offline-bar .reconnect-btn {
+            background: white;
+            color: #ff0041;
+            border: none;
+            padding: 2px 12px;
+            border-radius: 4px;
+            cursor: pointer;
+            margin-left: 10px;
+            font-weight: bold;
+            font-size: 11px;
+        }
     </style>
 </head>
 <body>
@@ -1110,6 +1136,12 @@ HTML = '''<!DOCTYPE html>
         <button class="logout-btn" onclick="logout()">Leave</button>
     </div>
     
+    <!-- Offline Bar -->
+    <div class="offline-bar" id="offlineBar">
+        ⚠️ No internet connection
+        <button class="reconnect-btn" onclick="reconnectManually()">↻ Retry</button>
+    </div>
+    
     <div class="main-content">
         <div class="sidebar" id="sidebar">
             <div class="sidebar-header"><h3>● Online Users</h3></div>
@@ -1129,7 +1161,7 @@ HTML = '''<!DOCTYPE html>
                 </div>
                 <div class="input-row">
                     <textarea id="messageInput" placeholder="Type a message..." rows="2"></textarea>
-                    <button onclick="sendMessage()">Send</button>
+                    <button onclick="sendMessage()"><span class="btn-text">➥</span></button>
                 </div>
             </div>
             <div class="footer">🔐 End-to-End Encrypted | Messages self-destruct after 24 hours</div>
@@ -1147,6 +1179,7 @@ let currentUser = null;
 let gatekeeperData = null;
 let replyingToMessageId = null;
 let messagesData = {};
+let isManuallyReconnecting = false;
 
 // ========== LOADING OVERLAY ==========
 function showLoading(text, callback) {
@@ -1267,7 +1300,7 @@ document.addEventListener('DOMContentLoaded', function() {
     
     document.getElementById('messageInput').addEventListener('input', function() {
         this.style.height = 'auto';
-        this.style.height = Math.min(this.scrollHeight, 120) + 'px';
+        this.style.height = Math.min(this.scrollHeight, 80) + 'px';
     });
 });
 
@@ -1430,12 +1463,14 @@ function connectToChat(username, group) {
     
     ws.onopen = function() {
         updateStatus(true);
+        document.getElementById('offlineBar').classList.remove('active');
         ws.send(JSON.stringify({
             type: 'join',
             username: username,
             group: group
         }));
         reconnectAttempts = 0;
+        isManuallyReconnecting = false;
     };
     
     ws.onmessage = async function(e) {
@@ -1504,16 +1539,27 @@ function connectToChat(username, group) {
     
     ws.onclose = function() {
         updateStatus(false);
+        document.getElementById('offlineBar').classList.add('active');
+        
         if(document.getElementById('chatScreen').classList.contains('active')) {
-            addSystemMessage('⚠️ Connection lost. Reconnecting...');
-            reconnectAttempts++;
-            if(reconnectAttempts < 5) {
-                setTimeout(() => connectToChat(username, group), 3000);
-            } else {
-                addSystemMessage('❌ Connection failed. Please refresh.');
+            if (!isManuallyReconnecting) {
+                reconnectAttempts++;
+                if(reconnectAttempts < 5) {
+                    setTimeout(() => connectToChat(username, group), 3000);
+                }
             }
         }
     };
+}
+
+function reconnectManually() {
+    isManuallyReconnecting = true;
+    if (ws) {
+        ws.close();
+    }
+    setTimeout(() => {
+        connectToChat(window.chatUsername, window.chatGroup);
+    }, 500);
 }
 
 // ========== UI FUNCTIONS ==========
@@ -1530,6 +1576,7 @@ function updateStatus(online) {
         status.className = 'connection-status status-online';
         badge.innerHTML = '● Online';
         badge.style.color = '#0f0';
+        document.getElementById('offlineBar').classList.remove('active');
     } else {
         status.innerHTML = '🔴 Disconnected';
         status.className = 'connection-status status-offline';
@@ -1738,7 +1785,7 @@ async function decrypt(enc, pwd, salt) {
 // ========== MESSAGING ==========
 document.getElementById('messageInput')?.addEventListener('input', function() {
     this.style.height = 'auto';
-    this.style.height = Math.min(this.scrollHeight, 120) + 'px';
+    this.style.height = Math.min(this.scrollHeight, 80) + 'px';
     
     if(ws && ws.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify({type:'typing'}));
@@ -1750,18 +1797,19 @@ document.getElementById('messageInput')?.addEventListener('input', function() {
     }
 });
 
+// Enter key - create new line (Shift+Enter to send)
 document.getElementById('messageInput')?.addEventListener('keydown', function(e) {
     if(e.key === 'Enter' && !e.shiftKey) {
         e.preventDefault();
-        showLoading('Sending', sendMessage);
+        sendMessage();
     }
+    // Shift+Enter creates new line naturally
 });
 
 async function sendMessage() {
     let input = document.getElementById('messageInput');
     let text = input.value.trim();
     if(!text || !ws || ws.readyState !== WebSocket.OPEN || !groupSalt) {
-        hideLoading();
         return;
     }
     
@@ -1786,10 +1834,8 @@ async function sendMessage() {
         }));
         
         cancelReply();
-        hideLoading();
     } catch(e) {
         alert('Failed to send message');
-        hideLoading();
     }
 }
 
@@ -1866,6 +1912,7 @@ async function logout() {
     document.getElementById('gatekeeperSuccess')?.remove();
     document.getElementById('setupSuccess').style.display = 'none';
     document.getElementById('replyPreview').style.display = 'none';
+    document.getElementById('offlineBar').classList.remove('active');
     reconnectAttempts = 0;
     currentUser = null;
     gatekeeperData = null;
@@ -2044,6 +2091,7 @@ console.log('📱 Developed by Mugisha Pc');
 console.log('💬 Reply feature: Swipe any message left to right to reply');
 console.log('📱 PWA: Click "Install ABAVANDIMWE App" to install as Android app');
 console.log('⚠️ IMPORTANT: All users in a group must use the SAME group password');
+console.log('📝 Enter: Send message, Shift+Enter: New line');
 </script>
 </body>
 </html>'''
@@ -2413,8 +2461,11 @@ if __name__ == "__main__":
     print(f"   ✅ Group password stored for consistent decryption")
     print(f"   ✅ Messages encrypted with group password")
     print(f"\n📋 Features:")
-    print(f"   ✅ Multiline message input")
+    print(f"   ✅ Multiline message input (max 80px height)")
     print(f"   ✅ Reply to messages (swipe left to right)")
     print(f"   ✅ Reply previews with original message")
     print(f"   ✅ Click reply preview to scroll to original")
+    print(f"   ✅ Enter: Send message, Shift+Enter: New line")
+    print(f"   ✅ Offline status bar with reconnect button")
+    print(f"   ✅ Send button with ➥ icon")
     uvicorn.run(app, host="0.0.0.0", port=port)

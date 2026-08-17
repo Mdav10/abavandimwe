@@ -1,5 +1,5 @@
 // ABAVANDIMWE Service Worker
-const CACHE_NAME = 'abavandimwe-v1.0.0';
+const CACHE_NAME = 'abavandimwe-v10.0.1';
 const OFFLINE_URL = '/offline.html';
 
 // Assets to cache
