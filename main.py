@@ -297,7 +297,7 @@ async def init_db():
                 group_name TEXT PRIMARY KEY,
                 salt TEXT NOT NULL,
                 password_hash TEXT NOT NULL,
-                group_password TEXT,
+                group_password TEXT NOT NULL,
                 created_by TEXT NOT NULL,
                 created_at DOUBLE PRECISION NOT NULL
             )
@@ -451,39 +451,42 @@ async def create_user_with_group(username, password, group_name, group_password)
     conn = await get_db_connection()
     try:
         salt = generate_salt()
-        password_hash = hash_password_argon2(password)
-        
-        print(f"[DEBUG] Creating user: {username}, Group: {group_name}, Group Password: {group_password}")
+        user_password_hash = hash_password_argon2(password)
         
         # Check if group exists
-        row = await conn.fetchrow("SELECT group_name FROM groups WHERE group_name = $1", group_name)
-        if not row:
-            # Create the group with the ACTUAL group name
+        row = await conn.fetchrow("SELECT group_name, group_password FROM groups WHERE group_name = $1", group_name)
+        if row:
+            stored_group_password = row['group_password']
+            # If group exists, the provided group_password must match the stored one
+            if stored_group_password and stored_group_password != group_password:
+                return {"error": "Group password does not match the existing group's password. Use the correct group password."}
+            # If group_password is NULL (should not happen), update it
+            if not stored_group_password:
+                await conn.execute(
+                    "UPDATE groups SET group_password = $1 WHERE group_name = $2",
+                    group_password, group_name
+                )
+            group_salt = None  # not needed
+        else:
+            # Create new group
             group_salt = generate_salt()
             group_pwd_hash = hash_password_argon2(group_password)
             await conn.execute(
                 "INSERT INTO groups (group_name, salt, password_hash, group_password, created_by, created_at) VALUES ($1, $2, $3, $4, $5, $6)",
                 group_name, group_salt, group_pwd_hash, group_password, "admin", time.time()
             )
-            print(f"[✓] Group created: '{group_name}'")
-        else:
-            # Update group password if it doesn't have one
-            await conn.execute(
-                "UPDATE groups SET group_password = $1 WHERE group_name = $2 AND (group_password IS NULL OR group_password = '')",
-                group_password, group_name
-            )
-            print(f"[✓] Group '{group_name}' already exists, password updated")
+            print(f"[✓] New group created: '{group_name}'")
         
-        # Insert the user with the assigned_group
+        # Insert user with assigned_group
         await conn.execute(
             "INSERT INTO users (username, password_hash, salt, role, assigned_group, created_at) VALUES ($1, $2, $3, $4, $5, $6)",
-            username, password_hash, salt, "user", group_name, time.time()
+            username, user_password_hash, salt, "user", group_name, time.time()
         )
         print(f"[✓] User created: '{username}' in group '{group_name}'")
-        return True
+        return {"success": True}
     except Exception as e:
         print(f"Error creating user: {e}")
-        return False
+        return {"error": str(e)}
     finally:
         await return_db_connection(conn)
 
@@ -969,6 +972,12 @@ HTML = '''<!DOCTYPE html>
             font-weight: bold;
             font-size: 11px;
         }
+        .offline-message {
+            text-align: center;
+            color: #ff4444;
+            padding: 20px;
+            font-size: 14px;
+        }
     </style>
 </head>
 <body>
@@ -1042,7 +1051,7 @@ HTML = '''<!DOCTYPE html>
                 <button onclick="createUser()" class="action-btn-green">➕ Create User</button>
             </div>
             <div class="group-info">
-                ⚠️ IMPORTANT: All users in the same group must use the SAME Group Password to see messages!
+                ⚠️ If the group already exists, the Group Password you enter MUST match the existing group password!
             </div>
         </div>
         
@@ -1464,6 +1473,9 @@ function connectToChat(username, group) {
     ws.onopen = function() {
         updateStatus(true);
         document.getElementById('offlineBar').classList.remove('active');
+        // Remove offline message if present
+        const offlineMsg = document.querySelector('.offline-message');
+        if (offlineMsg) offlineMsg.remove();
         ws.send(JSON.stringify({
             type: 'join',
             username: username,
@@ -1486,7 +1498,10 @@ function connectToChat(username, group) {
                 groupSalt = d.salt;
                 addSystemMessage('🔐 Connected - Messages last 24 hours');
             } else if(d.type === 'history') {
+                // Clear messages and remove offline message
                 document.getElementById('messages').innerHTML = '';
+                const offlineMsg = document.querySelector('.offline-message');
+                if (offlineMsg) offlineMsg.remove();
                 messagesData = {};
                 
                 if(d.messages && d.messages.length > 0) {
@@ -1541,6 +1556,12 @@ function connectToChat(username, group) {
         updateStatus(false);
         document.getElementById('offlineBar').classList.add('active');
         
+        // Clear messages and show offline message
+        const messagesContainer = document.getElementById('messages');
+        messagesContainer.innerHTML = '<div class="offline-message">🔴 No internet connection. Messages are hidden.</div>';
+        // Clear messagesData to prevent old messages from being shown
+        messagesData = {};
+        
         if(document.getElementById('chatScreen').classList.contains('active')) {
             if (!isManuallyReconnecting) {
                 reconnectAttempts++;
@@ -1587,6 +1608,9 @@ function updateStatus(online) {
 
 function addSystemMessage(text) {
     let msgs = document.getElementById('messages');
+    // Remove offline message if present
+    const offlineMsg = document.querySelector('.offline-message');
+    if (offlineMsg) offlineMsg.remove();
     let div = document.createElement('div');
     div.className = 'system-message';
     div.textContent = text;
@@ -1596,6 +1620,9 @@ function addSystemMessage(text) {
 
 function addMessage(sender, text, isSent, timestamp, messageId, replyTo) {
     let msgs = document.getElementById('messages');
+    // Remove offline message if present
+    const offlineMsg = document.querySelector('.offline-message');
+    if (offlineMsg) offlineMsg.remove();
     let div = document.createElement('div');
     div.className = 'message ' + (isSent ? 'sent' : 'received');
     div.dataset.messageId = messageId;
@@ -1797,14 +1824,9 @@ document.getElementById('messageInput')?.addEventListener('input', function() {
     }
 });
 
-// Enter key - create new line (Shift+Enter to send)
-document.getElementById('messageInput')?.addEventListener('keydown', function(e) {
-    if(e.key === 'Enter' && !e.shiftKey) {
-        e.preventDefault();
-        sendMessage();
-    }
-    // Shift+Enter creates new line naturally
-});
+// Enter key: new line (default behavior), Shift+Enter: also new line, but we want to send only via button.
+// We will NOT override Enter to send; it will naturally insert a newline.
+// The send button triggers sendMessage.
 
 async function sendMessage() {
     let input = document.getElementById('messageInput');
@@ -2004,14 +2026,14 @@ async function createUser() {
         });
         const data = await response.json();
         if(data.success) {
-            alert('✅ User created successfully!\\n\\nUsername: ' + username + '\\nPassword: ' + password + '\\nGroup: ' + group_name + '\\nGroup Password: ' + group_password);
+            alert('✅ User created successfully!\\n\\nUsername: ' + username + '\\nPassword: ' + password + '\\nGroup: ' + group_name);
             document.getElementById('newUsername').value = '';
             document.getElementById('newPassword').value = '';
             document.getElementById('newGroupName').value = '';
             document.getElementById('newGroupPassword').value = '';
             loadAdminData();
         } else {
-            alert(data.message || 'Failed to create user');
+            alert(data.error || 'Failed to create user');
         }
         hideLoading();
     } catch(e) {
@@ -2091,7 +2113,7 @@ console.log('📱 Developed by Mugisha Pc');
 console.log('💬 Reply feature: Swipe any message left to right to reply');
 console.log('📱 PWA: Click "Install ABAVANDIMWE App" to install as Android app');
 console.log('⚠️ IMPORTANT: All users in a group must use the SAME group password');
-console.log('📝 Enter: Send message, Shift+Enter: New line');
+console.log('📝 Enter key inserts new line. Use Send button to send.');
 </script>
 </body>
 </html>'''
@@ -2257,10 +2279,12 @@ async def admin_data(request: Request):
 @app.post("/admin/create_user")
 async def admin_create_user(data: CreateUserRequest, request: Request):
     session = await require_admin(request)
-    if await create_user_with_group(data.username, data.password, data.group_name, data.group_password):
+    result = await create_user_with_group(data.username, data.password, data.group_name, data.group_password)
+    if result.get("success"):
         await log_admin_action(session["username"], "create_user", data.username, f"Group: {data.group_name}")
         return {"success": True}
-    return {"success": False, "message": "Username already exists"}
+    else:
+        return {"success": False, "error": result.get("error", "Unknown error")}
 
 @app.post("/admin/delete_user")
 async def admin_delete_user(data: DeleteUserRequest, request: Request):
@@ -2465,7 +2489,8 @@ if __name__ == "__main__":
     print(f"   ✅ Reply to messages (swipe left to right)")
     print(f"   ✅ Reply previews with original message")
     print(f"   ✅ Click reply preview to scroll to original")
-    print(f"   ✅ Enter: Send message, Shift+Enter: New line")
+    print(f"   ✅ Enter: New line, Shift+Enter: New line, Send button to send")
     print(f"   ✅ Offline status bar with reconnect button")
     print(f"   ✅ Send button with ➥ icon")
+    print(f"   ✅ Messages hidden when offline")
     uvicorn.run(app, host="0.0.0.0", port=port)
