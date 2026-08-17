@@ -39,7 +39,6 @@ app.mount("/screenshots", StaticFiles(directory="static/screenshots"), name="scr
 # ========== SERVE PWA FILES ==========
 @app.get("/manifest.json")
 async def serve_manifest():
-    # Updated manifest without screenshots to avoid 404s
     manifest = {
         "name": "ABAVANDIMWE",
         "short_name": "ABAVANDIMWE",
@@ -1178,21 +1177,16 @@ function showLoading(text, callback) {
     loadingText.textContent = text;
     overlay.classList.add('active');
     
+    // Execute the callback after a small delay for animation
     setTimeout(async () => {
         try {
             await callback();
         } catch (e) {
             console.error('Error in callback:', e);
-        } finally {
-            if (!document.querySelector('.chat-container.active') && 
-                !document.querySelector('.admin-panel.active') &&
-                !document.querySelector('.gatekeeper-container.active') &&
-                !document.querySelector('.user-setup-container.active')) {
-                setTimeout(() => {
-                    overlay.classList.remove('active');
-                }, 500);
-            }
+            // If there's an error, hide loading
+            hideLoading();
         }
+        // Don't hide overlay here - let the callback handle hiding
     }, 300);
 }
 
@@ -1227,14 +1221,15 @@ window.addEventListener('beforeinstallprompt', (e) => {
 installBtn.addEventListener('click', function() {
     if (deferredPrompt) {
         deferredPrompt.prompt();
-        const choiceResult = await deferredPrompt.userChoice;
-        if (choiceResult.outcome === 'accepted') {
-            console.log('✅ User accepted the install prompt');
-            installBtn.classList.remove('show');
-        } else {
-            console.log('❌ User dismissed the install prompt');
-        }
-        deferredPrompt = null;
+        deferredPrompt.userChoice.then((choiceResult) => {
+            if (choiceResult.outcome === 'accepted') {
+                console.log('✅ User accepted the install prompt');
+                installBtn.classList.remove('show');
+            } else {
+                console.log('❌ User dismissed the install prompt');
+            }
+            deferredPrompt = null;
+        });
     } else {
         alert('App installation is not available. Please use the browser\'s "Add to Home Screen" feature.');
     }
@@ -1257,37 +1252,45 @@ if (navigator.standalone) {
 
 // ========== DOM READY ==========
 document.addEventListener('DOMContentLoaded', function() {
-    // Login button
+    console.log('DOM loaded - attaching event listeners');
+    
+    // Login button - attach click event
     document.getElementById('loginBtn').addEventListener('click', function(e) {
+        console.log('Login button clicked');
         if (this.classList.contains('btn-loading')) return;
         showLoading('Logging in', login);
     });
     
     // Gatekeeper button
     document.getElementById('gatekeeperBtn').addEventListener('click', function(e) {
+        console.log('Gatekeeper button clicked');
         if (this.classList.contains('btn-loading')) return;
         showLoading('Verifying', gatekeeperLogin);
     });
     
     // Enter Chat button
     document.getElementById('enterChatBtn').addEventListener('click', function(e) {
+        console.log('Enter Chat button clicked');
         if (this.classList.contains('btn-loading')) return;
         showLoading('Entering Chat', enterChat);
     });
     
-    // Enter key support
+    // Enter key support on password fields
     document.getElementById('loginPassword').addEventListener('keypress', function(e) {
         if(e.key === 'Enter') {
+            console.log('Enter key pressed on login password');
             showLoading('Logging in', login);
         }
     });
     document.getElementById('gatekeeperPassword').addEventListener('keypress', function(e) {
         if(e.key === 'Enter') {
+            console.log('Enter key pressed on gatekeeper password');
             showLoading('Verifying', gatekeeperLogin);
         }
     });
     document.getElementById('userDisplayName').addEventListener('keypress', function(e) {
         if(e.key === 'Enter') {
+            console.log('Enter key pressed on display name');
             showLoading('Entering Chat', enterChat);
         }
     });
@@ -1301,6 +1304,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
 // ========== LOGIN FUNCTION ==========
 async function login() {
+    console.log('Login function called');
     const username = document.getElementById('loginUsername').value.trim();
     const password = document.getElementById('loginPassword').value;
     
@@ -1311,6 +1315,7 @@ async function login() {
     }
     
     try {
+        console.log('Sending login request for:', username);
         const response = await fetch('/login', {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
@@ -1318,6 +1323,7 @@ async function login() {
         });
         
         const data = await response.json();
+        console.log('Login response:', data);
         
         if(data.success) {
             currentUser = {username: data.username, role: data.role};
@@ -1358,6 +1364,7 @@ async function login() {
 
 // ========== GATEKEEPER ==========
 async function gatekeeperLogin() {
+    console.log('Gatekeeper login function called');
     const username = document.getElementById('gatekeeperUsername').value.trim();
     const password = document.getElementById('gatekeeperPassword').value;
     
@@ -1368,6 +1375,7 @@ async function gatekeeperLogin() {
     }
     
     try {
+        console.log('Sending gatekeeper request for:', username);
         const response = await fetch('/gatekeeper', {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
@@ -1375,6 +1383,7 @@ async function gatekeeperLogin() {
         });
         
         const data = await response.json();
+        console.log('Gatekeeper response:', data);
         
         if(data.success) {
             gatekeeperData = data;
@@ -1406,6 +1415,7 @@ async function gatekeeperLogin() {
 
 // ========== ENTER CHAT ==========
 async function enterChat() {
+    console.log('Enter chat function called');
     const displayName = document.getElementById('userDisplayName').value.trim();
     const groupName = document.getElementById('userGroupName').value.trim();
     
@@ -1631,7 +1641,7 @@ function addMessage(sender, text, isSent, timestamp, messageId, replyTo) {
                     '<div class="message-bubble">' + escapeHtml(text) + '</div>' + 
                     '<div class="message-time">' + time + '</div>';
     
-    // Swipe to reply (mobile and desktop) - same as before
+    // Swipe to reply (mobile and desktop)
     let touchStartX = 0, touchCurrentX = 0, touchStartY = 0;
     div.addEventListener('touchstart', function(e) {
         touchStartX = e.touches[0].clientX;
@@ -1776,7 +1786,6 @@ document.getElementById('messageInput')?.addEventListener('input', function() {
     }
 });
 
-// Enter key: new line (default), Send button to send
 async function sendMessage() {
     let input = document.getElementById('messageInput');
     let text = input.value.trim();
@@ -2046,6 +2055,7 @@ console.log('💬 Reply feature: Swipe any message left to right to reply');
 console.log('📱 PWA: Click "Install ABAVANDIMWE App" to install as Android app');
 console.log('⚠️ IMPORTANT: All users in a group must use the SAME group password');
 console.log('📝 Enter key inserts new line. Use Send button to send.');
+console.log('🔍 Check browser console for debug logs');
 </script>
 </body>
 </html>'''
@@ -2125,7 +2135,6 @@ async def gatekeeper(login_data: LoginRequest):
     group_password = await get_group_password(assigned_group)
     if not group_password:
         group_password = login_data.password
-        print(f"[!] No group password found for '{assigned_group}', using login password")
     return {
         "success": True,
         "username": login_data.username,
