@@ -39,37 +39,11 @@ app.mount("/screenshots", StaticFiles(directory="static/screenshots"), name="scr
 # ========== SERVE PWA FILES ==========
 @app.get("/manifest.json")
 async def serve_manifest():
-    manifest = {
-        "name": "ABAVANDIMWE",
-        "short_name": "ABAVANDIMWE",
-        "description": "Secure Messaging System - End-to-End Encrypted",
-        "start_url": "/",
-        "display": "standalone",
-        "orientation": "portrait",
-        "background_color": "#0a0a0f",
-        "theme_color": "#0a0a0f",
-        "categories": ["communication", "messaging", "security"],
-        "icons": [
-            {"src": "/icons/icon-72x72.png", "sizes": "72x72", "type": "image/png", "purpose": "any maskable"},
-            {"src": "/icons/icon-96x96.png", "sizes": "96x96", "type": "image/png", "purpose": "any maskable"},
-            {"src": "/icons/icon-128x128.png", "sizes": "128x128", "type": "image/png", "purpose": "any maskable"},
-            {"src": "/icons/icon-144x144.png", "sizes": "144x144", "type": "image/png", "purpose": "any maskable"},
-            {"src": "/icons/icon-152x152.png", "sizes": "152x152", "type": "image/png", "purpose": "any maskable"},
-            {"src": "/icons/icon-192x192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable"},
-            {"src": "/icons/icon-384x384.png", "sizes": "384x384", "type": "image/png", "purpose": "any maskable"},
-            {"src": "/icons/icon-512x512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable"}
-        ],
-        "shortcuts": [
-            {
-                "name": "Open Chat",
-                "short_name": "Chat",
-                "description": "Open ABAVANDIMWE chat",
-                "url": "/",
-                "icons": [{"src": "/icons/icon-96x96.png", "sizes": "96x96"}]
-            }
-        ]
-    }
-    return Response(content=json.dumps(manifest), media_type="application/json")
+    try:
+        with open("manifest.json", "r") as f:
+            return Response(content=f.read(), media_type="application/json")
+    except FileNotFoundError:
+        return JSONResponse({"error": "manifest.json not found"}, status_code=404)
 
 @app.get("/sw.js")
 async def serve_sw():
@@ -77,7 +51,7 @@ async def serve_sw():
         with open("sw.js", "r") as f:
             return Response(content=f.read(), media_type="text/javascript")
     except FileNotFoundError:
-        return Response(content="// Service worker not found", media_type="text/javascript")
+        return JSONResponse({"error": "sw.js not found"}, status_code=404)
 
 @app.get("/offline.html")
 async def serve_offline():
@@ -85,11 +59,12 @@ async def serve_offline():
         with open("offline.html", "r") as f:
             return Response(content=f.read(), media_type="text/html")
     except FileNotFoundError:
-        return HTMLResponse("<h1>You are offline</h1>")
+        return JSONResponse({"error": "offline.html not found"}, status_code=404)
 
 # ========== DATABASE CONFIG ==========
 DATABASE_URL = os.getenv('DATABASE_URL', 'postgresql://neondb_owner:npg_CmR51yqfMxNZ@ep-plain-salad-axxvh942-pooler.c-4.us-east-2.aws.neon.tech/neondb?sslmode=require')
 
+# Database connection pool
 db_pool = None
 
 async def init_db_pool():
@@ -103,9 +78,11 @@ async def init_db_pool():
     return db_pool
 
 async def get_db_connection():
+    """Get a connection from the pool"""
     return await db_pool.acquire()
 
 async def return_db_connection(conn):
+    """Return connection to the pool"""
     await db_pool.release(conn)
 
 # ========== SECURITY CONFIG ==========
@@ -115,7 +92,7 @@ ADMIN_PASSWORD_HASH = None
 
 # ========== SESSION MANAGEMENT ==========
 sessions: Dict[str, Dict] = {}
-SESSION_TIMEOUT = 3600 * 24 * 7
+SESSION_TIMEOUT = 3600 * 24 * 7  # 7 days
 
 def create_session(username: str, role: str, assigned_group: str = None, group_password: str = None) -> str:
     session_id = secrets.token_urlsafe(32)
@@ -160,7 +137,7 @@ async def require_admin(request: Request) -> Dict:
 async def require_auth(request: Request) -> Dict:
     return await get_session_from_cookie(request)
 
-# ========== CORS ==========
+# ========== CORS CONFIG ==========
 ALLOWED_ORIGINS = [
     "https://abavandimwe.onrender.com",
     "https://abavandimwe-production.up.railway.app",
@@ -168,6 +145,7 @@ ALLOWED_ORIGINS = [
     "http://localhost:8000",
     "http://localhost:3000",
 ]
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=ALLOWED_ORIGINS,
@@ -200,7 +178,7 @@ class SaveDisplayNameRequest(BaseModel):
     username: str
     display_name: str
 
-# ========== CRYPTO ==========
+# ========== CRYPTO FUNCTIONS ==========
 ph = PasswordHasher()
 
 def generate_salt():
@@ -245,13 +223,17 @@ message_limits = defaultdict(list)
 
 def check_login_rate_limit(username):
     now = time.time()
+    
     if username in login_blocks and login_blocks[username] > now:
         return False, f"Too many failed attempts. Try again in {int((login_blocks[username] - now) / 60)} minutes."
+    
     login_attempts[username] = [t for t in login_attempts[username] if t > now - 300]
+    
     if len(login_attempts[username]) >= 5:
         login_blocks[username] = now + 900
         login_attempts[username] = []
         return False, "Too many failed attempts. Account blocked for 15 minutes."
+    
     return True, None
 
 def record_failed_login(username):
@@ -277,7 +259,9 @@ async def init_db():
     global ADMIN_PASSWORD_HASH
     await init_db_pool()
     conn = await get_db_connection()
+    
     try:
+        # Create tables
         await conn.execute('''
             CREATE TABLE IF NOT EXISTS users (
                 username TEXT PRIMARY KEY,
@@ -294,6 +278,7 @@ async def init_db():
                 locked_until DOUBLE PRECISION
             )
         ''')
+        
         await conn.execute('''
             CREATE TABLE IF NOT EXISTS messages (
                 id SERIAL PRIMARY KEY,
@@ -306,6 +291,7 @@ async def init_db():
                 reply_to INTEGER DEFAULT NULL
             )
         ''')
+        
         await conn.execute('''
             CREATE TABLE IF NOT EXISTS groups (
                 group_name TEXT PRIMARY KEY,
@@ -316,6 +302,7 @@ async def init_db():
                 created_at DOUBLE PRECISION NOT NULL
             )
         ''')
+        
         await conn.execute('''
             CREATE TABLE IF NOT EXISTS admin_logs (
                 id SERIAL PRIMARY KEY,
@@ -326,20 +313,40 @@ async def init_db():
                 created_at DOUBLE PRECISION NOT NULL
             )
         ''')
+        
         print("[✓] PostgreSQL database ready")
+        
+        # Add group_password column if it doesn't exist
         try:
-            await conn.execute('ALTER TABLE groups ADD COLUMN IF NOT EXISTS group_password TEXT')
-        except: pass
+            await conn.execute('''
+                ALTER TABLE groups ADD COLUMN IF NOT EXISTS group_password TEXT
+            ''')
+            print("[✓] group_password column verified")
+        except Exception as e:
+            print(f"[!] group_password column: {e}")
+        
+        # Add reply_to column if it doesn't exist
         try:
-            await conn.execute('ALTER TABLE messages ADD COLUMN IF NOT EXISTS reply_to INTEGER DEFAULT NULL')
-        except: pass
+            await conn.execute('''
+                ALTER TABLE messages ADD COLUMN IF NOT EXISTS reply_to INTEGER DEFAULT NULL
+            ''')
+            print("[✓] reply_to column verified")
+        except Exception as e:
+            print(f"[!] reply_to column: {e}")
+        
+        # Clean up corrupt data
         try:
             await conn.execute("DELETE FROM groups WHERE group_name = 'admin' AND created_by != 'Mpc'")
-        except: pass
+            print("[🧹] Cleaned up corrupt groups")
+        except Exception as e:
+            pass
+        
         try:
             await conn.execute("DELETE FROM messages WHERE group_name = 'admin'")
-        except: pass
-
+        except Exception as e:
+            pass
+        
+        # Create admin if not exists
         row = await conn.fetchrow("SELECT username FROM users WHERE username = $1", ADMIN_USERNAME)
         if not row:
             ADMIN_PASSWORD_HASH = hash_password_argon2(ADMIN_PASSWORD)
@@ -349,11 +356,14 @@ async def init_db():
             )
             print(f"[✓] Admin created: {ADMIN_USERNAME}")
             print(f"[✓] Admin Password: {ADMIN_PASSWORD}")
+            print(f"⚠️  Keep this password safe!")
         else:
             row = await conn.fetchrow("SELECT password_hash FROM users WHERE username = $1", ADMIN_USERNAME)
             ADMIN_PASSWORD_HASH = row[0]
+        
     finally:
         await return_db_connection(conn)
+    
     print("[✓] Admin account ready")
 
 # ========== DATABASE FUNCTIONS ==========
@@ -406,18 +416,22 @@ async def authenticate_user(username, password):
         )
     finally:
         await return_db_connection(conn)
+    
     if not row:
         return None
+    
     stored_hash = row['password_hash']
     role = row['role']
     assigned_group = row['assigned_group']
     display_name = row['display_name']
     locked_until = row['locked_until']
+    
     if locked_until and locked_until > time.time():
         return {"error": f"Account locked. Try again in {int((locked_until - time.time()) / 60)} minutes."}
+    
     if verify_password_argon2(password, stored_hash):
         return {
-            "username": username,
+            "username": username, 
             "role": role,
             "assigned_group": assigned_group,
             "display_name": display_name
@@ -438,17 +452,23 @@ async def create_user_with_group(username, password, group_name, group_password)
     try:
         salt = generate_salt()
         user_password_hash = hash_password_argon2(password)
+        
+        # Check if group exists
         row = await conn.fetchrow("SELECT group_name, group_password FROM groups WHERE group_name = $1", group_name)
         if row:
             stored_group_password = row['group_password']
+            # If group exists, the provided group_password must match the stored one
             if stored_group_password and stored_group_password != group_password:
                 return {"error": "Group password does not match the existing group's password. Use the correct group password."}
+            # If group_password is NULL (should not happen), update it
             if not stored_group_password:
                 await conn.execute(
                     "UPDATE groups SET group_password = $1 WHERE group_name = $2",
                     group_password, group_name
                 )
+            group_salt = None  # not needed
         else:
+            # Create new group
             group_salt = generate_salt()
             group_pwd_hash = hash_password_argon2(group_password)
             await conn.execute(
@@ -456,6 +476,8 @@ async def create_user_with_group(username, password, group_name, group_password)
                 group_name, group_salt, group_pwd_hash, group_password, "admin", time.time()
             )
             print(f"[✓] New group created: '{group_name}'")
+        
+        # Insert user with assigned_group
         await conn.execute(
             "INSERT INTO users (username, password_hash, salt, role, assigned_group, created_at) VALUES ($1, $2, $3, $4, $5, $6)",
             username, user_password_hash, salt, "user", group_name, time.time()
@@ -481,6 +503,14 @@ async def delete_user(username):
     conn = await get_db_connection()
     try:
         result = await conn.execute("DELETE FROM users WHERE username = $1", username)
+        return result != "DELETE 0"
+    finally:
+        await return_db_connection(conn)
+
+async def delete_users_by_group(group_name):
+    conn = await get_db_connection()
+    try:
+        result = await conn.execute("DELETE FROM users WHERE assigned_group = $1", group_name)
         return result != "DELETE 0"
     finally:
         await return_db_connection(conn)
@@ -599,8 +629,11 @@ async def get_all_groups():
 async def delete_group(group_name):
     conn = await get_db_connection()
     try:
+        # Delete all users assigned to this group
         await conn.execute("DELETE FROM users WHERE assigned_group = $1", group_name)
+        # Delete all messages in this group
         await conn.execute("DELETE FROM messages WHERE group_name = $1", group_name)
+        # Delete the group itself
         result = await conn.execute("DELETE FROM groups WHERE group_name = $1", group_name)
         return result != "DELETE 0"
     finally:
@@ -1162,7 +1195,6 @@ HTML = '''<!DOCTYPE html>
 <button id="installBtn" class="install-btn">📲 Install ABAVANDIMWE App</button>
 
 <script>
-// ========== GLOBALS ==========
 let ws, username, groupName, groupPassword, groupSalt, typingTimeout, reconnectAttempts = 0;
 let currentUser = null;
 let gatekeeperData = null;
@@ -1177,16 +1209,21 @@ function showLoading(text, callback) {
     loadingText.textContent = text;
     overlay.classList.add('active');
     
-    // Execute the callback after a small delay for animation
     setTimeout(async () => {
         try {
             await callback();
         } catch (e) {
             console.error('Error in callback:', e);
-            // If there's an error, hide loading
-            hideLoading();
+        } finally {
+            if (!document.querySelector('.chat-container.active') && 
+                !document.querySelector('.admin-panel.active') &&
+                !document.querySelector('.gatekeeper-container.active') &&
+                !document.querySelector('.user-setup-container.active')) {
+                setTimeout(() => {
+                    overlay.classList.remove('active');
+                }, 500);
+            }
         }
-        // Don't hide overlay here - let the callback handle hiding
     }, 300);
 }
 
@@ -1218,26 +1255,25 @@ window.addEventListener('beforeinstallprompt', (e) => {
     console.log('📱 App can be installed');
 });
 
-installBtn.addEventListener('click', function() {
+async function installApp() {
     if (deferredPrompt) {
         deferredPrompt.prompt();
-        deferredPrompt.userChoice.then((choiceResult) => {
-            if (choiceResult.outcome === 'accepted') {
-                console.log('✅ User accepted the install prompt');
-                installBtn.classList.remove('show');
-            } else {
-                console.log('❌ User dismissed the install prompt');
-            }
-            deferredPrompt = null;
-        });
-    } else {
-        alert('App installation is not available. Please use the browser\'s "Add to Home Screen" feature.');
+        const choiceResult = await deferredPrompt.userChoice;
+        if (choiceResult.outcome === 'accepted') {
+            console.log('✅ User accepted the install prompt');
+            installBtn.classList.remove('show');
+        } else {
+            console.log('❌ User dismissed the install prompt');
+        }
+        deferredPrompt = null;
     }
-});
+    hideLoading();
+}
 
 window.addEventListener('appinstalled', (evt) => {
     console.log('✅ ABAVANDIMWE was installed');
     installBtn.classList.remove('show');
+    hideLoading();
 });
 
 if (window.matchMedia('(display-mode: standalone)').matches) {
@@ -1252,59 +1288,45 @@ if (navigator.standalone) {
 
 // ========== DOM READY ==========
 document.addEventListener('DOMContentLoaded', function() {
-    console.log('DOM loaded - attaching event listeners');
-    
-    // Login button - attach click event
     document.getElementById('loginBtn').addEventListener('click', function(e) {
-        console.log('Login button clicked');
         if (this.classList.contains('btn-loading')) return;
         showLoading('Logging in', login);
     });
     
-    // Gatekeeper button
     document.getElementById('gatekeeperBtn').addEventListener('click', function(e) {
-        console.log('Gatekeeper button clicked');
         if (this.classList.contains('btn-loading')) return;
         showLoading('Verifying', gatekeeperLogin);
     });
     
-    // Enter Chat button
     document.getElementById('enterChatBtn').addEventListener('click', function(e) {
-        console.log('Enter Chat button clicked');
         if (this.classList.contains('btn-loading')) return;
         showLoading('Entering Chat', enterChat);
     });
     
-    // Enter key support on password fields
     document.getElementById('loginPassword').addEventListener('keypress', function(e) {
         if(e.key === 'Enter') {
-            console.log('Enter key pressed on login password');
             showLoading('Logging in', login);
         }
     });
     document.getElementById('gatekeeperPassword').addEventListener('keypress', function(e) {
         if(e.key === 'Enter') {
-            console.log('Enter key pressed on gatekeeper password');
             showLoading('Verifying', gatekeeperLogin);
         }
     });
     document.getElementById('userDisplayName').addEventListener('keypress', function(e) {
         if(e.key === 'Enter') {
-            console.log('Enter key pressed on display name');
             showLoading('Entering Chat', enterChat);
         }
     });
     
-    // Textarea auto-resize
     document.getElementById('messageInput').addEventListener('input', function() {
         this.style.height = 'auto';
         this.style.height = Math.min(this.scrollHeight, 80) + 'px';
     });
 });
 
-// ========== LOGIN FUNCTION ==========
+// ========== LOGIN ==========
 async function login() {
-    console.log('Login function called');
     const username = document.getElementById('loginUsername').value.trim();
     const password = document.getElementById('loginPassword').value;
     
@@ -1315,7 +1337,6 @@ async function login() {
     }
     
     try {
-        console.log('Sending login request for:', username);
         const response = await fetch('/login', {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
@@ -1323,7 +1344,6 @@ async function login() {
         });
         
         const data = await response.json();
-        console.log('Login response:', data);
         
         if(data.success) {
             currentUser = {username: data.username, role: data.role};
@@ -1364,7 +1384,6 @@ async function login() {
 
 // ========== GATEKEEPER ==========
 async function gatekeeperLogin() {
-    console.log('Gatekeeper login function called');
     const username = document.getElementById('gatekeeperUsername').value.trim();
     const password = document.getElementById('gatekeeperPassword').value;
     
@@ -1375,7 +1394,6 @@ async function gatekeeperLogin() {
     }
     
     try {
-        console.log('Sending gatekeeper request for:', username);
         const response = await fetch('/gatekeeper', {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
@@ -1383,7 +1401,6 @@ async function gatekeeperLogin() {
         });
         
         const data = await response.json();
-        console.log('Gatekeeper response:', data);
         
         if(data.success) {
             gatekeeperData = data;
@@ -1415,7 +1432,6 @@ async function gatekeeperLogin() {
 
 // ========== ENTER CHAT ==========
 async function enterChat() {
-    console.log('Enter chat function called');
     const displayName = document.getElementById('userDisplayName').value.trim();
     const groupName = document.getElementById('userGroupName').value.trim();
     
@@ -1469,6 +1485,7 @@ function connectToChat(username, group) {
     ws.onopen = function() {
         updateStatus(true);
         document.getElementById('offlineBar').classList.remove('active');
+        // Remove offline message if present
         const offlineMsg = document.querySelector('.offline-message');
         if (offlineMsg) offlineMsg.remove();
         ws.send(JSON.stringify({
@@ -1493,6 +1510,7 @@ function connectToChat(username, group) {
                 groupSalt = d.salt;
                 addSystemMessage('🔐 Connected - Messages last 24 hours');
             } else if(d.type === 'history') {
+                // Clear messages and remove offline message
                 document.getElementById('messages').innerHTML = '';
                 const offlineMsg = document.querySelector('.offline-message');
                 if (offlineMsg) offlineMsg.remove();
@@ -1549,8 +1567,11 @@ function connectToChat(username, group) {
     ws.onclose = function() {
         updateStatus(false);
         document.getElementById('offlineBar').classList.add('active');
+        
+        // Clear messages and show offline message
         const messagesContainer = document.getElementById('messages');
         messagesContainer.innerHTML = '<div class="offline-message">🔴 No internet connection. Messages are hidden.</div>';
+        // Clear messagesData to prevent old messages from being shown
         messagesData = {};
         
         if(document.getElementById('chatScreen').classList.contains('active')) {
@@ -1599,6 +1620,7 @@ function updateStatus(online) {
 
 function addSystemMessage(text) {
     let msgs = document.getElementById('messages');
+    // Remove offline message if present
     const offlineMsg = document.querySelector('.offline-message');
     if (offlineMsg) offlineMsg.remove();
     let div = document.createElement('div');
@@ -1610,6 +1632,7 @@ function addSystemMessage(text) {
 
 function addMessage(sender, text, isSent, timestamp, messageId, replyTo) {
     let msgs = document.getElementById('messages');
+    // Remove offline message if present
     const offlineMsg = document.querySelector('.offline-message');
     if (offlineMsg) offlineMsg.remove();
     let div = document.createElement('div');
@@ -1641,55 +1664,77 @@ function addMessage(sender, text, isSent, timestamp, messageId, replyTo) {
                     '<div class="message-bubble">' + escapeHtml(text) + '</div>' + 
                     '<div class="message-time">' + time + '</div>';
     
-    // Swipe to reply (mobile and desktop)
-    let touchStartX = 0, touchCurrentX = 0, touchStartY = 0;
+    // Swipe to reply on mobile
+    let touchStartX = 0;
+    let touchCurrentX = 0;
+    let touchStartY = 0;
+    
     div.addEventListener('touchstart', function(e) {
         touchStartX = e.touches[0].clientX;
         touchStartY = e.touches[0].clientY;
         touchCurrentX = touchStartX;
     }, {passive: true});
+    
     div.addEventListener('touchmove', function(e) {
         touchCurrentX = e.touches[0].clientX;
         let diffX = touchCurrentX - touchStartX;
         let diffY = e.touches[0].clientY - touchStartY;
+        
         if (diffX > 0 && diffX < 80 && Math.abs(diffY) < 30) {
             div.style.transform = 'translateX(' + diffX + 'px)';
         }
     }, {passive: true});
+    
     div.addEventListener('touchend', function(e) {
         let diffX = touchCurrentX - touchStartX;
         div.style.transform = '';
+        
         if (diffX >= 60) {
             startReply(messageId);
         }
-        touchStartX = 0; touchCurrentX = 0; touchStartY = 0;
+        touchStartX = 0;
+        touchCurrentX = 0;
+        touchStartY = 0;
     }, {passive: true});
     
-    let mouseStartX = 0, mouseCurrentX = 0, mouseStartY = 0, isMouseDown = false;
+    // Mouse swipe for desktop
+    let mouseStartX = 0;
+    let mouseCurrentX = 0;
+    let mouseStartY = 0;
+    let isMouseDown = false;
+    
     div.addEventListener('mousedown', function(e) {
         mouseStartX = e.clientX;
         mouseStartY = e.clientY;
         mouseCurrentX = mouseStartX;
         isMouseDown = true;
     });
+    
     div.addEventListener('mousemove', function(e) {
         if (!isMouseDown) return;
         mouseCurrentX = e.clientX;
         let diffX = mouseCurrentX - mouseStartX;
         let diffY = e.clientY - mouseStartY;
+        
         if (diffX > 0 && diffX < 80 && Math.abs(diffY) < 30) {
             div.style.transform = 'translateX(' + diffX + 'px)';
         }
     });
+    
     div.addEventListener('mouseup', function(e) {
         if (!isMouseDown) return;
         let diffX = mouseCurrentX - mouseStartX;
         div.style.transform = '';
+        
         if (diffX >= 60) {
             startReply(messageId);
         }
         isMouseDown = false;
+        mouseStartX = 0;
+        mouseCurrentX = 0;
+        mouseStartY = 0;
     });
+    
     div.addEventListener('mouseleave', function() {
         if (isMouseDown) {
             div.style.transform = '';
@@ -1703,8 +1748,10 @@ function addMessage(sender, text, isSent, timestamp, messageId, replyTo) {
 
 function startReply(messageId) {
     if (!messageId || !messagesData[messageId]) return;
+    
     replyingToMessageId = messageId;
     let original = messagesData[messageId];
+    
     document.getElementById('replyPreviewSender').textContent = original.sender;
     document.getElementById('replyPreviewText').textContent = original.text.substring(0, 60) + (original.text.length > 60 ? '...' : '');
     document.getElementById('replyPreview').style.display = 'flex';
@@ -1722,7 +1769,9 @@ function scrollToMessage(messageId) {
         if (msg.dataset.messageId == messageId) {
             msg.scrollIntoView({ behavior: 'smooth', block: 'center' });
             msg.style.border = '2px solid #ffaa00';
-            setTimeout(() => { msg.style.border = ''; }, 2000);
+            setTimeout(() => {
+                msg.style.border = '';
+            }, 2000);
             break;
         }
     }
@@ -1776,6 +1825,7 @@ async function decrypt(enc, pwd, salt) {
 document.getElementById('messageInput')?.addEventListener('input', function() {
     this.style.height = 'auto';
     this.style.height = Math.min(this.scrollHeight, 80) + 'px';
+    
     if(ws && ws.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify({type:'typing'}));
         clearTimeout(typingTimeout);
@@ -1786,21 +1836,29 @@ document.getElementById('messageInput')?.addEventListener('input', function() {
     }
 });
 
+// Enter key: new line (default behavior), Shift+Enter: also new line, but we want to send only via button.
+// We will NOT override Enter to send; it will naturally insert a newline.
+// The send button triggers sendMessage.
+
 async function sendMessage() {
     let input = document.getElementById('messageInput');
     let text = input.value.trim();
     if(!text || !ws || ws.readyState !== WebSocket.OPEN || !groupSalt) {
         return;
     }
+    
     try {
         let cipher = await encrypt(text, window.groupPassword, groupSalt);
         let timestamp = Date.now() / 1000;
+        
         let replyToId = replyingToMessageId;
+        
         let newId = Date.now();
         messagesData[newId] = {sender: window.chatUsername, text: text, timestamp: timestamp};
         addMessage(window.chatUsername, text, true, timestamp, newId, replyToId);
         input.value = '';
         input.style.height = 'auto';
+        
         ws.send(JSON.stringify({
             type:'message',
             ciphertext:cipher,
@@ -1808,6 +1866,7 @@ async function sendMessage() {
             timestamp: timestamp,
             reply_to: replyToId
         }));
+        
         cancelReply();
     } catch(e) {
         alert('Failed to send message');
@@ -1830,6 +1889,7 @@ function showError(msg) {
     document.getElementById('loginSuccess').style.display = 'none';
     setTimeout(() => err.style.display = 'none', 5000);
 }
+
 function showSuccess(msg) {
     let success = document.getElementById('loginSuccess');
     success.textContent = msg;
@@ -1837,12 +1897,14 @@ function showSuccess(msg) {
     document.getElementById('loginError').style.display = 'none';
     setTimeout(() => success.style.display = 'none', 5000);
 }
+
 function showGatekeeperError(msg) {
     let err = document.getElementById('gatekeeperError');
     err.textContent = msg;
     err.style.display = 'block';
     setTimeout(() => err.style.display = 'none', 5000);
 }
+
 function showSetupError(msg) {
     let err = document.getElementById('setupError');
     err.textContent = msg;
@@ -1850,6 +1912,7 @@ function showSetupError(msg) {
     document.getElementById('setupSuccess').style.display = 'none';
     setTimeout(() => err.style.display = 'none', 5000);
 }
+
 function showSetupSuccess(msg) {
     let success = document.getElementById('setupSuccess');
     success.textContent = msg;
@@ -1861,7 +1924,11 @@ function showSetupSuccess(msg) {
 async function logout() {
     if(ws) ws.close();
     ws = null;
-    try { await fetch('/logout', {method: 'POST'}); } catch(e) {}
+    
+    try {
+        await fetch('/logout', {method: 'POST'});
+    } catch(e) {}
+    
     document.getElementById('chatScreen').classList.remove('active');
     document.getElementById('adminPanel').classList.remove('active');
     document.getElementById('gatekeeperScreen').classList.remove('active');
@@ -1892,6 +1959,7 @@ async function loadAdminData() {
     try {
         const response = await fetch('/admin/data');
         const data = await response.json();
+        
         document.getElementById('statUsers').textContent = data.users.length;
         document.getElementById('statMessages').textContent = data.messages_count;
         document.getElementById('statGroups').textContent = data.groups.length;
@@ -1914,9 +1982,9 @@ async function loadAdminData() {
         let groupsHtml = '';
         data.groups.forEach(g => {
             groupsHtml += `<tr>
-                <td>${escapeHtml(g.group_name)}</td>
+                <td>${escapeHtml(g.name)}</td>
                 <td>${escapeHtml(g.created_by)}</td>
-                <td><button class="action-btn" onclick="deleteGroup('${g.group_name}')">Delete</button></td>
+                <td><button class="action-btn" onclick="deleteGroup('${g.name}')">Delete</button></td>
             </tr>`;
         });
         document.getElementById('groupsTableBody').innerHTML = groupsHtml;
@@ -1944,6 +2012,7 @@ async function loadAdminData() {
             </tr>`;
         });
         document.getElementById('logsTableBody').innerHTML = logsHtml;
+        
     } catch(e) {
         console.error('Failed to load admin data:', e);
     }
@@ -1954,11 +2023,13 @@ async function createUser() {
     const password = document.getElementById('newPassword').value.trim();
     const group_name = document.getElementById('newGroupName').value.trim();
     const group_password = document.getElementById('newGroupPassword').value.trim();
+    
     if(!username || !password || !group_name || !group_password) {
         alert('Please fill all fields');
         hideLoading();
         return;
     }
+    
     try {
         const response = await fetch('/admin/create_user', {
             method: 'POST',
@@ -2055,7 +2126,6 @@ console.log('💬 Reply feature: Swipe any message left to right to reply');
 console.log('📱 PWA: Click "Install ABAVANDIMWE App" to install as Android app');
 console.log('⚠️ IMPORTANT: All users in a group must use the SAME group password');
 console.log('📝 Enter key inserts new line. Use Send button to send.');
-console.log('🔍 Check browser console for debug logs');
 </script>
 </body>
 </html>'''
@@ -2067,9 +2137,14 @@ async def root():
 
 @app.post("/login")
 async def login(request: Request, login_data: LoginRequest):
+    # Check rate limit
     allowed, message = check_login_rate_limit(login_data.username)
     if not allowed:
-        return JSONResponse(status_code=429, content={"success": False, "message": message})
+        return JSONResponse(
+            status_code=429,
+            content={"success": False, "message": message}
+        )
+    
     conn = await get_db_connection()
     try:
         row = await conn.fetchrow(
@@ -2078,27 +2153,42 @@ async def login(request: Request, login_data: LoginRequest):
         )
     finally:
         await return_db_connection(conn)
+    
     if not row:
         record_failed_login(login_data.username)
-        return JSONResponse(status_code=401, content={"success": False, "message": "Invalid credentials"})
+        return JSONResponse(
+            status_code=401,
+            content={"success": False, "message": "Invalid credentials"}
+        )
+    
     stored_hash = row['password_hash']
     role = row['role']
     assigned_group = row['assigned_group']
     display_name = row['display_name']
     locked_until = row['locked_until']
+    
     if locked_until and locked_until > time.time():
-        return JSONResponse(status_code=429, content={"success": False, "message": f"Account locked. Try again in {int((locked_until - time.time()) / 60)} minutes."})
+        return JSONResponse(
+            status_code=429,
+            content={"success": False, "message": f"Account locked. Try again in {int((locked_until - time.time()) / 60)} minutes."}
+        )
+    
     if verify_password_argon2(login_data.password, stored_hash):
+        # Reset attempts on successful login
         reset_login_attempts(login_data.username)
+        
+        # Get the actual group password
         group_password = None
         if assigned_group:
             group_password = await get_group_password(assigned_group)
             if not group_password:
                 group_password = login_data.password
+        
         session_id = create_session(login_data.username, role, assigned_group, group_password)
+        
         response = JSONResponse({
-            "success": True,
-            "username": login_data.username,
+            "success": True, 
+            "username": login_data.username, 
             "role": role,
             "display_name": display_name
         })
@@ -2114,27 +2204,55 @@ async def login(request: Request, login_data: LoginRequest):
         return response
     else:
         record_failed_login(login_data.username)
-        return JSONResponse(status_code=401, content={"success": False, "message": "Invalid credentials"})
+        return JSONResponse(
+            status_code=401,
+            content={"success": False, "message": "Invalid credentials"}
+        )
 
 @app.post("/gatekeeper")
 async def gatekeeper(login_data: LoginRequest):
     allowed, message = check_login_rate_limit(login_data.username)
     if not allowed:
-        return JSONResponse(status_code=429, content={"success": False, "message": message})
+        return JSONResponse(
+            status_code=429,
+            content={"success": False, "message": message}
+        )
+    
     user = await authenticate_user(login_data.username, login_data.password)
     if not user:
         record_failed_login(login_data.username)
-        return JSONResponse(status_code=401, content={"success": False, "message": "Invalid credentials"})
+        return JSONResponse(
+            status_code=401,
+            content={"success": False, "message": "Invalid credentials"}
+        )
+    
     if "error" in user:
-        return JSONResponse(status_code=429, content={"success": False, "message": user["error"]})
+        return JSONResponse(
+            status_code=429,
+            content={"success": False, "message": user["error"]}
+        )
+    
     if user["role"] == "admin":
-        return JSONResponse(status_code=403, content={"success": False, "message": "Admin cannot access chat"})
+        return JSONResponse(
+            status_code=403,
+            content={"success": False, "message": "Admin cannot access chat"}
+        )
+    
     assigned_group = user["assigned_group"]
     if not assigned_group:
-        return JSONResponse(status_code=404, content={"success": False, "message": "No group assigned to this user"})
+        return JSONResponse(
+            status_code=404,
+            content={"success": False, "message": "No group assigned to this user"}
+        )
+    
+    # Get the actual group password from the groups table
     group_password = await get_group_password(assigned_group)
+    
+    # If no group password stored, use the user's login password
     if not group_password:
         group_password = login_data.password
+        print(f"[!] No group password found for '{assigned_group}', using login password")
+    
     return {
         "success": True,
         "username": login_data.username,
@@ -2148,6 +2266,7 @@ async def save_display_name(data: SaveDisplayNameRequest, request: Request):
     session = await get_session_from_cookie(request)
     if session["username"] != data.username:
         raise HTTPException(status_code=403, detail="Cannot modify other users")
+    
     await save_user_display_name(data.username, data.display_name)
     return {"success": True}
 
@@ -2159,6 +2278,7 @@ async def admin_data(request: Request):
     groups = await get_all_groups()
     logs = await get_admin_logs()
     online_users = await get_online_users("Main")
+    
     return {
         "users": users,
         "messages": messages,
@@ -2219,6 +2339,7 @@ async def health():
 @app.websocket("/ws")
 async def ws_endpoint(websocket: WebSocket):
     await websocket.accept()
+    
     cookie_header = websocket.headers.get("cookie", "")
     session_id = None
     for item in cookie_header.split(";"):
@@ -2226,33 +2347,46 @@ async def ws_endpoint(websocket: WebSocket):
         if item.startswith("abavandimwe_session="):
             session_id = item.split("=")[1]
             break
+    
     if not session_id:
         await websocket.send_json({'type': 'error', 'message': 'No session found'})
         await websocket.close()
         return
+    
     session = get_session(session_id)
     if not session:
         await websocket.send_json({'type': 'error', 'message': 'Invalid session'})
         await websocket.close()
         return
+    
     username = session["username"]
     assigned_group = session["assigned_group"]
+    
     if not assigned_group:
         await websocket.send_json({'type': 'error', 'message': 'No group assigned'})
         await websocket.close()
         return
+    
     group_name = assigned_group
     group_info = await get_group_info(group_name)
+    
     if not group_info:
         await websocket.send_json({'type': 'error', 'message': 'Group not found'})
         await websocket.close()
         return
+    
     group_salt = group_info['salt']
+    
     await manager.add(group_name, username, websocket)
     await set_user_status(username, 'online', group_name)
+    
+    # Send users list
     online = await get_online_users(group_name)
     await websocket.send_json({'type': 'users', 'users': online})
+    
+    # Send message history with reply_to
     messages = await get_messages(group_name)
+    
     history_messages = []
     for msg in messages:
         history_messages.append({
@@ -2263,22 +2397,32 @@ async def ws_endpoint(websocket: WebSocket):
             'timestamp': msg['created_at'],
             'reply_to': msg.get('reply_to')
         })
-    await websocket.send_json({'type': 'history', 'messages': history_messages})
+    
+    await websocket.send_json({
+        'type': 'history',
+        'messages': history_messages
+    })
+    
+    # Broadcast user joined
     await manager.broadcast(group_name, {'type': 'user_joined', 'user': username}, exclude=username)
     await websocket.send_json({'type': 'ready', 'salt': group_salt, 'group': group_name})
     print(f"[+] {username} joined {group_name}")
+    
     try:
         while True:
             data = await websocket.receive_json()
             msg_type = data.get('type')
+            
             if msg_type == 'message':
                 cipher = data.get('ciphertext')
                 salt = data.get('salt')
                 reply_to = data.get('reply_to')
+                
                 if username and group_name and check_message_rate_limit(username):
                     result = await save_message(cipher, group_name, username, salt, reply_to)
                     message_id = result['id']
                     created_at = result['created_at']
+                    
                     await manager.broadcast(group_name, {
                         'type': 'message',
                         'message_id': message_id,
@@ -2288,19 +2432,24 @@ async def ws_endpoint(websocket: WebSocket):
                         'timestamp': created_at,
                         'reply_to': reply_to
                     }, exclude=username)
+            
             elif msg_type == 'typing':
                 if username and group_name:
                     await manager.broadcast(group_name, {'type': 'typing', 'user': username}, exclude=username)
+            
             elif msg_type == 'stop_typing':
                 if username and group_name:
                     await manager.broadcast(group_name, {'type': 'stop_typing', 'user': username}, exclude=username)
+            
             elif msg_type == 'ping':
                 await set_user_status(username, 'online', group_name)
                 await websocket.send_json({'type': 'pong'})
+    
     except WebSocketDisconnect:
         pass
     except Exception as e:
         print(f"[!] WebSocket error: {e}")
+    
     finally:
         if username and group_name:
             manager.remove(group_name, username)
@@ -2337,30 +2486,30 @@ if __name__ == "__main__":
     print(f"[✓] Database: PostgreSQL (Neon) with asyncpg")
     print(f"[✓] Messages expire after 24 hours")
     print(f"[✓] Open: http://localhost:{port}")
-    print("\n📱 PWA Features:")
-    print("   ✅ One-click Install as Android App")
-    print("   ✅ No Chrome browser UI after install")
-    print("   ✅ Offline support")
-    print("   ✅ Custom app icon")
-    print("   ✅ Loading animation on all button clicks")
-    print("\n🔐 Group Encryption:")
-    print("   ✅ All users in same group must use SAME group password")
-    print("   ✅ Group password stored for consistent decryption")
-    print("   ✅ Messages encrypted with group password")
-    print("\n📋 Features:")
-    print("   ✅ Multiline message input (max 80px height)")
-    print("   ✅ Reply to messages (swipe left to right)")
-    print("   ✅ Reply previews with original message")
-    print("   ✅ Click reply preview to scroll to original")
-    print("   ✅ Enter: New line, Shift+Enter: New line, Send button to send")
-    print("   ✅ Offline status bar with reconnect button")
-    print("   ✅ Send button with ➥ icon")
-    print("   ✅ Messages hidden when offline")
-    print("   ✅ Group deletion deletes users and messages, logged in admin logs")
-    print("\n🔒 Security:")
-    print("   ✅ Argon2id password hashing")
-    print("   ✅ Secure HTTP-only session cookies")
-    print("   ✅ Rate limiting on login and message sending")
-    print("   ✅ CORS restricted to allowed origins")
-    print("   ✅ All endpoints protected by session checks")
+    print(f"\n📱 PWA Features:")
+    print(f"   ✅ One-click Install as Android App")
+    print(f"   ✅ No Chrome browser UI after install")
+    print(f"   ✅ Offline support")
+    print(f"   ✅ Custom app icon")
+    print(f"   ✅ Loading animation on all button clicks")
+    print(f"\n🔐 Group Encryption:")
+    print(f"   ✅ All users in same group must use SAME group password")
+    print(f"   ✅ Group password stored for consistent decryption")
+    print(f"   ✅ Messages encrypted with group password")
+    print(f"\n📋 Features:")
+    print(f"   ✅ Multiline message input (max 80px height)")
+    print(f"   ✅ Reply to messages (swipe left to right)")
+    print(f"   ✅ Reply previews with original message")
+    print(f"   ✅ Click reply preview to scroll to original")
+    print(f"   ✅ Enter: New line, Shift+Enter: New line, Send button to send")
+    print(f"   ✅ Offline status bar with reconnect button")
+    print(f"   ✅ Send button with ➥ icon")
+    print(f"   ✅ Messages hidden when offline")
+    print(f"   ✅ Group deletion deletes users and messages, logged in admin logs")
+    print(f"\n🔒 Security:")
+    print(f"   ✅ Argon2id password hashing")
+    print(f"   ✅ Secure HTTP-only session cookies")
+    print(f"   ✅ Rate limiting on login and message sending")
+    print(f"   ✅ CORS restricted to allowed origins")
+    print(f"   ✅ All endpoints protected by session checks")
     uvicorn.run(app, host="0.0.0.0", port=port)
