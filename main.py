@@ -1327,23 +1327,43 @@ document.addEventListener('DOMContentLoaded', function() {
     // Fix #2: Install button click listener
     document.getElementById('installBtn').addEventListener('click', installApp);
 
-    // Offline improvement: listen to online/offline events
-    window.addEventListener('offline', function() {
-        clearMessagesOffline();
-    });
-    window.addEventListener('online', function() {
-        document.getElementById('offlineBar').classList.remove('active');
-    });
-
-    // NEW: When the app becomes visible (e.g., tapping icon to bring to foreground),
-    // check if we're offline and clear messages immediately
-    document.addEventListener('visibilitychange', function() {
+    // ----- OFFLINE / ONLINE HANDLING (IMPROVED) -----
+    function handleVisibilityChange() {
         if (document.visibilityState === 'visible') {
-            // If we are in the chat screen and offline, clear messages
-            if (document.getElementById('chatScreen').classList.contains('active') && !navigator.onLine) {
-                clearMessagesOffline();
+            // If we are in the chat screen
+            if (document.getElementById('chatScreen').classList.contains('active')) {
+                if (!navigator.onLine) {
+                    // Offline -> clear messages and show offline
+                    clearMessagesOffline();
+                } else {
+                    // Online -> if WebSocket is not open, reconnect
+                    if (!ws || ws.readyState !== WebSocket.OPEN) {
+                        if (window.chatUsername && window.chatGroup) {
+                            connectToChat(window.chatUsername, window.chatGroup);
+                        }
+                    }
+                }
             }
         }
+    }
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    // When the device goes online, auto‑reconnect if in chat and ws not open
+    window.addEventListener('online', function() {
+        document.getElementById('offlineBar').classList.remove('active');
+        if (document.getElementById('chatScreen').classList.contains('active')) {
+            if (!ws || ws.readyState !== WebSocket.OPEN) {
+                if (window.chatUsername && window.chatGroup) {
+                    connectToChat(window.chatUsername, window.chatGroup);
+                }
+            }
+        }
+    });
+
+    // When the device goes offline, clear messages immediately
+    window.addEventListener('offline', function() {
+        clearMessagesOffline();
     });
 });
 
@@ -1507,7 +1527,7 @@ async function enterChat() {
     connectToChat(displayName, groupName);
 }
 
-// ========== CONNECT TO CHAT – UPDATED FOR OFFLINE ==========
+// ========== CONNECT TO CHAT ==========
 function connectToChat(username, group) {
     // Clear old messages immediately
     messagesData = {};
