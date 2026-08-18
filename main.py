@@ -778,12 +778,15 @@ HTML = '''<!DOCTYPE html>
         .reply-preview .reply-cancel{color:#ff4444;cursor:pointer;font-weight:bold;padding:0 8px;}
         .reply-preview .reply-cancel:hover{color:#ff6666;}
         
-        /* ===== INPUT STABILITY - PURE CSS (no JS) ===== */
+        /* ===== DEFINITIVE FIX – FIXED ROW HEIGHT ===== */
         .input-row {
             display: flex;
             gap: 10px;
             align-items: flex-end;      /* button stays at bottom */
-            max-height: 80px;           /* row never grows beyond 80px */
+            height: 80px;               /* FIXED – never changes */
+            min-height: 80px;
+            max-height: 80px;
+            overflow: hidden;           /* contain everything */
         }
         .input-row textarea {
             flex: 1;
@@ -795,11 +798,10 @@ HTML = '''<!DOCTYPE html>
             color: #0f0;
             font-family: monospace;
             font-size: 14px;
-            resize: none;               /* prevent manual resize */
-            height: auto;               /* grows with content */
-            min-height: 50px;
-            max-height: 100%;           /* never exceed row height */
-            overflow-y: auto;           /* scroll when content exceeds max-height */
+            resize: none;               /* no manual resize */
+            height: 100%;               /* fill the row */
+            max-height: 100%;
+            overflow-y: auto;           /* scroll when content overflows */
             line-height: 1.5;
             box-sizing: border-box;     /* padding included in height */
         }
@@ -814,8 +816,8 @@ HTML = '''<!DOCTYPE html>
         .input-row button {
             width: 60px;
             min-width: 60px;
-            height: 50px;               /* fixed height */
-            flex-shrink: 0;             /* never shrink */
+            height: 50px;               /* fixed – stays 50px */
+            flex-shrink: 0;
             margin: 0;
             padding: 0;
             background: transparent;
@@ -828,8 +830,8 @@ HTML = '''<!DOCTYPE html>
             align-items: center;
             justify-content: center;
             transition: all 0.3s;
+            align-self: flex-end;       /* anchored to bottom */
             box-sizing: border-box;
-            align-self: flex-end;       /* stay at bottom */
         }
         .input-row button:hover {
             background: #0f0;
@@ -2135,9 +2137,9 @@ async function sendMessage() {
         messagesData[newId] = {sender: window.chatUsername, text: text, timestamp: timestamp};
         addMessage(window.chatUsername, text, true, timestamp, newId, replyToId);
         input.value = '';
-        // No height reset needed – CSS will handle it automatically.
-        // The textarea will shrink because its height is auto.
-        // We can trigger input event to stop typing timer if needed.
+        // No height reset needed – CSS handles it.
+        // The textarea will shrink because its height is 100% of the fixed row.
+        // However, after clearing content, it will still be 100% of the row, which is fine.
         
         ws.send(JSON.stringify({
             type:'message',
