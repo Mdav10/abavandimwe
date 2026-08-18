@@ -1323,6 +1323,9 @@ document.addEventListener('DOMContentLoaded', function() {
         this.style.height = 'auto';
         this.style.height = Math.min(this.scrollHeight, 80) + 'px';
     });
+    
+    // ========== FIX #2: Add click listener for Install button ==========
+    document.getElementById('installBtn').addEventListener('click', installApp);
 });
 
 // ========== LOGIN ==========
@@ -1836,7 +1839,7 @@ document.getElementById('messageInput')?.addEventListener('input', function() {
     }
 });
 
-// Enter key: new line (default behavior), Shift+Enter: also new line, but we want to send only via button.
+// Enter key: new line (default behavior), Shift+Enter: new line, but we want to send only via button.
 // We will NOT override Enter to send; it will naturally insert a newline.
 // The send button triggers sendMessage.
 
@@ -1979,12 +1982,13 @@ async function loadAdminData() {
         });
         document.getElementById('usersTableBody').innerHTML = usersHtml;
         
+        // ========== FIX #1: Use group_name instead of name ==========
         let groupsHtml = '';
         data.groups.forEach(g => {
             groupsHtml += `<tr>
-                <td>${escapeHtml(g.name)}</td>
+                <td>${escapeHtml(g.group_name)}</td>
                 <td>${escapeHtml(g.created_by)}</td>
-                <td><button class="action-btn" onclick="deleteGroup('${g.name}')">Delete</button></td>
+                <td><button class="action-btn" onclick="deleteGroup('${g.group_name}')">Delete</button></td>
             </tr>`;
         });
         document.getElementById('groupsTableBody').innerHTML = groupsHtml;
