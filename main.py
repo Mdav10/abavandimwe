@@ -1324,8 +1324,23 @@ document.addEventListener('DOMContentLoaded', function() {
         this.style.height = Math.min(this.scrollHeight, 80) + 'px';
     });
     
-    // ========== FIX #2: Add click listener for Install button ==========
+    // Fix #2: Install button click listener
     document.getElementById('installBtn').addEventListener('click', installApp);
+
+    // Offline improvement: listen to online/offline events
+    window.addEventListener('offline', function() {
+        const container = document.getElementById('messages');
+        container.innerHTML = '<div class="offline-message">🔴 No internet connection. Messages are hidden.</div>';
+        messagesData = {};
+        document.getElementById('offlineBar').classList.add('active');
+        updateStatus(false);
+        if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.close();
+        }
+    });
+    window.addEventListener('online', function() {
+        document.getElementById('offlineBar').classList.remove('active');
+    });
 });
 
 // ========== LOGIN ==========
@@ -1476,8 +1491,22 @@ async function enterChat() {
     connectToChat(displayName, groupName);
 }
 
-// ========== CONNECT TO CHAT ==========
+// ========== CONNECT TO CHAT – UPDATED FOR OFFLINE ==========
 function connectToChat(username, group) {
+    // Clear old messages immediately
+    messagesData = {};
+    const container = document.getElementById('messages');
+    container.innerHTML = '<div style="text-align:center;color:#666;padding:40px 0;">Connecting...</div>';
+    document.getElementById('offlineBar').classList.remove('active');
+    
+    // If offline, show offline message and abort
+    if (!navigator.onLine) {
+        container.innerHTML = '<div class="offline-message">🔴 No internet connection. Messages are hidden.</div>';
+        document.getElementById('offlineBar').classList.add('active');
+        updateStatus(false);
+        return;
+    }
+
     document.getElementById('groupTitle').innerHTML = '# ' + group;
     
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -1570,11 +1599,9 @@ function connectToChat(username, group) {
     ws.onclose = function() {
         updateStatus(false);
         document.getElementById('offlineBar').classList.add('active');
-        
         // Clear messages and show offline message
         const messagesContainer = document.getElementById('messages');
         messagesContainer.innerHTML = '<div class="offline-message">🔴 No internet connection. Messages are hidden.</div>';
-        // Clear messagesData to prevent old messages from being shown
         messagesData = {};
         
         if(document.getElementById('chatScreen').classList.contains('active')) {
@@ -1593,6 +1620,11 @@ function reconnectManually() {
     if (ws) {
         ws.close();
     }
+    // Clear messages before retry
+    messagesData = {};
+    const container = document.getElementById('messages');
+    container.innerHTML = '<div style="text-align:center;color:#666;padding:40px 0;">Connecting...</div>';
+    document.getElementById('offlineBar').classList.remove('active');
     setTimeout(() => {
         connectToChat(window.chatUsername, window.chatGroup);
     }, 500);
@@ -1982,7 +2014,7 @@ async function loadAdminData() {
         });
         document.getElementById('usersTableBody').innerHTML = usersHtml;
         
-        // ========== FIX #1: Use group_name instead of name ==========
+        // Fix #1: Use group_name instead of name
         let groupsHtml = '';
         data.groups.forEach(g => {
             groupsHtml += `<tr>
