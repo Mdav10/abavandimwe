@@ -728,10 +728,10 @@ HTML = '''<!DOCTYPE html>
         .success-message{color:#0f0;font-size:12px;text-align:center;margin-top:12px;display:none;}
         .login-footer{text-align:center;margin-top:20px;font-size:9px;color:#333;border-top:1px solid #1a1a2e;padding-top:16px;}
         
-        .chat-container{display:none;width:100%;height:100%;flex-direction:column;background:#0a0a0f;position:fixed;top:0;left:0;right:0;bottom:0;}
+        .chat-container{display:none;width:100%;height:100%;flex-direction:column;background:#0a0a0f;position:fixed;top:0;left:0;right:0;bottom:0;overflow:hidden;}
         .chat-container.active{display:flex;}
         
-        .chat-header{padding:12px 16px;background:#050508;border-bottom:1px solid #0f0;display:flex;justify-content:space-between;align-items:center;gap:8px;}
+        .chat-header{padding:12px 16px;background:#050508;border-bottom:1px solid #0f0;display:flex;justify-content:space-between;align-items:center;gap:8px;flex-shrink:0;}
         .chat-header-left{display:flex;align-items:center;gap:10px;}
         .chat-header h2{font-size:16px;flex:1;text-align:center;overflow:hidden;text-overflow:ellipsis;}
         .online-badge{font-size:10px;padding:3px 10px;border:1px solid #0f0;border-radius:20px;background:rgba(0,255,0,0.05);}
@@ -739,11 +739,11 @@ HTML = '''<!DOCTYPE html>
         .logout-btn:hover{border-color:#ff0041;color:#ff0041;}
         .logout-btn:active{background:#ff0041;border-color:#ff0041;color:white;}
         
-        .main-content{flex:1;display:flex;overflow:hidden;position:relative;}
-        .sidebar{width:260px;background:#050508;border-right:1px solid #0f0;display:flex;flex-direction:column;flex-shrink:0;}
-        .sidebar-header{padding:16px;border-bottom:1px solid #0f0;}
+        .main-content{flex:1;display:flex;overflow:hidden;position:relative;min-height:0;}
+        .sidebar{width:260px;background:#050508;border-right:1px solid #0f0;display:flex;flex-direction:column;flex-shrink:0;overflow:hidden;}
+        .sidebar-header{padding:16px;border-bottom:1px solid #0f0;flex-shrink:0;}
         .sidebar-header h3{font-size:14px;}
-        .users-list{flex:1;padding:12px;overflow-y:auto;}
+        .users-list{flex:1;padding:12px;overflow-y:auto;min-height:0;}
         .user-item{padding:10px 12px;margin:6px 0;border:1px solid #0f0;border-radius:10px;display:flex;align-items:center;gap:8px;animation:fadeIn 0.3s ease;}
         .user-item::before{content:"●";color:#0f0;font-size:10px;animation:pulse 2s infinite;}
         @keyframes pulse{0%,100%{opacity:1;}50%{opacity:0.5;}}
@@ -757,9 +757,9 @@ HTML = '''<!DOCTYPE html>
         }
         @media (min-width:769px){.menu-btn,.overlay{display:none;}}
         
-        .chat-area{flex:1;display:flex;flex-direction:column;}
-        .messages-container{flex:1;padding:16px;overflow-y:auto;display:flex;flex-direction:column;gap:12px;}
-        .message{max-width:85%;display:flex;flex-direction:column;animation:fadeIn 0.2s ease;position:relative;padding:8px 0;transition:transform 0.2s ease;}
+        .chat-area{flex:1;display:flex;flex-direction:column;overflow:hidden;min-height:0;}
+        .messages-container{flex:1;padding:16px;overflow-y:auto;display:flex;flex-direction:column;gap:12px;min-height:0;}
+        .message{max-width:85%;display:flex;flex-direction:column;animation:fadeIn 0.2s ease;position:relative;padding:8px 0;transition:transform 0.2s ease;flex-shrink:0;}
         .message.sent{align-self:flex-end;}
         .message.received{align-self:flex-start;}
         .message-bubble{padding:10px 14px;border-radius:18px;font-size:14px;word-wrap:break-word;position:relative;}
@@ -770,15 +770,14 @@ HTML = '''<!DOCTYPE html>
         .message-reply-preview{font-size:11px;color:#ffaa00;margin-bottom:6px;padding:6px 10px;background:rgba(255,170,0,0.08);border-left:3px solid #ffaa00;border-radius:4px;opacity:0.8;cursor:pointer;}
         .message-reply-preview .reply-sender{color:#ffaa00;font-weight:bold;}
         .message-reply-preview .reply-text{color:#888;}
-        .system-message{text-align:center;font-size:11px;color:#ffaa00;margin:8px 0;font-style:italic;animation:fadeIn 0.3s ease;}
-        .typing-indicator{padding:8px 16px;color:#0f0;font-style:italic;font-size:11px;min-height:36px;}
+        .system-message{text-align:center;font-size:11px;color:#ffaa00;margin:8px 0;font-style:italic;animation:fadeIn 0.3s ease;flex-shrink:0;}
+        .typing-indicator{padding:8px 16px;color:#0f0;font-style:italic;font-size:11px;min-height:36px;flex-shrink:0;}
         
-        .input-area{padding:12px 16px;background:#050508;border-top:1px solid #0f0;display:flex;flex-direction:column;gap:8px;}
+        .input-area{padding:12px 16px;background:#050508;border-top:1px solid #0f0;display:flex;flex-direction:column;gap:8px;flex-shrink:0;}
         .reply-preview{display:none;padding:8px 12px;background:rgba(255,170,0,0.1);border-left:3px solid #ffaa00;border-radius:6px;font-size:12px;color:#ffaa00;align-items:center;justify-content:space-between;}
         .reply-preview .reply-cancel{color:#ff4444;cursor:pointer;font-weight:bold;padding:0 8px;}
         .reply-preview .reply-cancel:hover{color:#ff6666;}
         
-        /* ===== ORIGINAL WORKING INPUT STABILITY (FROM YOUR PART 3 & 4) ===== */
         .input-row {
             display: flex;
             gap: 10px;
@@ -841,7 +840,7 @@ HTML = '''<!DOCTYPE html>
             line-height: 1;
         }
         
-        .footer{text-align:center;padding:6px;font-size:8px;color:#333;border-top:1px solid #0f0;}
+        .footer{text-align:center;padding:6px;font-size:8px;color:#333;border-top:1px solid #0f0;flex-shrink:0;}
         
         ::-webkit-scrollbar{width:3px;}
         ::-webkit-scrollbar-track{background:#1a1a2e;}
@@ -1027,6 +1026,7 @@ HTML = '''<!DOCTYPE html>
             position: sticky;
             top: 0;
             z-index: 5;
+            flex-shrink: 0;
         }
         .offline-bar.active {
             display: block;
