@@ -762,6 +762,7 @@ HTML = '''<!DOCTYPE html>
         .message{max-width:85%;display:flex;flex-direction:column;animation:fadeIn 0.2s ease;position:relative;padding:8px 0;transition:transform 0.2s ease;flex-shrink:0;}
         .message.sent{align-self:flex-end;}
         .message.received{align-self:flex-start;}
+        /* ===== FIX: Message wrapping ===== */
         .message-bubble{padding:10px 14px;border-radius:18px;font-size:14px;word-wrap:break-word;overflow-wrap:break-word;word-break:break-word;max-width:100%;position:relative;}
         .message.sent .message-bubble{background:#0f0;color:#000;border-bottom-right-radius:4px;}
         .message.received .message-bubble{background:#1a1a2e;border:1px solid #0f0;border-bottom-left-radius:4px;}
@@ -870,8 +871,6 @@ HTML = '''<!DOCTYPE html>
         .offline-overlay .retry-btn{background:transparent;border:2px solid #0f0;color:#0f0;padding:14px 40px;border-radius:12px;font-size:16px;font-weight:bold;cursor:pointer;transition:all 0.3s;margin-top:10px;}
         .offline-overlay .retry-btn:hover{background:#0f0;color:#000;}
         .offline-overlay .retry-btn:active{transform:scale(0.95);}
-        
-        /* REMOVED .connection-status and related styles because we have online badge at top */
     </style>
 </head>
 <body>
@@ -1078,7 +1077,7 @@ HTML = '''<!DOCTYPE html>
             <div class="footer">🔐 End-to-End Encrypted | Messages self-destruct after 24 hours</div>
         </div>
     </div>
-    <!-- ===== REMOVED connection-status div ===== -->
+    <!-- Removed connection-status div -->
 </div>
 
 <!-- Install App Button -->
@@ -1145,7 +1144,7 @@ window.addEventListener('beforeinstallprompt', (e) => {
     console.log('📱 App can be installed');
 });
 
-// ===== FIX #2: Install button click listener =====
+// Install button click listener
 document.getElementById('installBtn').addEventListener('click', function() {
     if (deferredPrompt) {
         deferredPrompt.prompt();
@@ -1212,6 +1211,7 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     });
     
+    // Auto-resize textarea capped at 80px
     document.getElementById('messageInput').addEventListener('input', function() {
         this.style.height = 'auto';
         this.style.height = Math.min(this.scrollHeight, 80) + 'px';
@@ -1810,7 +1810,7 @@ async function loadAdminData() {
         });
         document.getElementById('usersTableBody').innerHTML = usersHtml;
         
-        // ===== FIX #1: Use group_name instead of name =====
+        // Fix: Use group_name instead of name
         let groupsHtml = '';
         data.groups.forEach(g => {
             groupsHtml += `<tr>
