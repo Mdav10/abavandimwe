@@ -1329,19 +1329,35 @@ document.addEventListener('DOMContentLoaded', function() {
 
     // Offline improvement: listen to online/offline events
     window.addEventListener('offline', function() {
-        const container = document.getElementById('messages');
-        container.innerHTML = '<div class="offline-message">🔴 No internet connection. Messages are hidden.</div>';
-        messagesData = {};
-        document.getElementById('offlineBar').classList.add('active');
-        updateStatus(false);
-        if (ws && ws.readyState === WebSocket.OPEN) {
-            ws.close();
-        }
+        clearMessagesOffline();
     });
     window.addEventListener('online', function() {
         document.getElementById('offlineBar').classList.remove('active');
     });
+
+    // NEW: When the app becomes visible (e.g., tapping icon to bring to foreground),
+    // check if we're offline and clear messages immediately
+    document.addEventListener('visibilitychange', function() {
+        if (document.visibilityState === 'visible') {
+            // If we are in the chat screen and offline, clear messages
+            if (document.getElementById('chatScreen').classList.contains('active') && !navigator.onLine) {
+                clearMessagesOffline();
+            }
+        }
+    });
 });
+
+// Helper to clear messages and show offline state
+function clearMessagesOffline() {
+    const container = document.getElementById('messages');
+    container.innerHTML = '<div class="offline-message">🔴 No internet connection. Messages are hidden.</div>';
+    messagesData = {};
+    document.getElementById('offlineBar').classList.add('active');
+    updateStatus(false);
+    if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.close();
+    }
+}
 
 // ========== LOGIN ==========
 async function login() {
