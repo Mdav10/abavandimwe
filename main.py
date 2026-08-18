@@ -957,7 +957,7 @@ HTML = '''<!DOCTYPE html>
             border-left: 2px solid #ffaa00;
         }
         
-        /* Offline Status Bar */
+        /* Offline Status Bar (for when in chat and network drops) */
         .offline-bar {
             display: none;
             background: #ff0041;
@@ -990,6 +990,60 @@ HTML = '''<!DOCTYPE html>
             padding: 20px;
             font-size: 14px;
         }
+        
+        /* Full‑screen offline overlay */
+        .offline-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: #0a0a0f;
+            z-index: 99999;
+            display: none;
+            justify-content: center;
+            align-items: center;
+            flex-direction: column;
+            gap: 20px;
+            padding: 30px;
+        }
+        .offline-overlay.active {
+            display: flex;
+        }
+        .offline-overlay .offline-icon {
+            font-size: 60px;
+            margin-bottom: 10px;
+        }
+        .offline-overlay h2 {
+            color: #ff4444;
+            font-size: 24px;
+            text-align: center;
+        }
+        .offline-overlay p {
+            color: #888;
+            font-size: 14px;
+            text-align: center;
+            max-width: 300px;
+        }
+        .offline-overlay .retry-btn {
+            background: transparent;
+            border: 2px solid #0f0;
+            color: #0f0;
+            padding: 14px 40px;
+            border-radius: 12px;
+            font-size: 16px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: all 0.3s;
+            margin-top: 10px;
+        }
+        .offline-overlay .retry-btn:hover {
+            background: #0f0;
+            color: #000;
+        }
+        .offline-overlay .retry-btn:active {
+            transform: scale(0.95);
+        }
     </style>
 </head>
 <body>
@@ -1006,6 +1060,14 @@ HTML = '''<!DOCTYPE html>
             <span>.</span><span>.</span><span>.</span>
         </span>
     </div>
+</div>
+
+<!-- Full‑screen Offline Overlay -->
+<div class="offline-overlay" id="offlineOverlay">
+    <div class="offline-icon">📶</div>
+    <h2>No Internet Connection</h2>
+    <p>Please check your network settings and try again.</p>
+    <button class="retry-btn" id="retryOfflineBtn">↻ Retry</button>
 </div>
 
 <div id="loginScreen" class="login-container">
@@ -1157,7 +1219,7 @@ HTML = '''<!DOCTYPE html>
         <button class="logout-btn" onclick="logout()">Leave</button>
     </div>
     
-    <!-- Offline Bar -->
+    <!-- Offline Bar (shown when network drops during chat) -->
     <div class="offline-bar" id="offlineBar">
         ⚠️ No internet connection
         <button class="reconnect-btn" onclick="reconnectManually()">↻ Retry</button>
@@ -1286,8 +1348,51 @@ if (navigator.standalone) {
     console.log('📱 ABAVANDIMWE is running as iOS standalone app');
 }
 
+// ========== OFFLINE OVERLAY MANAGEMENT ==========
+const offlineOverlay = document.getElementById('offlineOverlay');
+
+function showOfflineOverlay() {
+    offlineOverlay.classList.add('active');
+    // Hide any other screens so they don't show underneath
+    document.getElementById('loginScreen').style.display = 'none';
+    document.getElementById('adminPanel').classList.remove('active');
+    document.getElementById('gatekeeperScreen').classList.remove('active');
+    document.getElementById('userSetupScreen').classList.remove('active');
+    document.getElementById('chatScreen').classList.remove('active');
+    // Also hide loading if active
+    document.getElementById('loadingOverlay').classList.remove('active');
+}
+
+function hideOfflineOverlay() {
+    offlineOverlay.classList.remove('active');
+    // Restore the screen based on state (login, admin, etc.) – we'll let the normal flow handle it.
+    // If we were in chat, we'll reconnect.
+    if (window.chatUsername && window.chatGroup && document.getElementById('chatScreen').classList.contains('active')) {
+        connectToChat(window.chatUsername, window.chatGroup);
+    } else {
+        // Show login screen by default
+        document.getElementById('loginScreen').style.display = 'flex';
+    }
+}
+
+// Retry button
+document.getElementById('retryOfflineBtn').addEventListener('click', function() {
+    if (navigator.onLine) {
+        hideOfflineOverlay();
+    } else {
+        // Still offline, show a quick feedback
+        this.textContent = '⏳ Still offline...';
+        setTimeout(() => { this.textContent = '↻ Retry'; }, 1000);
+    }
+});
+
 // ========== DOM READY ==========
 document.addEventListener('DOMContentLoaded', function() {
+    // Initial offline check – show full overlay if offline
+    if (!navigator.onLine) {
+        showOfflineOverlay();
+    }
+
     document.getElementById('loginBtn').addEventListener('click', function(e) {
         if (this.classList.contains('btn-loading')) return;
         showLoading('Logging in', login);
@@ -1333,7 +1438,7 @@ document.addEventListener('DOMContentLoaded', function() {
             // If we are in the chat screen
             if (document.getElementById('chatScreen').classList.contains('active')) {
                 if (!navigator.onLine) {
-                    // Offline -> clear messages and show offline
+                    // Offline -> clear messages and show inline offline message inside chat
                     clearMessagesOffline();
                 } else {
                     // Online -> if WebSocket is not open, reconnect
@@ -1349,8 +1454,9 @@ document.addEventListener('DOMContentLoaded', function() {
 
     document.addEventListener('visibilitychange', handleVisibilityChange);
 
-    // When the device goes online, auto‑reconnect if in chat and ws not open
+    // When the device goes online, hide the full overlay and reconnect if needed
     window.addEventListener('online', function() {
+        hideOfflineOverlay(); // hides the full overlay
         document.getElementById('offlineBar').classList.remove('active');
         if (document.getElementById('chatScreen').classList.contains('active')) {
             if (!ws || ws.readyState !== WebSocket.OPEN) {
@@ -1361,13 +1467,17 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     });
 
-    // When the device goes offline, clear messages immediately
+    // When the device goes offline, show full overlay
     window.addEventListener('offline', function() {
-        clearMessagesOffline();
+        showOfflineOverlay();
+        // Also clear any chat messages if chat is visible
+        if (document.getElementById('chatScreen').classList.contains('active')) {
+            clearMessagesOffline();
+        }
     });
 });
 
-// Helper to clear messages and show offline state
+// Helper to clear messages and show offline state inside chat (used when network drops while in chat)
 function clearMessagesOffline() {
     const container = document.getElementById('messages');
     container.innerHTML = '<div class="offline-message">🔴 No internet connection. Messages are hidden.</div>';
@@ -1535,7 +1645,7 @@ function connectToChat(username, group) {
     container.innerHTML = '<div style="text-align:center;color:#666;padding:40px 0;">Connecting...</div>';
     document.getElementById('offlineBar').classList.remove('active');
     
-    // If offline, show offline message and abort
+    // If offline, show inline offline message and abort
     if (!navigator.onLine) {
         container.innerHTML = '<div class="offline-message">🔴 No internet connection. Messages are hidden.</div>';
         document.getElementById('offlineBar').classList.add('active');
