@@ -777,12 +777,70 @@ HTML = '''<!DOCTYPE html>
         .reply-preview{display:none;padding:8px 12px;background:rgba(255,170,0,0.1);border-left:3px solid #ffaa00;border-radius:6px;font-size:12px;color:#ffaa00;align-items:center;justify-content:space-between;}
         .reply-preview .reply-cancel{color:#ff4444;cursor:pointer;font-weight:bold;padding:0 8px;}
         .reply-preview .reply-cancel:hover{color:#ff6666;}
-        .input-row{display:flex;gap:10px;align-items:flex-end;}
-        .input-row textarea{flex:1;margin:0;padding:12px 16px;background:#111;border:1px solid #0f0;border-radius:12px;color:#0f0;font-family:monospace;font-size:14px;resize:vertical;min-height:50px;max-height:80px;line-height:1.5;overflow-y:auto;}
-        .input-row textarea:focus{outline:none;box-shadow:0 0 20px rgba(0,255,65,0.2);border-color:#0f0;}
-        .input-row textarea::placeholder{color:#444;}
-        .input-row button{width:60px;min-width:60px;margin:0;padding:12px 0;height:50px;align-self:flex-end;position:relative;overflow:hidden;font-size:20px;display:flex;align-items:center;justify-content:center;}
-        .input-row button .btn-text{font-size:20px;line-height:1;}
+        
+        /* ===== FIX: Input row stability ===== */
+        .input-row {
+            display: flex;
+            gap: 10px;
+            align-items: stretch; /* ensures both items stretch to same height */
+        }
+        .input-row textarea {
+            flex: 1;
+            margin: 0;
+            padding: 12px 16px;
+            background: #111;
+            border: 1px solid #0f0;
+            border-radius: 12px;
+            color: #0f0;
+            font-family: monospace;
+            font-size: 14px;
+            resize: none;
+            min-height: 50px;
+            max-height: 80px;
+            overflow-y: auto; /* scroll when content exceeds max-height */
+            line-height: 1.5;
+        }
+        .input-row textarea:focus {
+            outline: none;
+            box-shadow: 0 0 20px rgba(0,255,65,0.2);
+            border-color: #0f0;
+        }
+        .input-row textarea::placeholder {
+            color: #444;
+        }
+        .input-row button {
+            width: 60px;
+            min-width: 60px;
+            height: 50px; /* fixed height */
+            flex-shrink: 0; /* prevent shrinking */
+            margin: 0;
+            padding: 0;
+            background: transparent;
+            border: 2px solid #0f0;
+            border-radius: 12px;
+            color: #0f0;
+            font-size: 20px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.3s;
+            position: relative;
+            overflow: hidden;
+        }
+        .input-row button:hover {
+            background: #0f0;
+            color: #000;
+            box-shadow: 0 0 20px rgba(0,255,65,0.3);
+        }
+        .input-row button:active {
+            transform: scale(0.95);
+        }
+        .input-row button .btn-text {
+            font-size: 20px;
+            line-height: 1;
+        }
+        
         .footer{text-align:center;padding:6px;font-size:8px;color:#333;border-top:1px solid #0f0;}
         
         ::-webkit-scrollbar{width:3px;}
@@ -1452,9 +1510,26 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     });
     
-    document.getElementById('messageInput').addEventListener('input', function() {
+    // Input stability: auto-resize but cap at 80px
+    const msgInput = document.getElementById('messageInput');
+    msgInput.addEventListener('input', function() {
         this.style.height = 'auto';
-        this.style.height = Math.min(this.scrollHeight, 80) + 'px';
+        // Cap at 80px
+        const newHeight = Math.min(this.scrollHeight, 80);
+        this.style.height = newHeight + 'px';
+        // Ensure we don't exceed max-height
+        if (this.scrollHeight > 80) {
+            this.style.overflowY = 'auto';
+        } else {
+            this.style.overflowY = 'hidden';
+        }
+    });
+    
+    // Also handle paste to trigger resize
+    msgInput.addEventListener('paste', function() {
+        setTimeout(() => {
+            this.dispatchEvent(new Event('input'));
+        }, 10);
     });
     
     // Fix #2: Install button click listener
