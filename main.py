@@ -778,13 +778,11 @@ HTML = '''<!DOCTYPE html>
         .reply-preview .reply-cancel{color:#ff4444;cursor:pointer;font-weight:bold;padding:0 8px;}
         .reply-preview .reply-cancel:hover{color:#ff6666;}
         
-        /* ===== STABLE INPUT ROW (auto-resize up to 80px) ===== */
+        /* ===== ORIGINAL WORKING INPUT STABILITY ===== */
         .input-row {
             display: flex;
             gap: 10px;
-            align-items: flex-end;      /* button stays at bottom */
-            max-height: 80px;           /* hard cap – row never grows */
-            min-height: 50px;           /* matches textarea min-height */
+            align-items: flex-end;  /* button stays at bottom */
         }
         .input-row textarea {
             flex: 1;
@@ -797,12 +795,10 @@ HTML = '''<!DOCTYPE html>
             font-family: monospace;
             font-size: 14px;
             resize: none;
-            height: auto;               /* expands to fit content */
             min-height: 50px;
-            max-height: 100%;           /* never exceed row height */
-            overflow-y: auto;           /* scroll when content overflows */
+            max-height: 80px;
+            overflow-y: auto;
             line-height: 1.5;
-            box-sizing: border-box;     /* padding included in height */
         }
         .input-row textarea:focus {
             outline: none;
@@ -815,7 +811,7 @@ HTML = '''<!DOCTYPE html>
         .input-row button {
             width: 60px;
             min-width: 60px;
-            height: 50px;               /* fixed */
+            height: 50px;
             flex-shrink: 0;
             margin: 0;
             padding: 0;
@@ -829,8 +825,8 @@ HTML = '''<!DOCTYPE html>
             align-items: center;
             justify-content: center;
             transition: all 0.3s;
-            box-sizing: border-box;
-            align-self: flex-end;      /* ensure bottom alignment */
+            position: relative;
+            overflow: hidden;
         }
         .input-row button:hover {
             background: #0f0;
@@ -1514,11 +1510,14 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     });
     
-    // ===== INPUT STABILITY: NO AUTO-RESIZE JS – CSS handles it =====
-    // Only send typing events
+    // ===== ORIGINAL WORKING AUTO-RESIZE (capped at 80px) =====
     const msgInput = document.getElementById('messageInput');
     msgInput.addEventListener('input', function() {
-        // Do NOT set height – CSS with max-height and overflow handles everything.
+        // Auto-resize up to 80px
+        this.style.height = 'auto';
+        const newHeight = Math.min(this.scrollHeight, 80);
+        this.style.height = newHeight + 'px';
+        // Send typing event
         if(ws && ws.readyState === WebSocket.OPEN) {
             ws.send(JSON.stringify({type:'typing'}));
             clearTimeout(typingTimeout);
@@ -1527,6 +1526,12 @@ document.addEventListener('DOMContentLoaded', function() {
                     ws.send(JSON.stringify({type:'stop_typing'}));
             }, 1000);
         }
+    });
+    // Handle paste to trigger resize
+    msgInput.addEventListener('paste', function() {
+        setTimeout(() => {
+            this.dispatchEvent(new Event('input'));
+        }, 10);
     });
     
     // Install button click listener
@@ -2106,17 +2111,10 @@ async function decrypt(enc, pwd, salt) {
 }
 
 // ========== MESSAGING ==========
-// No height manipulation – CSS handles everything
+// Send typing events only (height is managed by the input listener above)
 document.getElementById('messageInput')?.addEventListener('input', function() {
-    // Only typing events
-    if(ws && ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({type:'typing'}));
-        clearTimeout(typingTimeout);
-        typingTimeout = setTimeout(() => {
-            if(ws && ws.readyState === WebSocket.OPEN)
-                ws.send(JSON.stringify({type:'stop_typing'}));
-        }, 1000);
-    }
+    // Height is managed in DOMContentLoaded listener
+    // This is a duplicate; we'll keep it minimal
 });
 
 async function sendMessage() {
@@ -2136,9 +2134,10 @@ async function sendMessage() {
         messagesData[newId] = {sender: window.chatUsername, text: text, timestamp: timestamp};
         addMessage(window.chatUsername, text, true, timestamp, newId, replyToId);
         input.value = '';
-        // Reset height – CSS will shrink it back
-        input.style.height = ''; // reset to default (auto)
-        // The input event will not fire, so we manually reset; but we can dispatch to trigger typing stop? not needed.
+        // Reset height to auto so it shrinks
+        input.style.height = 'auto';
+        // Trigger the input event to recalc height
+        input.dispatchEvent(new Event('input'));
         
         ws.send(JSON.stringify({
             type:'message',
