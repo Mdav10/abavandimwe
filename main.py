@@ -1263,6 +1263,7 @@ let gatekeeperData = null;
 let replyingToMessageId = null;
 let messagesData = {};
 let isManuallyReconnecting = false;
+let lastActiveScreen = null;  // Track the active screen before offline overlay
 
 // ========== LOADING OVERLAY ==========
 function showLoading(text, callback) {
@@ -1352,27 +1353,54 @@ if (navigator.standalone) {
 const offlineOverlay = document.getElementById('offlineOverlay');
 
 function showOfflineOverlay() {
-    offlineOverlay.classList.add('active');
-    // Hide any other screens so they don't show underneath
+    // Store the currently active screen before we hide everything
+    const chatActive = document.getElementById('chatScreen').classList.contains('active');
+    const adminActive = document.getElementById('adminPanel').classList.contains('active');
+    const gatekeeperActive = document.getElementById('gatekeeperScreen').classList.contains('active');
+    const userSetupActive = document.getElementById('userSetupScreen').classList.contains('active');
+    const loginVisible = document.getElementById('loginScreen').style.display !== 'none';
+
+    if (chatActive) lastActiveScreen = 'chat';
+    else if (adminActive) lastActiveScreen = 'admin';
+    else if (gatekeeperActive) lastActiveScreen = 'gatekeeper';
+    else if (userSetupActive) lastActiveScreen = 'userSetup';
+    else if (loginVisible) lastActiveScreen = 'login';
+    else lastActiveScreen = null;
+
+    // Hide all screens and show overlay
     document.getElementById('loginScreen').style.display = 'none';
     document.getElementById('adminPanel').classList.remove('active');
     document.getElementById('gatekeeperScreen').classList.remove('active');
     document.getElementById('userSetupScreen').classList.remove('active');
     document.getElementById('chatScreen').classList.remove('active');
-    // Also hide loading if active
     document.getElementById('loadingOverlay').classList.remove('active');
+    offlineOverlay.classList.add('active');
 }
 
 function hideOfflineOverlay() {
     offlineOverlay.classList.remove('active');
-    // Restore the screen based on state (login, admin, etc.) – we'll let the normal flow handle it.
-    // If we were in chat, we'll reconnect.
-    if (window.chatUsername && window.chatGroup && document.getElementById('chatScreen').classList.contains('active')) {
-        connectToChat(window.chatUsername, window.chatGroup);
+    // Restore the previous screen
+    if (lastActiveScreen === 'chat') {
+        // If we were in chat, try to reconnect
+        if (window.chatUsername && window.chatGroup) {
+            document.getElementById('chatScreen').classList.add('active');
+            connectToChat(window.chatUsername, window.chatGroup);
+        } else {
+            // Fallback to login if no chat session
+            document.getElementById('loginScreen').style.display = 'flex';
+        }
+    } else if (lastActiveScreen === 'admin') {
+        document.getElementById('adminPanel').classList.add('active');
+        loadAdminData(); // reload data
+    } else if (lastActiveScreen === 'gatekeeper') {
+        document.getElementById('gatekeeperScreen').classList.add('active');
+    } else if (lastActiveScreen === 'userSetup') {
+        document.getElementById('userSetupScreen').classList.add('active');
     } else {
-        // Show login screen by default
+        // Default to login
         document.getElementById('loginScreen').style.display = 'flex';
     }
+    lastActiveScreen = null;
 }
 
 // Retry button
@@ -1456,7 +1484,10 @@ document.addEventListener('DOMContentLoaded', function() {
 
     // When the device goes online, hide the full overlay and reconnect if needed
     window.addEventListener('online', function() {
-        hideOfflineOverlay(); // hides the full overlay
+        // Hide the overlay
+        if (offlineOverlay.classList.contains('active')) {
+            hideOfflineOverlay();
+        }
         document.getElementById('offlineBar').classList.remove('active');
         if (document.getElementById('chatScreen').classList.contains('active')) {
             if (!ws || ws.readyState !== WebSocket.OPEN) {
