@@ -778,11 +778,11 @@ HTML = '''<!DOCTYPE html>
         .reply-preview .reply-cancel{color:#ff4444;cursor:pointer;font-weight:bold;padding:0 8px;}
         .reply-preview .reply-cancel:hover{color:#ff6666;}
         
-        /* ===== FIX: Input row stability ===== */
+        /* ===== STABLE INPUT ROW (auto-resize up to 80px) ===== */
         .input-row {
             display: flex;
             gap: 10px;
-            align-items: flex-end; /* button stays at bottom */
+            align-items: flex-end;  /* button stays at the bottom */
         }
         .input-row textarea {
             flex: 1;
@@ -794,12 +794,12 @@ HTML = '''<!DOCTYPE html>
             color: #0f0;
             font-family: monospace;
             font-size: 14px;
-            resize: none;          /* prevent manual resize */
-            height: auto;          /* start at auto */
+            resize: none;            /* disable manual resize */
             min-height: 50px;
-            max-height: 80px;      /* hard cap */
-            overflow-y: auto;      /* scroll when content exceeds 80px */
+            max-height: 80px;        /* never grow beyond 80px */
+            overflow-y: auto;        /* scroll when content exceeds max-height */
             line-height: 1.5;
+            box-sizing: border-box;
         }
         .input-row textarea:focus {
             outline: none;
@@ -812,8 +812,8 @@ HTML = '''<!DOCTYPE html>
         .input-row button {
             width: 60px;
             min-width: 60px;
-            height: 50px;
-            flex-shrink: 0;        /* never shrinks */
+            height: 50px;            /* fixed height – doesn't grow */
+            flex-shrink: 0;
             margin: 0;
             padding: 0;
             background: transparent;
@@ -826,8 +826,8 @@ HTML = '''<!DOCTYPE html>
             align-items: center;
             justify-content: center;
             transition: all 0.3s;
-            position: relative;
-            overflow: hidden;
+            align-self: flex-end;    /* stay at bottom even if textarea grows */
+            box-sizing: border-box;
         }
         .input-row button:hover {
             background: #0f0;
@@ -1511,11 +1511,15 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     });
     
-    // ===== NO AUTO-RESIZE JS – CSS handles height =====
-    // Only the typing indicator remains
+    // ===== INPUT STABILITY: auto-resize up to 80px =====
     const msgInput = document.getElementById('messageInput');
     msgInput.addEventListener('input', function() {
-        // Do NOT change height – CSS with max-height and overflow handles it.
+        // Reset height to auto to shrink if needed, then set capped height
+        this.style.height = 'auto';
+        const newHeight = Math.min(this.scrollHeight, 80);
+        this.style.height = newHeight + 'px';
+        // If content overflows, show scrollbar (already via CSS overflow-y:auto)
+        // Also send typing event
         if(ws && ws.readyState === WebSocket.OPEN) {
             ws.send(JSON.stringify({type:'typing'}));
             clearTimeout(typingTimeout);
@@ -1524,6 +1528,12 @@ document.addEventListener('DOMContentLoaded', function() {
                     ws.send(JSON.stringify({type:'stop_typing'}));
             }, 1000);
         }
+    });
+    // Also handle paste to trigger resize
+    msgInput.addEventListener('paste', function() {
+        setTimeout(() => {
+            this.dispatchEvent(new Event('input'));
+        }, 10);
     });
     
     // Install button click listener
@@ -2103,18 +2113,17 @@ async function decrypt(enc, pwd, salt) {
 }
 
 // ========== MESSAGING ==========
-// Only typing indicator – no height manipulation
+// Only typing indicator – height is managed by CSS + JS auto-resize
 document.getElementById('messageInput')?.addEventListener('input', function() {
-    // CSS handles height – we only send typing events
-    if(ws && ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({type:'typing'}));
-        clearTimeout(typingTimeout);
-        typingTimeout = setTimeout(() => {
-            if(ws && ws.readyState === WebSocket.OPEN)
-                ws.send(JSON.stringify({type:'stop_typing'}));
-        }, 1000);
-    }
+    // auto-resize is already handled in DOMContentLoaded, but we also need to keep typing events.
+    // Actually we have two input listeners - let's combine them.
+    // We'll move the resize logic here and remove the duplicate in DOMContentLoaded.
+    // However, we already have it there - let's remove this one and keep the one in DOMContentLoaded.
+    // So this block is redundant - we'll just keep the typing events inside the DOMContentLoaded listener.
+    // To avoid confusion, we'll remove this listener.
 });
+
+// We'll keep the typing logic inside DOMContentLoaded.
 
 async function sendMessage() {
     let input = document.getElementById('messageInput');
@@ -2133,8 +2142,11 @@ async function sendMessage() {
         messagesData[newId] = {sender: window.chatUsername, text: text, timestamp: timestamp};
         addMessage(window.chatUsername, text, true, timestamp, newId, replyToId);
         input.value = '';
-        // Reset height manually if needed – but it will auto-adjust via CSS
+        // Reset height to auto so it shrinks
         input.style.height = 'auto';
+        // Trigger resize event to recalc (but it's already handled by input event)
+        // The input event will fire when we set value, but we can dispatch
+        input.dispatchEvent(new Event('input'));
         
         ws.send(JSON.stringify({
             type:'message',
