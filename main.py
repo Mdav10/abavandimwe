@@ -782,7 +782,7 @@ HTML = '''<!DOCTYPE html>
         .input-row {
             display: flex;
             gap: 10px;
-            align-items: stretch; /* ensures both items stretch to same height */
+            align-items: flex-end; /* button stays at bottom */
         }
         .input-row textarea {
             flex: 1;
@@ -794,10 +794,11 @@ HTML = '''<!DOCTYPE html>
             color: #0f0;
             font-family: monospace;
             font-size: 14px;
-            resize: none;
+            resize: none;          /* prevent manual resize */
+            height: auto;          /* start at auto */
             min-height: 50px;
-            max-height: 80px;
-            overflow-y: auto; /* scroll when content exceeds max-height */
+            max-height: 80px;      /* hard cap */
+            overflow-y: auto;      /* scroll when content exceeds 80px */
             line-height: 1.5;
         }
         .input-row textarea:focus {
@@ -811,8 +812,8 @@ HTML = '''<!DOCTYPE html>
         .input-row button {
             width: 60px;
             min-width: 60px;
-            height: 50px; /* fixed height */
-            flex-shrink: 0; /* prevent shrinking */
+            height: 50px;
+            flex-shrink: 0;        /* never shrinks */
             margin: 0;
             padding: 0;
             background: transparent;
@@ -1510,29 +1511,22 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     });
     
-    // Input stability: auto-resize but cap at 80px
+    // ===== NO AUTO-RESIZE JS – CSS handles height =====
+    // Only the typing indicator remains
     const msgInput = document.getElementById('messageInput');
     msgInput.addEventListener('input', function() {
-        this.style.height = 'auto';
-        // Cap at 80px
-        const newHeight = Math.min(this.scrollHeight, 80);
-        this.style.height = newHeight + 'px';
-        // Ensure we don't exceed max-height
-        if (this.scrollHeight > 80) {
-            this.style.overflowY = 'auto';
-        } else {
-            this.style.overflowY = 'hidden';
+        // Do NOT change height – CSS with max-height and overflow handles it.
+        if(ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({type:'typing'}));
+            clearTimeout(typingTimeout);
+            typingTimeout = setTimeout(() => {
+                if(ws && ws.readyState === WebSocket.OPEN)
+                    ws.send(JSON.stringify({type:'stop_typing'}));
+            }, 1000);
         }
     });
     
-    // Also handle paste to trigger resize
-    msgInput.addEventListener('paste', function() {
-        setTimeout(() => {
-            this.dispatchEvent(new Event('input'));
-        }, 10);
-    });
-    
-    // Fix #2: Install button click listener
+    // Install button click listener
     document.getElementById('installBtn').addEventListener('click', installApp);
 
     // ----- OFFLINE / ONLINE HANDLING (IMPROVED) -----
@@ -2109,10 +2103,9 @@ async function decrypt(enc, pwd, salt) {
 }
 
 // ========== MESSAGING ==========
+// Only typing indicator – no height manipulation
 document.getElementById('messageInput')?.addEventListener('input', function() {
-    this.style.height = 'auto';
-    this.style.height = Math.min(this.scrollHeight, 80) + 'px';
-    
+    // CSS handles height – we only send typing events
     if(ws && ws.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify({type:'typing'}));
         clearTimeout(typingTimeout);
@@ -2122,10 +2115,6 @@ document.getElementById('messageInput')?.addEventListener('input', function() {
         }, 1000);
     }
 });
-
-// Enter key: new line (default behavior), Shift+Enter: new line, but we want to send only via button.
-// We will NOT override Enter to send; it will naturally insert a newline.
-// The send button triggers sendMessage.
 
 async function sendMessage() {
     let input = document.getElementById('messageInput');
@@ -2144,6 +2133,7 @@ async function sendMessage() {
         messagesData[newId] = {sender: window.chatUsername, text: text, timestamp: timestamp};
         addMessage(window.chatUsername, text, true, timestamp, newId, replyToId);
         input.value = '';
+        // Reset height manually if needed – but it will auto-adjust via CSS
         input.style.height = 'auto';
         
         ws.send(JSON.stringify({
