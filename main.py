@@ -762,7 +762,7 @@ HTML = '''<!DOCTYPE html>
         .message{max-width:85%;display:flex;flex-direction:column;animation:fadeIn 0.2s ease;position:relative;padding:8px 0;transition:transform 0.2s ease;}
         .message.sent{align-self:flex-end;}
         .message.received{align-self:flex-start;}
-        .message-bubble{padding:10px 14px;border-radius:18px;font-size:14px;word-wrap:break-word;overflow-wrap:break-word;word-break:break-word;max-width:100%;position:relative;}
+        .message-bubble{padding:10px 14px;border-radius:18px;font-size:14px;word-wrap:break-word;position:relative;}
         .message.sent .message-bubble{background:#0f0;color:#000;border-bottom-right-radius:4px;}
         .message.received .message-bubble{background:#1a1a2e;border:1px solid #0f0;border-bottom-left-radius:4px;}
         .message-sender{font-size:10px;margin-bottom:4px;opacity:0.7;padding-left:4px;}
@@ -837,47 +837,212 @@ HTML = '''<!DOCTYPE html>
         .user-setup-card .sub{text-align:center;margin-bottom:24px;font-size:11px;color:#666;}
         .user-setup-card input[readonly]{opacity:0.7;cursor:not-allowed;}
         
-        .install-btn{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);z-index:100;padding:14px 28px;background:#0f0;color:#000;border:none;border-radius:14px;font-size:15px;font-weight:bold;cursor:pointer;display:none;box-shadow:0 4px 30px rgba(0,255,65,0.4);transition:all 0.3s;font-family:monospace;letter-spacing:0.5px;position:relative;overflow:hidden;}
-        .install-btn:hover{transform:translateX(-50%) scale(1.05);box-shadow:0 6px 40px rgba(0,255,65,0.6);}
-        .install-btn:active{transform:translateX(-50%) scale(0.95);}
-        .install-btn.show{display:block;}
+        /* Install Button */
+        .install-btn {
+            position: fixed;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: 100;
+            padding: 14px 28px;
+            background: #0f0;
+            color: #000;
+            border: none;
+            border-radius: 14px;
+            font-size: 15px;
+            font-weight: bold;
+            cursor: pointer;
+            display: none;
+            box-shadow: 0 4px 30px rgba(0, 255, 65, 0.4);
+            transition: all 0.3s;
+            font-family: monospace;
+            letter-spacing: 0.5px;
+            position:relative;
+            overflow:hidden;
+        }
+        .install-btn:hover {
+            transform: translateX(-50%) scale(1.05);
+            box-shadow: 0 6px 40px rgba(0, 255, 65, 0.6);
+        }
+        .install-btn:active {
+            transform: translateX(-50%) scale(0.95);
+        }
+        .install-btn.show {
+            display: block;
+        }
         
-        .loading-overlay{position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(10,10,15,0.92);z-index:9999;display:none;justify-content:center;align-items:center;flex-direction:column;gap:30px;}
-        .loading-overlay.active{display:flex;}
-        .loader{width:80px;height:80px;border:3px solid rgba(0,255,65,0.1);border-top:3px solid #0f0;border-radius:50%;animation:spin 0.8s cubic-bezier(0.4,0.0,0.2,1) infinite;box-shadow:0 0 30px rgba(0,255,65,0.15);}
-        .loader-pulse{position:absolute;width:80px;height:80px;border-radius:50%;border:1px solid rgba(0,255,65,0.3);animation:pulse-ring 1.5s cubic-bezier(0.4,0.0,0.2,1) infinite;}
-        .loader-container{position:relative;display:flex;justify-content:center;align-items:center;}
-        .loader-text{color:#0f0;font-size:16px;font-family:monospace;letter-spacing:2px;animation:text-pulse 1.5s ease-in-out infinite;}
-        .loader-dots{display:inline-block;}
-        .loader-dots span{display:inline-block;animation:dot-bounce 1.4s ease-in-out infinite;}
-        .loader-dots span:nth-child(1){animation-delay:0s;}
-        .loader-dots span:nth-child(2){animation-delay:0.2s;}
-        .loader-dots span:nth-child(3){animation-delay:0.4s;}
+        /* Loading Overlay */
+        .loading-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(10, 10, 15, 0.92);
+            z-index: 9999;
+            display: none;
+            justify-content: center;
+            align-items: center;
+            flex-direction: column;
+            gap: 30px;
+        }
+        .loading-overlay.active {
+            display: flex;
+        }
+        .loader {
+            width: 80px;
+            height: 80px;
+            border: 3px solid rgba(0, 255, 65, 0.1);
+            border-top: 3px solid #0f0;
+            border-radius: 50%;
+            animation: spin 0.8s cubic-bezier(0.4, 0.0, 0.2, 1) infinite;
+            box-shadow: 0 0 30px rgba(0, 255, 65, 0.15);
+        }
+        .loader-pulse {
+            position: absolute;
+            width: 80px;
+            height: 80px;
+            border-radius: 50%;
+            border: 1px solid rgba(0, 255, 65, 0.3);
+            animation: pulse-ring 1.5s cubic-bezier(0.4, 0.0, 0.2, 1) infinite;
+        }
+        .loader-container {
+            position: relative;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+        .loader-text {
+            color: #0f0;
+            font-size: 16px;
+            font-family: monospace;
+            letter-spacing: 2px;
+            animation: text-pulse 1.5s ease-in-out infinite;
+        }
+        .loader-dots {
+            display: inline-block;
+        }
+        .loader-dots span {
+            display: inline-block;
+            animation: dot-bounce 1.4s ease-in-out infinite;
+        }
+        .loader-dots span:nth-child(1) { animation-delay: 0s; }
+        .loader-dots span:nth-child(2) { animation-delay: 0.2s; }
+        .loader-dots span:nth-child(3) { animation-delay: 0.4s; }
         
-        @keyframes spin{0%{transform:rotate(0deg);}100%{transform:rotate(360deg);}}
-        @keyframes pulse-ring{0%{transform:scale(1);opacity:1;}100%{transform:scale(1.6);opacity:0;}}
-        @keyframes text-pulse{0%,100%{opacity:0.6;}50%{opacity:1;}}
-        @keyframes dot-bounce{0%,80%,100%{transform:scale(0);opacity:0.3;}40%{transform:scale(1);opacity:1;}}
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        @keyframes pulse-ring {
+            0% { transform: scale(1); opacity: 1; }
+            100% { transform: scale(1.6); opacity: 0; }
+        }
+        @keyframes text-pulse {
+            0%, 100% { opacity: 0.6; }
+            50% { opacity: 1; }
+        }
+        @keyframes dot-bounce {
+            0%, 80%, 100% { transform: scale(0); opacity: 0.3; }
+            40% { transform: scale(1); opacity: 1; }
+        }
         
-        .group-info{font-size:10px;color:#ffaa00;padding:8px;background:rgba(255,170,0,0.08);border-radius:6px;margin-top:8px;border-left:2px solid #ffaa00;}
-        .offline-bar{display:none;background:#ff0041;color:white;text-align:center;padding:6px;font-size:11px;font-weight:bold;position:sticky;top:0;z-index:5;}
-        .offline-bar.active{display:block;}
-        .offline-bar .reconnect-btn{background:white;color:#ff0041;border:none;padding:2px 12px;border-radius:4px;cursor:pointer;margin-left:10px;font-weight:bold;font-size:11px;}
-        .offline-message{text-align:center;color:#ff4444;padding:20px;font-size:14px;}
+        .group-info {
+            font-size: 10px;
+            color: #ffaa00;
+            padding: 8px;
+            background: rgba(255, 170, 0, 0.08);
+            border-radius: 6px;
+            margin-top: 8px;
+            border-left: 2px solid #ffaa00;
+        }
         
-        .offline-overlay{position:fixed;top:0;left:0;right:0;bottom:0;background:#0a0a0f;z-index:99999;display:none;justify-content:center;align-items:center;flex-direction:column;gap:20px;padding:30px;}
-        .offline-overlay.active{display:flex;}
-        .offline-overlay .offline-icon{font-size:60px;margin-bottom:10px;}
-        .offline-overlay h2{color:#ff4444;font-size:24px;text-align:center;}
-        .offline-overlay p{color:#888;font-size:14px;text-align:center;max-width:300px;}
-        .offline-overlay .retry-btn{background:transparent;border:2px solid #0f0;color:#0f0;padding:14px 40px;border-radius:12px;font-size:16px;font-weight:bold;cursor:pointer;transition:all 0.3s;margin-top:10px;}
-        .offline-overlay .retry-btn:hover{background:#0f0;color:#000;}
-        .offline-overlay .retry-btn:active{transform:scale(0.95);}
+        /* Offline Status Bar (for when in chat and network drops) */
+        .offline-bar {
+            display: none;
+            background: #ff0041;
+            color: white;
+            text-align: center;
+            padding: 6px;
+            font-size: 11px;
+            font-weight: bold;
+            position: sticky;
+            top: 0;
+            z-index: 5;
+        }
+        .offline-bar.active {
+            display: block;
+        }
+        .offline-bar .reconnect-btn {
+            background: white;
+            color: #ff0041;
+            border: none;
+            padding: 2px 12px;
+            border-radius: 4px;
+            cursor: pointer;
+            margin-left: 10px;
+            font-weight: bold;
+            font-size: 11px;
+        }
+        .offline-message {
+            text-align: center;
+            color: #ff4444;
+            padding: 20px;
+            font-size: 14px;
+        }
         
-        @media (max-width:480px){
-            .message{max-width:92%;}
-            .input-row textarea{max-height:60px;font-size:13px;}
-            .input-row button{width:50px;min-width:50px;font-size:18px;}
+        /* Full‑screen offline overlay */
+        .offline-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: #0a0a0f;
+            z-index: 99999;
+            display: none;
+            justify-content: center;
+            align-items: center;
+            flex-direction: column;
+            gap: 20px;
+            padding: 30px;
+        }
+        .offline-overlay.active {
+            display: flex;
+        }
+        .offline-overlay .offline-icon {
+            font-size: 60px;
+            margin-bottom: 10px;
+        }
+        .offline-overlay h2 {
+            color: #ff4444;
+            font-size: 24px;
+            text-align: center;
+        }
+        .offline-overlay p {
+            color: #888;
+            font-size: 14px;
+            text-align: center;
+            max-width: 300px;
+        }
+        .offline-overlay .retry-btn {
+            background: transparent;
+            border: 2px solid #0f0;
+            color: #0f0;
+            padding: 14px 40px;
+            border-radius: 12px;
+            font-size: 16px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: all 0.3s;
+            margin-top: 10px;
+        }
+        .offline-overlay .retry-btn:hover {
+            background: #0f0;
+            color: #000;
+        }
+        .offline-overlay .retry-btn:active {
+            transform: scale(0.95);
         }
     </style>
 </head>
@@ -1054,7 +1219,7 @@ HTML = '''<!DOCTYPE html>
         <button class="logout-btn" onclick="logout()">Leave</button>
     </div>
     
-    <!-- Offline Bar -->
+    <!-- Offline Bar (shown when network drops during chat) -->
     <div class="offline-bar" id="offlineBar">
         ⚠️ No internet connection
         <button class="reconnect-btn" onclick="reconnectManually()">↻ Retry</button>
@@ -1098,7 +1263,6 @@ let gatekeeperData = null;
 let replyingToMessageId = null;
 let messagesData = {};
 let isManuallyReconnecting = false;
-let lastActiveScreen = null;
 
 // ========== LOADING OVERLAY ==========
 function showLoading(text, callback) {
@@ -1168,9 +1332,6 @@ async function installApp() {
     hideLoading();
 }
 
-// Fix #2: Add event listener for install button
-document.getElementById('installBtn').addEventListener('click', installApp);
-
 window.addEventListener('appinstalled', (evt) => {
     console.log('✅ ABAVANDIMWE was installed');
     installBtn.classList.remove('show');
@@ -1191,54 +1352,35 @@ if (navigator.standalone) {
 const offlineOverlay = document.getElementById('offlineOverlay');
 
 function showOfflineOverlay() {
-    const chatActive = document.getElementById('chatScreen').classList.contains('active');
-    const adminActive = document.getElementById('adminPanel').classList.contains('active');
-    const gatekeeperActive = document.getElementById('gatekeeperScreen').classList.contains('active');
-    const userSetupActive = document.getElementById('userSetupScreen').classList.contains('active');
-    const loginVisible = document.getElementById('loginScreen').style.display !== 'none';
-
-    if (chatActive) lastActiveScreen = 'chat';
-    else if (adminActive) lastActiveScreen = 'admin';
-    else if (gatekeeperActive) lastActiveScreen = 'gatekeeper';
-    else if (userSetupActive) lastActiveScreen = 'userSetup';
-    else if (loginVisible) lastActiveScreen = 'login';
-    else lastActiveScreen = null;
-
+    offlineOverlay.classList.add('active');
+    // Hide any other screens so they don't show underneath
     document.getElementById('loginScreen').style.display = 'none';
     document.getElementById('adminPanel').classList.remove('active');
     document.getElementById('gatekeeperScreen').classList.remove('active');
     document.getElementById('userSetupScreen').classList.remove('active');
     document.getElementById('chatScreen').classList.remove('active');
+    // Also hide loading if active
     document.getElementById('loadingOverlay').classList.remove('active');
-    offlineOverlay.classList.add('active');
 }
 
 function hideOfflineOverlay() {
     offlineOverlay.classList.remove('active');
-    if (lastActiveScreen === 'chat') {
-        if (window.chatUsername && window.chatGroup) {
-            document.getElementById('chatScreen').classList.add('active');
-            connectToChat(window.chatUsername, window.chatGroup);
-        } else {
-            document.getElementById('loginScreen').style.display = 'flex';
-        }
-    } else if (lastActiveScreen === 'admin') {
-        document.getElementById('adminPanel').classList.add('active');
-        loadAdminData();
-    } else if (lastActiveScreen === 'gatekeeper') {
-        document.getElementById('gatekeeperScreen').classList.add('active');
-    } else if (lastActiveScreen === 'userSetup') {
-        document.getElementById('userSetupScreen').classList.add('active');
+    // Restore the screen based on state (login, admin, etc.) – we'll let the normal flow handle it.
+    // If we were in chat, we'll reconnect.
+    if (window.chatUsername && window.chatGroup && document.getElementById('chatScreen').classList.contains('active')) {
+        connectToChat(window.chatUsername, window.chatGroup);
     } else {
+        // Show login screen by default
         document.getElementById('loginScreen').style.display = 'flex';
     }
-    lastActiveScreen = null;
 }
 
+// Retry button
 document.getElementById('retryOfflineBtn').addEventListener('click', function() {
     if (navigator.onLine) {
         hideOfflineOverlay();
     } else {
+        // Still offline, show a quick feedback
         this.textContent = '⏳ Still offline...';
         setTimeout(() => { this.textContent = '↻ Retry'; }, 1000);
     }
@@ -1246,6 +1388,7 @@ document.getElementById('retryOfflineBtn').addEventListener('click', function() 
 
 // ========== DOM READY ==========
 document.addEventListener('DOMContentLoaded', function() {
+    // Initial offline check – show full overlay if offline
     if (!navigator.onLine) {
         showOfflineOverlay();
     }
@@ -1281,26 +1424,24 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     });
     
-    // Input stability - auto-resize capped at 80px
     document.getElementById('messageInput').addEventListener('input', function() {
         this.style.height = 'auto';
         this.style.height = Math.min(this.scrollHeight, 80) + 'px';
-        if(ws && ws.readyState === WebSocket.OPEN) {
-            ws.send(JSON.stringify({type:'typing'}));
-            clearTimeout(typingTimeout);
-            typingTimeout = setTimeout(() => {
-                if(ws && ws.readyState === WebSocket.OPEN)
-                    ws.send(JSON.stringify({type:'stop_typing'}));
-            }, 1000);
-        }
     });
+    
+    // Fix #2: Install button click listener
+    document.getElementById('installBtn').addEventListener('click', installApp);
 
+    // ----- OFFLINE / ONLINE HANDLING (IMPROVED) -----
     function handleVisibilityChange() {
         if (document.visibilityState === 'visible') {
+            // If we are in the chat screen
             if (document.getElementById('chatScreen').classList.contains('active')) {
                 if (!navigator.onLine) {
+                    // Offline -> clear messages and show inline offline message inside chat
                     clearMessagesOffline();
                 } else {
+                    // Online -> if WebSocket is not open, reconnect
                     if (!ws || ws.readyState !== WebSocket.OPEN) {
                         if (window.chatUsername && window.chatGroup) {
                             connectToChat(window.chatUsername, window.chatGroup);
@@ -1313,10 +1454,9 @@ document.addEventListener('DOMContentLoaded', function() {
 
     document.addEventListener('visibilitychange', handleVisibilityChange);
 
+    // When the device goes online, hide the full overlay and reconnect if needed
     window.addEventListener('online', function() {
-        if (offlineOverlay.classList.contains('active')) {
-            hideOfflineOverlay();
-        }
+        hideOfflineOverlay(); // hides the full overlay
         document.getElementById('offlineBar').classList.remove('active');
         if (document.getElementById('chatScreen').classList.contains('active')) {
             if (!ws || ws.readyState !== WebSocket.OPEN) {
@@ -1327,14 +1467,17 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     });
 
+    // When the device goes offline, show full overlay
     window.addEventListener('offline', function() {
         showOfflineOverlay();
+        // Also clear any chat messages if chat is visible
         if (document.getElementById('chatScreen').classList.contains('active')) {
             clearMessagesOffline();
         }
     });
 });
 
+// Helper to clear messages and show offline state inside chat (used when network drops while in chat)
 function clearMessagesOffline() {
     const container = document.getElementById('messages');
     container.innerHTML = '<div class="offline-message">🔴 No internet connection. Messages are hidden.</div>';
@@ -1496,6 +1639,20 @@ async function enterChat() {
 
 // ========== CONNECT TO CHAT ==========
 function connectToChat(username, group) {
+    // Clear old messages immediately
+    messagesData = {};
+    const container = document.getElementById('messages');
+    container.innerHTML = '<div style="text-align:center;color:#666;padding:40px 0;">Connecting...</div>';
+    document.getElementById('offlineBar').classList.remove('active');
+    
+    // If offline, show inline offline message and abort
+    if (!navigator.onLine) {
+        container.innerHTML = '<div class="offline-message">🔴 No internet connection. Messages are hidden.</div>';
+        document.getElementById('offlineBar').classList.add('active');
+        updateStatus(false);
+        return;
+    }
+
     document.getElementById('groupTitle').innerHTML = '# ' + group;
     
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -1506,6 +1663,7 @@ function connectToChat(username, group) {
     ws.onopen = function() {
         updateStatus(true);
         document.getElementById('offlineBar').classList.remove('active');
+        // Remove offline message if present
         const offlineMsg = document.querySelector('.offline-message');
         if (offlineMsg) offlineMsg.remove();
         ws.send(JSON.stringify({
@@ -1530,6 +1688,7 @@ function connectToChat(username, group) {
                 groupSalt = d.salt;
                 addSystemMessage('🔐 Connected - Messages last 24 hours');
             } else if(d.type === 'history') {
+                // Clear messages and remove offline message
                 document.getElementById('messages').innerHTML = '';
                 const offlineMsg = document.querySelector('.offline-message');
                 if (offlineMsg) offlineMsg.remove();
@@ -1586,6 +1745,7 @@ function connectToChat(username, group) {
     ws.onclose = function() {
         updateStatus(false);
         document.getElementById('offlineBar').classList.add('active');
+        // Clear messages and show offline message
         const messagesContainer = document.getElementById('messages');
         messagesContainer.innerHTML = '<div class="offline-message">🔴 No internet connection. Messages are hidden.</div>';
         messagesData = {};
@@ -1606,6 +1766,11 @@ function reconnectManually() {
     if (ws) {
         ws.close();
     }
+    // Clear messages before retry
+    messagesData = {};
+    const container = document.getElementById('messages');
+    container.innerHTML = '<div style="text-align:center;color:#666;padding:40px 0;">Connecting...</div>';
+    document.getElementById('offlineBar').classList.remove('active');
     setTimeout(() => {
         connectToChat(window.chatUsername, window.chatGroup);
     }, 500);
@@ -1636,6 +1801,7 @@ function updateStatus(online) {
 
 function addSystemMessage(text) {
     let msgs = document.getElementById('messages');
+    // Remove offline message if present
     const offlineMsg = document.querySelector('.offline-message');
     if (offlineMsg) offlineMsg.remove();
     let div = document.createElement('div');
@@ -1647,6 +1813,7 @@ function addSystemMessage(text) {
 
 function addMessage(sender, text, isSent, timestamp, messageId, replyTo) {
     let msgs = document.getElementById('messages');
+    // Remove offline message if present
     const offlineMsg = document.querySelector('.offline-message');
     if (offlineMsg) offlineMsg.remove();
     let div = document.createElement('div');
@@ -1678,54 +1845,77 @@ function addMessage(sender, text, isSent, timestamp, messageId, replyTo) {
                     '<div class="message-bubble">' + escapeHtml(text) + '</div>' + 
                     '<div class="message-time">' + time + '</div>';
     
-    let touchStartX = 0, touchCurrentX = 0, touchStartY = 0;
+    // Swipe to reply on mobile
+    let touchStartX = 0;
+    let touchCurrentX = 0;
+    let touchStartY = 0;
+    
     div.addEventListener('touchstart', function(e) {
         touchStartX = e.touches[0].clientX;
         touchStartY = e.touches[0].clientY;
         touchCurrentX = touchStartX;
     }, {passive: true});
+    
     div.addEventListener('touchmove', function(e) {
         touchCurrentX = e.touches[0].clientX;
         let diffX = touchCurrentX - touchStartX;
         let diffY = e.touches[0].clientY - touchStartY;
+        
         if (diffX > 0 && diffX < 80 && Math.abs(diffY) < 30) {
             div.style.transform = 'translateX(' + diffX + 'px)';
         }
     }, {passive: true});
+    
     div.addEventListener('touchend', function(e) {
         let diffX = touchCurrentX - touchStartX;
         div.style.transform = '';
+        
         if (diffX >= 60) {
             startReply(messageId);
         }
-        touchStartX = 0; touchCurrentX = 0; touchStartY = 0;
+        touchStartX = 0;
+        touchCurrentX = 0;
+        touchStartY = 0;
     }, {passive: true});
     
-    let mouseStartX = 0, mouseCurrentX = 0, mouseStartY = 0, isMouseDown = false;
+    // Mouse swipe for desktop
+    let mouseStartX = 0;
+    let mouseCurrentX = 0;
+    let mouseStartY = 0;
+    let isMouseDown = false;
+    
     div.addEventListener('mousedown', function(e) {
         mouseStartX = e.clientX;
         mouseStartY = e.clientY;
         mouseCurrentX = mouseStartX;
         isMouseDown = true;
     });
+    
     div.addEventListener('mousemove', function(e) {
         if (!isMouseDown) return;
         mouseCurrentX = e.clientX;
         let diffX = mouseCurrentX - mouseStartX;
         let diffY = e.clientY - mouseStartY;
+        
         if (diffX > 0 && diffX < 80 && Math.abs(diffY) < 30) {
             div.style.transform = 'translateX(' + diffX + 'px)';
         }
     });
+    
     div.addEventListener('mouseup', function(e) {
         if (!isMouseDown) return;
         let diffX = mouseCurrentX - mouseStartX;
         div.style.transform = '';
+        
         if (diffX >= 60) {
             startReply(messageId);
         }
         isMouseDown = false;
+        mouseStartX = 0;
+        mouseCurrentX = 0;
+        mouseStartY = 0;
     });
+    
     div.addEventListener('mouseleave', function() {
         if (isMouseDown) {
             div.style.transform = '';
@@ -1739,8 +1929,10 @@ function addMessage(sender, text, isSent, timestamp, messageId, replyTo) {
 
 function startReply(messageId) {
     if (!messageId || !messagesData[messageId]) return;
+    
     replyingToMessageId = messageId;
     let original = messagesData[messageId];
+    
     document.getElementById('replyPreviewSender').textContent = original.sender;
     document.getElementById('replyPreviewText').textContent = original.text.substring(0, 60) + (original.text.length > 60 ? '...' : '');
     document.getElementById('replyPreview').style.display = 'flex';
@@ -1758,7 +1950,9 @@ function scrollToMessage(messageId) {
         if (msg.dataset.messageId == messageId) {
             msg.scrollIntoView({ behavior: 'smooth', block: 'center' });
             msg.style.border = '2px solid #ffaa00';
-            setTimeout(() => { msg.style.border = ''; }, 2000);
+            setTimeout(() => {
+                msg.style.border = '';
+            }, 2000);
             break;
         }
     }
@@ -1809,21 +2003,43 @@ async function decrypt(enc, pwd, salt) {
 }
 
 // ========== MESSAGING ==========
+document.getElementById('messageInput')?.addEventListener('input', function() {
+    this.style.height = 'auto';
+    this.style.height = Math.min(this.scrollHeight, 80) + 'px';
+    
+    if(ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({type:'typing'}));
+        clearTimeout(typingTimeout);
+        typingTimeout = setTimeout(() => {
+            if(ws && ws.readyState === WebSocket.OPEN)
+                ws.send(JSON.stringify({type:'stop_typing'}));
+        }, 1000);
+    }
+});
+
+// Enter key: new line (default behavior), Shift+Enter: new line, but we want to send only via button.
+// We will NOT override Enter to send; it will naturally insert a newline.
+// The send button triggers sendMessage.
+
 async function sendMessage() {
     let input = document.getElementById('messageInput');
     let text = input.value.trim();
     if(!text || !ws || ws.readyState !== WebSocket.OPEN || !groupSalt) {
         return;
     }
+    
     try {
         let cipher = await encrypt(text, window.groupPassword, groupSalt);
         let timestamp = Date.now() / 1000;
+        
         let replyToId = replyingToMessageId;
+        
         let newId = Date.now();
         messagesData[newId] = {sender: window.chatUsername, text: text, timestamp: timestamp};
         addMessage(window.chatUsername, text, true, timestamp, newId, replyToId);
         input.value = '';
         input.style.height = 'auto';
+        
         ws.send(JSON.stringify({
             type:'message',
             ciphertext:cipher,
@@ -1831,6 +2047,7 @@ async function sendMessage() {
             timestamp: timestamp,
             reply_to: replyToId
         }));
+        
         cancelReply();
     } catch(e) {
         alert('Failed to send message');
@@ -1853,6 +2070,7 @@ function showError(msg) {
     document.getElementById('loginSuccess').style.display = 'none';
     setTimeout(() => err.style.display = 'none', 5000);
 }
+
 function showSuccess(msg) {
     let success = document.getElementById('loginSuccess');
     success.textContent = msg;
@@ -1860,12 +2078,14 @@ function showSuccess(msg) {
     document.getElementById('loginError').style.display = 'none';
     setTimeout(() => success.style.display = 'none', 5000);
 }
+
 function showGatekeeperError(msg) {
     let err = document.getElementById('gatekeeperError');
     err.textContent = msg;
     err.style.display = 'block';
     setTimeout(() => err.style.display = 'none', 5000);
 }
+
 function showSetupError(msg) {
     let err = document.getElementById('setupError');
     err.textContent = msg;
@@ -1873,6 +2093,7 @@ function showSetupError(msg) {
     document.getElementById('setupSuccess').style.display = 'none';
     setTimeout(() => err.style.display = 'none', 5000);
 }
+
 function showSetupSuccess(msg) {
     let success = document.getElementById('setupSuccess');
     success.textContent = msg;
@@ -1884,7 +2105,11 @@ function showSetupSuccess(msg) {
 async function logout() {
     if(ws) ws.close();
     ws = null;
-    try { await fetch('/logout', {method: 'POST'}); } catch(e) {}
+    
+    try {
+        await fetch('/logout', {method: 'POST'});
+    } catch(e) {}
+    
     document.getElementById('chatScreen').classList.remove('active');
     document.getElementById('adminPanel').classList.remove('active');
     document.getElementById('gatekeeperScreen').classList.remove('active');
@@ -1915,6 +2140,7 @@ async function loadAdminData() {
     try {
         const response = await fetch('/admin/data');
         const data = await response.json();
+        
         document.getElementById('statUsers').textContent = data.users.length;
         document.getElementById('statMessages').textContent = data.messages_count;
         document.getElementById('statGroups').textContent = data.groups.length;
@@ -1934,7 +2160,7 @@ async function loadAdminData() {
         });
         document.getElementById('usersTableBody').innerHTML = usersHtml;
         
-        // ===== FIX #1: Use group_name instead of name =====
+        // Fix #1: Use group_name instead of name
         let groupsHtml = '';
         data.groups.forEach(g => {
             groupsHtml += `<tr>
@@ -1968,6 +2194,7 @@ async function loadAdminData() {
             </tr>`;
         });
         document.getElementById('logsTableBody').innerHTML = logsHtml;
+        
     } catch(e) {
         console.error('Failed to load admin data:', e);
     }
@@ -1978,11 +2205,13 @@ async function createUser() {
     const password = document.getElementById('newPassword').value.trim();
     const group_name = document.getElementById('newGroupName').value.trim();
     const group_password = document.getElementById('newGroupPassword').value.trim();
+    
     if(!username || !password || !group_name || !group_password) {
         alert('Please fill all fields');
         hideLoading();
         return;
     }
+    
     try {
         const response = await fetch('/admin/create_user', {
             method: 'POST',
