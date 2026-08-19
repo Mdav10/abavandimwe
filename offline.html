@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <title>Offline - ABAVANDIMWE</title>
+    <style>
+        *{margin:0;padding:0;box-sizing:border-box;}
+        body{font-family:monospace;background:#0a0a0f;color:#0f0;height:100vh;display:flex;justify-content:center;align-items:center;text-align:center;padding:20px;}
+        .offline-container{max-width:400px;}
+        .offline-icon{font-size:80px;margin-bottom:20px;display:block;}
+        h1{color:#ff4444;font-size:24px;margin-bottom:12px;}
+        p{color:#888;font-size:14px;line-height:1.6;margin-bottom:24px;}
+        .retry-btn{background:transparent;border:2px solid #0f0;color:#0f0;padding:14px 40px;border-radius:12px;font-size:16px;font-weight:bold;cursor:pointer;transition:all 0.3s;}
+        .retry-btn:hover{background:#0f0;color:#000;}
+        .retry-btn:active{transform:scale(0.95);}
+        .sub-text{color:#333;font-size:10px;margin-top:20px;border-top:1px solid #1a1a2e;padding-top:16px;}
+    </style>
+</head>
+<body>
+    <div class="offline-container">
+        <span class="offline-icon">📶</span>
+        <h1>No Internet Connection</h1>
+        <p>Please check your network settings and try again.</p>
+        <button class="retry-btn" onclick="location.reload()">↻ Retry</button>
+        <div class="sub-text">🔒 ABAVANDIMWE Secure Messaging</div>
+    </div>
+</body>
+</html>
