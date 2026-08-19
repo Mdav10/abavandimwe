@@ -680,6 +680,8 @@ HTML = '''<!DOCTYPE html>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
     <title>ABAVANDIMWE | Secure Messaging</title>
+    
+    <!-- PWA Meta Tags -->
     <link rel="manifest" href="/manifest.json">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -688,6 +690,8 @@ HTML = '''<!DOCTYPE html>
     <meta name="theme-color" content="#0a0a0f">
     <meta name="msapplication-TileColor" content="#0a0a0f">
     <meta name="msapplication-TileImage" content="/icons/icon-144x144.png">
+    
+    <!-- Icons -->
     <link rel="icon" type="image/png" sizes="72x72" href="/icons/icon-72x72.png">
     <link rel="icon" type="image/png" sizes="96x96" href="/icons/icon-96x96.png">
     <link rel="icon" type="image/png" sizes="128x128" href="/icons/icon-128x128.png">
@@ -696,7 +700,10 @@ HTML = '''<!DOCTYPE html>
     <link rel="icon" type="image/png" sizes="192x192" href="/icons/icon-192x192.png">
     <link rel="icon" type="image/png" sizes="384x384" href="/icons/icon-384x384.png">
     <link rel="icon" type="image/png" sizes="512x512" href="/icons/icon-512x512.png">
+    
+    <!-- Apple Touch Icon -->
     <link rel="apple-touch-icon" href="/icons/icon-192x192.png">
+    
     <style>
         *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent;}
         body{font-family:monospace;background:#0a0a0f;height:100vh;overflow:hidden;color:#0f0;}
@@ -721,11 +728,10 @@ HTML = '''<!DOCTYPE html>
         .success-message{color:#0f0;font-size:12px;text-align:center;margin-top:12px;display:none;}
         .login-footer{text-align:center;margin-top:20px;font-size:9px;color:#333;border-top:1px solid #1a1a2e;padding-top:16px;}
         
-        /* ===== CHAT LAYOUT – with stability fixes ===== */
-        .chat-container{display:none;width:100%;height:100%;flex-direction:column;background:#0a0a0f;position:fixed;top:0;left:0;right:0;bottom:0;overflow:hidden;}
+        .chat-container{display:none;width:100%;height:100%;flex-direction:column;background:#0a0a0f;position:fixed;top:0;left:0;right:0;bottom:0;}
         .chat-container.active{display:flex;}
         
-        .chat-header{padding:12px 16px;background:#050508;border-bottom:1px solid #0f0;display:flex;justify-content:space-between;align-items:center;gap:8px;flex-shrink:0;}
+        .chat-header{padding:12px 16px;background:#050508;border-bottom:1px solid #0f0;display:flex;justify-content:space-between;align-items:center;gap:8px;}
         .chat-header-left{display:flex;align-items:center;gap:10px;}
         .chat-header h2{font-size:16px;flex:1;text-align:center;overflow:hidden;text-overflow:ellipsis;}
         .online-badge{font-size:10px;padding:3px 10px;border:1px solid #0f0;border-radius:20px;background:rgba(0,255,0,0.05);}
@@ -733,11 +739,11 @@ HTML = '''<!DOCTYPE html>
         .logout-btn:hover{border-color:#ff0041;color:#ff0041;}
         .logout-btn:active{background:#ff0041;border-color:#ff0041;color:white;}
         
-        .main-content{flex:1;display:flex;overflow:hidden;position:relative;min-height:0;}
-        .sidebar{width:260px;background:#050508;border-right:1px solid #0f0;display:flex;flex-direction:column;flex-shrink:0;overflow:hidden;}
-        .sidebar-header{padding:16px;border-bottom:1px solid #0f0;flex-shrink:0;}
+        .main-content{flex:1;display:flex;overflow:hidden;position:relative;}
+        .sidebar{width:260px;background:#050508;border-right:1px solid #0f0;display:flex;flex-direction:column;flex-shrink:0;}
+        .sidebar-header{padding:16px;border-bottom:1px solid #0f0;}
         .sidebar-header h3{font-size:14px;}
-        .users-list{flex:1;padding:12px;overflow-y:auto;min-height:0;}
+        .users-list{flex:1;padding:12px;overflow-y:auto;}
         .user-item{padding:10px 12px;margin:6px 0;border:1px solid #0f0;border-radius:10px;display:flex;align-items:center;gap:8px;animation:fadeIn 0.3s ease;}
         .user-item::before{content:"●";color:#0f0;font-size:10px;animation:pulse 2s infinite;}
         @keyframes pulse{0%,100%{opacity:1;}50%{opacity:0.5;}}
@@ -751,11 +757,12 @@ HTML = '''<!DOCTYPE html>
         }
         @media (min-width:769px){.menu-btn,.overlay{display:none;}}
         
-        .chat-area{flex:1;display:flex;flex-direction:column;overflow:hidden;min-height:0;}
-        .messages-container{flex:1;padding:16px;overflow-y:auto;display:flex;flex-direction:column;gap:12px;min-height:0;}
-        .message{max-width:85%;display:flex;flex-direction:column;animation:fadeIn 0.2s ease;position:relative;padding:8px 0;transition:transform 0.2s ease;flex-shrink:0;}
+        .chat-area{flex:1;display:flex;flex-direction:column;}
+        .messages-container{flex:1;padding:16px;overflow-y:auto;display:flex;flex-direction:column;gap:12px;}
+        .message{max-width:85%;display:flex;flex-direction:column;animation:fadeIn 0.2s ease;position:relative;padding:8px 0;transition:transform 0.2s ease;}
         .message.sent{align-self:flex-end;}
         .message.received{align-self:flex-start;}
+        /* ===== FIX: Message wrapping ===== */
         .message-bubble{padding:10px 14px;border-radius:18px;font-size:14px;word-wrap:break-word;overflow-wrap:break-word;word-break:break-word;max-width:100%;position:relative;}
         .message.sent .message-bubble{background:#0f0;color:#000;border-bottom-right-radius:4px;}
         .message.received .message-bubble{background:#1a1a2e;border:1px solid #0f0;border-bottom-left-radius:4px;}
@@ -764,20 +771,20 @@ HTML = '''<!DOCTYPE html>
         .message-reply-preview{font-size:11px;color:#ffaa00;margin-bottom:6px;padding:6px 10px;background:rgba(255,170,0,0.08);border-left:3px solid #ffaa00;border-radius:4px;opacity:0.8;cursor:pointer;}
         .message-reply-preview .reply-sender{color:#ffaa00;font-weight:bold;}
         .message-reply-preview .reply-text{color:#888;}
-        .system-message{text-align:center;font-size:11px;color:#ffaa00;margin:8px 0;font-style:italic;animation:fadeIn 0.3s ease;flex-shrink:0;}
-        .typing-indicator{padding:8px 16px;color:#0f0;font-style:italic;font-size:11px;min-height:36px;flex-shrink:0;}
+        .system-message{text-align:center;font-size:11px;color:#ffaa00;margin:8px 0;font-style:italic;animation:fadeIn 0.3s ease;}
+        .typing-indicator{padding:8px 16px;color:#0f0;font-style:italic;font-size:11px;min-height:36px;}
         
-        .input-area{padding:12px 16px;background:#050508;border-top:1px solid #0f0;display:flex;flex-direction:column;gap:8px;flex-shrink:0;}
+        .input-area{padding:12px 16px;background:#050508;border-top:1px solid #0f0;display:flex;flex-direction:column;gap:8px;}
         .reply-preview{display:none;padding:8px 12px;background:rgba(255,170,0,0.1);border-left:3px solid #ffaa00;border-radius:6px;font-size:12px;color:#ffaa00;align-items:center;justify-content:space-between;}
         .reply-preview .reply-cancel{color:#ff4444;cursor:pointer;font-weight:bold;padding:0 8px;}
         .reply-preview .reply-cancel:hover{color:#ff6666;}
-        .input-row{display:flex;gap:10px;align-items:flex-end;flex-shrink:0;}
+        .input-row{display:flex;gap:10px;align-items:flex-end;}
         .input-row textarea{flex:1;margin:0;padding:12px 16px;background:#111;border:1px solid #0f0;border-radius:12px;color:#0f0;font-family:monospace;font-size:14px;resize:vertical;min-height:50px;max-height:80px;line-height:1.5;overflow-y:auto;}
         .input-row textarea:focus{outline:none;box-shadow:0 0 20px rgba(0,255,65,0.2);border-color:#0f0;}
         .input-row textarea::placeholder{color:#444;}
-        .input-row button{width:60px;min-width:60px;margin:0;padding:12px 0;height:50px;align-self:flex-end;position:relative;overflow:hidden;font-size:20px;display:flex;align-items:center;justify-content:center;flex-shrink:0;}
+        .input-row button{width:60px;min-width:60px;margin:0;padding:12px 0;height:50px;align-self:flex-end;position:relative;overflow:hidden;font-size:20px;display:flex;align-items:center;justify-content:center;}
         .input-row button .btn-text{font-size:20px;line-height:1;}
-        .footer{text-align:center;padding:6px;font-size:8px;color:#333;border-top:1px solid #0f0;flex-shrink:0;}
+        .footer{text-align:center;padding:6px;font-size:8px;color:#333;border-top:1px solid #0f0;}
         
         ::-webkit-scrollbar{width:3px;}
         ::-webkit-scrollbar-track{background:#1a1a2e;}
@@ -854,7 +861,7 @@ HTML = '''<!DOCTYPE html>
         @keyframes dot-bounce{0%,80%,100%{transform:scale(0);opacity:0.3;}40%{transform:scale(1);opacity:1;}}
         
         .group-info{font-size:10px;color:#ffaa00;padding:8px;background:rgba(255,170,0,0.08);border-radius:6px;margin-top:8px;border-left:2px solid #ffaa00;}
-        .offline-bar{display:none;background:#ff0041;color:white;text-align:center;padding:6px;font-size:11px;font-weight:bold;position:sticky;top:0;z-index:5;flex-shrink:0;}
+        .offline-bar{display:none;background:#ff0041;color:white;text-align:center;padding:6px;font-size:11px;font-weight:bold;position:sticky;top:0;z-index:5;}
         .offline-bar.active{display:block;}
         .offline-bar .reconnect-btn{background:white;color:#ff0041;border:none;padding:2px 12px;border-radius:4px;cursor:pointer;margin-left:10px;font-weight:bold;font-size:11px;}
         .offline-message{text-align:center;color:#ff4444;padding:20px;font-size:14px;}
@@ -882,14 +889,25 @@ HTML = '''<!DOCTYPE html>
             <h1># ABAVANDIMWE</h1>
             <div class="sub">Secure Messaging System</div>
             <div style="text-align:center;"><span class="admin-badge">🔐 Gatekeeper</span></div>
+            
             <input type="text" id="loginUsername" placeholder="Username" autocomplete="username">
             <input type="password" id="loginPassword" placeholder="Password" autocomplete="current-password">
+            
             <button id="loginBtn">▶ Login</button>
+            
             <div class="separator"><span>OR</span></div>
-            <button class="btn-whatsapp" onclick="requestAccess()">💬 Request Access on WhatsApp</button>
+            
+            <button class="btn-whatsapp" onclick="requestAccess()">
+                💬 Request Access on WhatsApp
+            </button>
+            
             <div id="loginError" class="error-message"></div>
             <div id="loginSuccess" class="success-message"></div>
-            <div class="login-footer">🔒 AES-256 | ⏰ Messages auto-delete after 24 hours<br><span style="color:#1a1a2e;">Developed by Mugisha Pc</span></div>
+            
+            <div class="login-footer">
+                🔒 AES-256 | ⏰ Messages auto-delete after 24 hours<br>
+                <span style="color:#1a1a2e;">Developed by Mugisha Pc</span>
+            </div>
         </div>
     </div>
 </div>
@@ -897,14 +915,18 @@ HTML = '''<!DOCTYPE html>
 <div id="adminPanel" class="admin-panel">
     <div class="admin-panel-header">
         <h2>⚙️ Admin Dashboard <span class="admin-username">(Logged in as: <span id="adminUsername">Mpc</span>)</span></h2>
-        <div><button class="close-admin" onclick="logout()">🚪 Logout</button></div>
+        <div>
+            <button class="close-admin" onclick="logout()">🚪 Logout</button>
+        </div>
     </div>
+    
     <div class="admin-stats" id="adminStats">
         <div class="stat-box"><div class="stat-number" id="statUsers">0</div><div class="stat-label">Total Users</div></div>
         <div class="stat-box"><div class="stat-number" id="statMessages">0</div><div class="stat-label">Total Messages</div></div>
         <div class="stat-box"><div class="stat-number" id="statGroups">0</div><div class="stat-label">Total Groups</div></div>
         <div class="stat-box"><div class="stat-number" id="statOnline">0</div><div class="stat-label">Online Now</div></div>
     </div>
+    
     <div class="admin-content">
         <div class="admin-card">
             <h3>👤 Create User</h3>
@@ -915,23 +937,49 @@ HTML = '''<!DOCTYPE html>
                 <input type="text" id="newGroupPassword" placeholder="Group Password" style="width:100%;">
                 <button onclick="createUser()" class="action-btn-green">➕ Create User</button>
             </div>
-            <div class="group-info">⚠️ If the group already exists, the Group Password you enter MUST match the existing group password!</div>
+            <div class="group-info">
+                ⚠️ If the group already exists, the Group Password you enter MUST match the existing group password!
+            </div>
         </div>
+        
         <div class="admin-card">
             <h3>📋 Users</h3>
-            <div class="admin-table-wrap"><table><thead><tr><th>Username</th><th>Group</th><th>Display Name</th><th>Status</th><th>Action</th></tr></thead><tbody id="usersTableBody"></tbody></table></div>
+            <div class="admin-table-wrap">
+                <table>
+                    <thead><tr><th>Username</th><th>Group</th><th>Display Name</th><th>Status</th><th>Action</th></tr></thead>
+                    <tbody id="usersTableBody"></tbody>
+                </table>
+            </div>
         </div>
+        
         <div class="admin-card">
             <h3>📁 Groups</h3>
-            <div class="admin-table-wrap"><table><thead><tr><th>Group Name</th><th>Created By</th><th>Action</th></tr></thead><tbody id="groupsTableBody"></tbody></table></div>
+            <div class="admin-table-wrap">
+                <table>
+                    <thead><tr><th>Group Name</th><th>Created By</th><th>Action</th></tr></thead>
+                    <tbody id="groupsTableBody"></tbody>
+                </table>
+            </div>
         </div>
+        
         <div class="admin-card">
             <h3>📨 Recent Messages</h3>
-            <div class="admin-table-wrap"><table><thead><tr><th>Sender</th><th>Group</th><th>Time</th><th>Action</th></tr></thead><tbody id="messagesTableBody"></tbody></table></div>
+            <div class="admin-table-wrap">
+                <table>
+                    <thead><tr><th>Sender</th><th>Group</th><th>Time</th><th>Action</th></tr></thead>
+                    <tbody id="messagesTableBody"></tbody>
+                </table>
+            </div>
         </div>
+        
         <div class="admin-card">
             <h3>📋 Admin Logs</h3>
-            <div class="admin-table-wrap"><table><thead><tr><th>Admin</th><th>Action</th><th>Target</th><th>Time</th></tr></thead><tbody id="logsTableBody"></tbody></table></div>
+            <div class="admin-table-wrap">
+                <table>
+                    <thead><tr><th>Admin</th><th>Action</th><th>Target</th><th>Time</th></tr></thead>
+                    <tbody id="logsTableBody"></tbody>
+                </table>
+            </div>
         </div>
     </div>
 </div>
@@ -940,11 +988,17 @@ HTML = '''<!DOCTYPE html>
     <div class="gatekeeper-card">
         <h2>🔐 Gatekeeper</h2>
         <div class="sub">Verify your credentials to access your group</div>
+        
         <input type="text" id="gatekeeperUsername" placeholder="Username" readonly>
         <input type="password" id="gatekeeperPassword" placeholder="Password">
+        
         <button id="gatekeeperBtn">▶ Verify</button>
+        
         <div id="gatekeeperError" class="error-message"></div>
-        <div class="login-footer" style="margin-top:20px;padding-top:16px;border-top:1px solid #1a1a2e;">🔒 Credentials provided by admin</div>
+        
+        <div class="login-footer" style="margin-top:20px;padding-top:16px;border-top:1px solid #1a1a2e;">
+            🔒 Credentials provided by admin
+        </div>
     </div>
 </div>
 
@@ -952,13 +1006,19 @@ HTML = '''<!DOCTYPE html>
     <div class="user-setup-card">
         <h2>👤 Setup Profile</h2>
         <div class="sub">Enter your display name to start chatting</div>
+        
         <input type="text" id="userDisplayName" placeholder="Your Display Name (e.g., John Doe)">
         <input type="text" id="userGroupName" placeholder="Group Name" readonly>
         <input type="password" id="userGroupPassword" placeholder="Group Password" readonly>
+        
         <button id="enterChatBtn">▶ Enter Chat</button>
+        
         <div id="setupError" class="error-message"></div>
         <div id="setupSuccess" class="success-message"></div>
-        <div class="login-footer" style="margin-top:20px;padding-top:16px;border-top:1px solid #1a1a2e;">🔐 You'll be able to see messages from others in your group</div>
+        
+        <div class="login-footer" style="margin-top:20px;padding-top:16px;border-top:1px solid #1a1a2e;">
+            🔐 You'll be able to see messages from others in your group
+        </div>
     </div>
 </div>
 
@@ -971,15 +1031,24 @@ HTML = '''<!DOCTYPE html>
         <h2 id="groupTitle"># LOADING</h2>
         <button class="logout-btn" onclick="logout()">Leave</button>
     </div>
-    <div class="offline-bar" id="offlineBar">⚠️ No internet connection <button class="reconnect-btn" onclick="reconnectManually()">↻ Retry</button></div>
+    
+    <!-- Offline Bar -->
+    <div class="offline-bar" id="offlineBar">
+        ⚠️ No internet connection
+        <button class="reconnect-btn" onclick="reconnectManually()">↻ Retry</button>
+    </div>
+    
     <div class="main-content">
         <div class="sidebar" id="sidebar">
             <div class="sidebar-header"><h3>● Online Users</h3></div>
             <div class="users-list" id="usersList"><div class="user-item">Loading...</div></div>
         </div>
         <div class="overlay" id="overlay" onclick="toggleSidebar()"></div>
+        
         <div class="chat-area">
-            <div class="messages-container" id="messages"><div style="text-align:center;color:#666;padding:40px 0;">Connecting...</div></div>
+            <div class="messages-container" id="messages">
+                <div style="text-align:center;color:#666;padding:40px 0;">Connecting...</div>
+            </div>
             <div class="typing-indicator" id="typingIndicator"></div>
             <div class="input-area">
                 <div class="reply-preview" id="replyPreview">
@@ -997,10 +1066,10 @@ HTML = '''<!DOCTYPE html>
     <div class="connection-status status-online" id="connectionStatus">🟢 Connected</div>
 </div>
 
+<!-- Install App Button -->
 <button id="installBtn" class="install-btn">📲 Install ABAVANDIMWE App</button>
 
 <script>
-// ====== COMPLETE JAVASCRIPT – ALL ORIGINAL FUNCTIONS ======
 let ws, username, groupName, groupPassword, groupSalt, typingTimeout, reconnectAttempts = 0;
 let currentUser = null;
 let gatekeeperData = null;
@@ -1014,6 +1083,7 @@ function showLoading(text, callback) {
     const loadingText = document.getElementById('loadingText');
     loadingText.textContent = text;
     overlay.classList.add('active');
+    
     setTimeout(async () => {
         try {
             await callback();
@@ -1031,6 +1101,7 @@ function showLoading(text, callback) {
         }
     }, 300);
 }
+
 function hideLoading() {
     document.getElementById('loadingOverlay').classList.remove('active');
 }
@@ -1059,8 +1130,8 @@ window.addEventListener('beforeinstallprompt', (e) => {
     console.log('📱 App can be installed');
 });
 
-// ====== INSTALL BUTTON FIX ======
-installBtn.addEventListener('click', function() {
+// ===== FIX #2: Install button click listener =====
+document.getElementById('installBtn').addEventListener('click', function() {
     if (deferredPrompt) {
         deferredPrompt.prompt();
         deferredPrompt.userChoice.then((choiceResult) => {
@@ -1099,14 +1170,17 @@ document.addEventListener('DOMContentLoaded', function() {
         if (this.classList.contains('btn-loading')) return;
         showLoading('Logging in', login);
     });
+    
     document.getElementById('gatekeeperBtn').addEventListener('click', function(e) {
         if (this.classList.contains('btn-loading')) return;
         showLoading('Verifying', gatekeeperLogin);
     });
+    
     document.getElementById('enterChatBtn').addEventListener('click', function(e) {
         if (this.classList.contains('btn-loading')) return;
         showLoading('Entering Chat', enterChat);
     });
+    
     document.getElementById('loginPassword').addEventListener('keypress', function(e) {
         if(e.key === 'Enter') {
             showLoading('Logging in', login);
@@ -1122,7 +1196,7 @@ document.addEventListener('DOMContentLoaded', function() {
             showLoading('Entering Chat', enterChat);
         }
     });
-    // ====== TEXTAREA AUTO-RESIZE (capped at 80px) ======
+    
     document.getElementById('messageInput').addEventListener('input', function() {
         this.style.height = 'auto';
         this.style.height = Math.min(this.scrollHeight, 80) + 'px';
@@ -1141,21 +1215,26 @@ document.addEventListener('DOMContentLoaded', function() {
 async function login() {
     const username = document.getElementById('loginUsername').value.trim();
     const password = document.getElementById('loginPassword').value;
+    
     if(!username || !password) {
         showError('Please enter username and password');
         hideLoading();
         return;
     }
+    
     try {
         const response = await fetch('/login', {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
             body: JSON.stringify({username, password})
         });
+        
         const data = await response.json();
+        
         if(data.success) {
             currentUser = {username: data.username, role: data.role};
             hideLoading();
+            
             if(data.role === 'admin') {
                 document.getElementById('loginScreen').style.display = 'none';
                 document.getElementById('adminPanel').classList.add('active');
@@ -1166,6 +1245,7 @@ async function login() {
                 document.getElementById('gatekeeperScreen').classList.add('active');
                 document.getElementById('gatekeeperUsername').value = data.username;
                 document.getElementById('gatekeeperPassword').value = '';
+                
                 if(data.display_name) {
                     const successDiv = document.createElement('div');
                     successDiv.id = 'gatekeeperSuccess';
@@ -1192,25 +1272,31 @@ async function login() {
 async function gatekeeperLogin() {
     const username = document.getElementById('gatekeeperUsername').value.trim();
     const password = document.getElementById('gatekeeperPassword').value;
+    
     if(!username || !password) {
         showGatekeeperError('Please enter your password');
         hideLoading();
         return;
     }
+    
     try {
         const response = await fetch('/gatekeeper', {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
             body: JSON.stringify({username, password})
         });
+        
         const data = await response.json();
+        
         if(data.success) {
             gatekeeperData = data;
             document.getElementById('gatekeeperScreen').classList.remove('active');
             document.getElementById('userSetupScreen').classList.add('active');
+            
             document.getElementById('userGroupName').value = data.assigned_group;
             document.getElementById('userGroupPassword').value = data.assigned_group_password;
             groupPassword = data.assigned_group_password;
+            
             if(data.display_name) {
                 document.getElementById('userDisplayName').value = data.display_name;
                 showSetupSuccess('✅ Welcome back! Your display name is saved.');
@@ -1234,16 +1320,19 @@ async function gatekeeperLogin() {
 async function enterChat() {
     const displayName = document.getElementById('userDisplayName').value.trim();
     const groupName = document.getElementById('userGroupName').value.trim();
+    
     if(!displayName) {
         showSetupError('Please enter your display name');
         hideLoading();
         return;
     }
+    
     if(!groupName) {
         showSetupError('Group missing. Please contact admin.');
         hideLoading();
         return;
     }
+    
     try {
         await fetch('/save_display_name', {
             method: 'POST',
@@ -1256,23 +1345,29 @@ async function enterChat() {
     } catch(e) {
         console.error('Failed to save display name:', e);
     }
+    
     window.chatUsername = displayName;
     window.chatGroup = groupName;
     window.groupPassword = groupPassword;
+    
     document.getElementById('userSetupScreen').classList.remove('active');
     document.getElementById('chatScreen').classList.add('active');
     document.getElementById('messages').innerHTML = '';
     messagesData = {};
     hideLoading();
+    
     connectToChat(displayName, groupName);
 }
 
 // ========== CONNECT TO CHAT ==========
 function connectToChat(username, group) {
     document.getElementById('groupTitle').innerHTML = '# ' + group;
+    
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const url = protocol + '//' + window.location.host + '/ws';
+    
     ws = new WebSocket(url);
+    
     ws.onopen = function() {
         updateStatus(true);
         document.getElementById('offlineBar').classList.remove('active');
@@ -1286,9 +1381,11 @@ function connectToChat(username, group) {
         reconnectAttempts = 0;
         isManuallyReconnecting = false;
     };
+    
     ws.onmessage = async function(e) {
         try {
             let d = JSON.parse(e.data);
+            
             if(d.type === 'error') {
                 showError(d.message);
                 ws.close();
@@ -1302,6 +1399,7 @@ function connectToChat(username, group) {
                 const offlineMsg = document.querySelector('.offline-message');
                 if (offlineMsg) offlineMsg.remove();
                 messagesData = {};
+                
                 if(d.messages && d.messages.length > 0) {
                     for(let msg of d.messages) {
                         try {
@@ -1344,16 +1442,19 @@ function connectToChat(username, group) {
             console.error('Error processing message:', e);
         }
     };
+    
     ws.onerror = function(e) {
         console.error('WebSocket error:', e);
         updateStatus(false);
     };
+    
     ws.onclose = function() {
         updateStatus(false);
         document.getElementById('offlineBar').classList.add('active');
         const messagesContainer = document.getElementById('messages');
         messagesContainer.innerHTML = '<div class="offline-message">🔴 No internet connection. Messages are hidden.</div>';
         messagesData = {};
+        
         if(document.getElementById('chatScreen').classList.contains('active')) {
             if (!isManuallyReconnecting) {
                 reconnectAttempts++;
@@ -1364,6 +1465,7 @@ function connectToChat(username, group) {
         }
     };
 }
+
 function reconnectManually() {
     isManuallyReconnecting = true;
     if (ws) {
@@ -1379,6 +1481,7 @@ function toggleSidebar() {
     document.getElementById('sidebar').classList.toggle('open');
     document.getElementById('overlay').classList.toggle('active');
 }
+
 function updateStatus(online) {
     let status = document.getElementById('connectionStatus');
     let badge = document.getElementById('connectionBadge');
@@ -1395,6 +1498,7 @@ function updateStatus(online) {
         badge.style.color = '#ff4444';
     }
 }
+
 function addSystemMessage(text) {
     let msgs = document.getElementById('messages');
     const offlineMsg = document.querySelector('.offline-message');
@@ -1405,6 +1509,7 @@ function addSystemMessage(text) {
     msgs.appendChild(div);
     msgs.scrollTop = msgs.scrollHeight;
 }
+
 function addMessage(sender, text, isSent, timestamp, messageId, replyTo) {
     let msgs = document.getElementById('messages');
     const offlineMsg = document.querySelector('.offline-message');
@@ -1414,6 +1519,7 @@ function addMessage(sender, text, isSent, timestamp, messageId, replyTo) {
     div.dataset.messageId = messageId;
     div.dataset.sender = sender;
     div.dataset.text = text;
+    
     let time;
     if(timestamp) {
         let date = new Date(timestamp * 1000);
@@ -1421,6 +1527,7 @@ function addMessage(sender, text, isSent, timestamp, messageId, replyTo) {
     } else {
         time = new Date().toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
     }
+    
     let replyHtml = '';
     if(replyTo && messagesData[replyTo]) {
         let original = messagesData[replyTo];
@@ -1430,10 +1537,12 @@ function addMessage(sender, text, isSent, timestamp, messageId, replyTo) {
                     '<span class="reply-text">' + escapeHtml(originalText.substring(0, 60)) + (originalText.length > 60 ? '...' : '') + '</span>' +
                     '</div>';
     }
+    
     div.innerHTML = '<div class="message-sender">' + (isSent ? 'YOU' : escapeHtml(sender)) + '</div>' + 
                     replyHtml +
                     '<div class="message-bubble">' + escapeHtml(text) + '</div>' + 
                     '<div class="message-time">' + time + '</div>';
+    
     // Swipe to reply (mobile and desktop)
     let touchStartX = 0, touchCurrentX = 0, touchStartY = 0;
     div.addEventListener('touchstart', function(e) {
@@ -1457,6 +1566,7 @@ function addMessage(sender, text, isSent, timestamp, messageId, replyTo) {
         }
         touchStartX = 0; touchCurrentX = 0; touchStartY = 0;
     }, {passive: true});
+    
     let mouseStartX = 0, mouseCurrentX = 0, mouseStartY = 0, isMouseDown = false;
     div.addEventListener('mousedown', function(e) {
         mouseStartX = e.clientX;
@@ -1488,9 +1598,11 @@ function addMessage(sender, text, isSent, timestamp, messageId, replyTo) {
             isMouseDown = false;
         }
     });
+    
     msgs.appendChild(div);
     msgs.scrollTop = msgs.scrollHeight;
 }
+
 function startReply(messageId) {
     if (!messageId || !messagesData[messageId]) return;
     replyingToMessageId = messageId;
@@ -1500,10 +1612,12 @@ function startReply(messageId) {
     document.getElementById('replyPreview').style.display = 'flex';
     document.getElementById('messageInput').focus();
 }
+
 function cancelReply() {
     replyingToMessageId = null;
     document.getElementById('replyPreview').style.display = 'none';
 }
+
 function scrollToMessage(messageId) {
     let messages = document.querySelectorAll('.message');
     for (let msg of messages) {
@@ -1515,6 +1629,7 @@ function scrollToMessage(messageId) {
         }
     }
 }
+
 function updateUsers(users) {
     let ul = document.getElementById('usersList');
     if(!users || users.length === 0) {
@@ -1523,6 +1638,7 @@ function updateUsers(users) {
         ul.innerHTML = users.map(u => '<div class="user-item">' + escapeHtml(u) + '</div>').join('');
     }
 }
+
 function escapeHtml(t) {
     let d = document.createElement('div');
     d.textContent = t;
@@ -1544,6 +1660,7 @@ async function encrypt(text, pwd, salt) {
     c.set(new Uint8Array(enc), iv.length);
     return btoa(String.fromCharCode(...c));
 }
+
 async function decrypt(enc, pwd, salt) {
     const d = Uint8Array.from(atob(enc), c => c.charCodeAt(0));
     const iv = d.slice(0, 12), data = d.slice(12);
@@ -1585,6 +1702,7 @@ async function sendMessage() {
         alert('Failed to send message');
     }
 }
+
 function requestAccess() {
     const phone = '256762117982';
     const message = 'Hello, I would like to get access to ABAVANDIMWE secure messaging platform. Please send me login credentials.';
@@ -1593,6 +1711,7 @@ function requestAccess() {
     showSuccess('📱 Opening WhatsApp... Please send your request.');
     hideLoading();
 }
+
 function showError(msg) {
     let err = document.getElementById('loginError');
     err.textContent = msg;
@@ -1628,7 +1747,6 @@ function showSetupSuccess(msg) {
     setTimeout(() => success.style.display = 'none', 5000);
 }
 
-// ========== LOGOUT ==========
 async function logout() {
     if(ws) ws.close();
     ws = null;
@@ -1659,7 +1777,6 @@ async function logout() {
     hideLoading();
 }
 
-// ========== ADMIN FUNCTIONS ==========
 async function loadAdminData() {
     try {
         const response = await fetch('/admin/data');
@@ -1668,6 +1785,7 @@ async function loadAdminData() {
         document.getElementById('statMessages').textContent = data.messages_count;
         document.getElementById('statGroups').textContent = data.groups.length;
         document.getElementById('statOnline').textContent = data.online_count;
+        
         let usersHtml = '';
         data.users.forEach(u => {
             usersHtml += `<tr>
@@ -1681,7 +1799,8 @@ async function loadAdminData() {
             </tr>`;
         });
         document.getElementById('usersTableBody').innerHTML = usersHtml;
-        // ====== FIX: group_name instead of name ======
+        
+        // ===== FIX #1: Use group_name instead of name =====
         let groupsHtml = '';
         data.groups.forEach(g => {
             groupsHtml += `<tr>
@@ -1691,6 +1810,7 @@ async function loadAdminData() {
             </tr>`;
         });
         document.getElementById('groupsTableBody').innerHTML = groupsHtml;
+        
         let messagesHtml = '';
         data.messages.forEach(m => {
             let time = new Date(m.created_at * 1000).toLocaleString();
@@ -1702,6 +1822,7 @@ async function loadAdminData() {
             </tr>`;
         });
         document.getElementById('messagesTableBody').innerHTML = messagesHtml;
+        
         let logsHtml = '';
         data.logs.forEach(l => {
             let time = new Date(l.created_at * 1000).toLocaleString();
