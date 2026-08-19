@@ -1098,7 +1098,6 @@ let replyingToMessageId = null;
 let messagesData = {};
 let isManuallyReconnecting = false;
 let lastActiveScreen = null;
-let wasOffline = !navigator.onLine;
 
 // ========== LOADING OVERLAY ==========
 function showLoading(text, callback) {
@@ -1218,10 +1217,12 @@ function hideOfflineOverlay() {
     offlineOverlay.classList.remove('active');
     // Restore the previous screen
     if (lastActiveScreen === 'chat') {
+        // If we were in chat, try to reconnect - stay in chat
         if (window.chatUsername && window.chatGroup) {
             document.getElementById('chatScreen').classList.add('active');
             connectToChat(window.chatUsername, window.chatGroup);
         } else {
+            // Fallback to login if no chat session
             document.getElementById('loginScreen').style.display = 'flex';
         }
     } else if (lastActiveScreen === 'admin') {
@@ -1232,6 +1233,7 @@ function hideOfflineOverlay() {
     } else if (lastActiveScreen === 'userSetup') {
         document.getElementById('userSetupScreen').classList.add('active');
     } else {
+        // Default to login
         document.getElementById('loginScreen').style.display = 'flex';
     }
     lastActiveScreen = null;
@@ -1297,7 +1299,7 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     });
 
-    // ----- OFFLINE / ONLINE HANDLING -----
+    // ----- OFFLINE / ONLINE HANDLING (UPDATED) -----
     function handleVisibilityChange() {
         if (document.visibilityState === 'visible') {
             if (document.getElementById('chatScreen').classList.contains('active')) {
@@ -1316,22 +1318,28 @@ document.addEventListener('DOMContentLoaded', function() {
 
     document.addEventListener('visibilitychange', handleVisibilityChange);
 
-    // ===== AUTO-RELOAD WHEN NETWORK COMES BACK =====
+    // ===== WHEN NETWORK COMES BACK - STAY IN CHAT =====
     window.addEventListener('online', function() {
+        console.log('Network came back - reconnecting...');
+        
         // Hide the overlay
         if (offlineOverlay.classList.contains('active')) {
-            hideOfflineOverlay();
+            // If we were in chat, restore chat without reloading
+            if (lastActiveScreen === 'chat' && window.chatUsername && window.chatGroup) {
+                offlineOverlay.classList.remove('active');
+                document.getElementById('chatScreen').classList.add('active');
+                document.getElementById('offlineBar').classList.remove('active');
+                connectToChat(window.chatUsername, window.chatGroup);
+                lastActiveScreen = null;
+            } else {
+                // For other screens, use the normal hide function
+                hideOfflineOverlay();
+            }
+        } else {
+            document.getElementById('offlineBar').classList.remove('active');
         }
-        document.getElementById('offlineBar').classList.remove('active');
         
-        // Check if we were previously offline
-        if (wasOffline) {
-            console.log('Network came back - reloading page...');
-            // Reload the page to get fresh data
-            window.location.reload();
-        }
-        wasOffline = false;
-        
+        // If chat is active and WebSocket is not open, reconnect
         if (document.getElementById('chatScreen').classList.contains('active')) {
             if (!ws || ws.readyState !== WebSocket.OPEN) {
                 if (window.chatUsername && window.chatGroup) {
@@ -1342,7 +1350,6 @@ document.addEventListener('DOMContentLoaded', function() {
     });
 
     window.addEventListener('offline', function() {
-        wasOffline = true;
         console.log('Network went offline');
         showOfflineOverlay();
         if (document.getElementById('chatScreen').classList.contains('active')) {
@@ -1654,13 +1661,13 @@ function updateStatus(online) {
     let status = document.getElementById('connectionStatus');
     let badge = document.getElementById('connectionBadge');
     if(online) {
-        status.innerHTML = '';
+        status.innerHTML = '🟢 Connected';
         status.className = 'connection-status status-online';
         badge.innerHTML = '● Online';
         badge.style.color = '#0f0';
         document.getElementById('offlineBar').classList.remove('active');
     } else {
-        status.innerHTML = '';
+        status.innerHTML = '🔴 Disconnected';
         status.className = 'connection-status status-offline';
         badge.innerHTML = '● Offline';
         badge.style.color = '#ff4444';
