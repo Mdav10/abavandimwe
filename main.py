@@ -1654,13 +1654,13 @@ function updateStatus(online) {
     let status = document.getElementById('connectionStatus');
     let badge = document.getElementById('connectionBadge');
     if(online) {
-        status.innerHTML = '🟢 Connected';
+        status.innerHTML = '';
         status.className = 'connection-status status-online';
         badge.innerHTML = '● Online';
         badge.style.color = '#0f0';
         document.getElementById('offlineBar').classList.remove('active');
     } else {
-        status.innerHTML = '🔴 Disconnected';
+        status.innerHTML = '';
         status.className = 'connection-status status-offline';
         badge.innerHTML = '● Offline';
         badge.style.color = '#ff4444';
