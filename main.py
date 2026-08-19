@@ -759,6 +759,8 @@ HTML = '''<!DOCTYPE html>
         
         .chat-area{flex:1;display:flex;flex-direction:column;overflow:hidden;min-height:0;}
         .messages-container{flex:1;padding:16px;overflow-y:auto;display:flex;flex-direction:column;gap:12px;min-height:0;}
+        
+        /* ===== FIX: Message wrapping ===== */
         .message{max-width:85%;display:flex;flex-direction:column;animation:fadeIn 0.2s ease;position:relative;padding:8px 0;transition:transform 0.2s ease;flex-shrink:0;}
         .message.sent{align-self:flex-end;}
         .message.received{align-self:flex-start;}
@@ -773,10 +775,12 @@ HTML = '''<!DOCTYPE html>
         .system-message{text-align:center;font-size:11px;color:#ffaa00;margin:8px 0;font-style:italic;animation:fadeIn 0.3s ease;flex-shrink:0;}
         .typing-indicator{padding:8px 16px;color:#0f0;font-style:italic;font-size:11px;min-height:36px;flex-shrink:0;}
         
+        /* ===== FIX: Input area fixed at bottom ===== */
         .input-area{padding:12px 16px;background:#050508;border-top:1px solid #0f0;display:flex;flex-direction:column;gap:8px;flex-shrink:0;}
         .reply-preview{display:none;padding:8px 12px;background:rgba(255,170,0,0.1);border-left:3px solid #ffaa00;border-radius:6px;font-size:12px;color:#ffaa00;align-items:center;justify-content:space-between;}
         .reply-preview .reply-cancel{color:#ff4444;cursor:pointer;font-weight:bold;padding:0 8px;}
         .reply-preview .reply-cancel:hover{color:#ff6666;}
+        
         .input-row{display:flex;gap:10px;align-items:flex-end;flex-shrink:0;}
         .input-row textarea{flex:1;margin:0;padding:12px 16px;background:#111;border:1px solid #0f0;border-radius:12px;color:#0f0;font-family:monospace;font-size:14px;resize:vertical;min-height:50px;max-height:80px;line-height:1.5;overflow-y:auto;}
         .input-row textarea:focus{outline:none;box-shadow:0 0 20px rgba(0,255,65,0.2);border-color:#0f0;}
@@ -788,6 +792,10 @@ HTML = '''<!DOCTYPE html>
         ::-webkit-scrollbar{width:3px;}
         ::-webkit-scrollbar-track{background:#1a1a2e;}
         ::-webkit-scrollbar-thumb{background:#0f0;}
+        
+        .connection-status{position:fixed;bottom:70px;right:16px;padding:6px 12px;background:#050508;border:1px solid #0f0;border-radius:20px;font-size:9px;z-index:10;}
+        .status-online{color:#0f0;}
+        .status-offline{color:#ff4444;}
         
         .separator{display:flex;align-items:center;text-align:center;margin:16px 0;}
         .separator::before,.separator::after{content:'';flex:1;border-bottom:1px solid #1a1a2e;}
@@ -833,11 +841,13 @@ HTML = '''<!DOCTYPE html>
         .user-setup-card .sub{text-align:center;margin-bottom:24px;font-size:11px;color:#666;}
         .user-setup-card input[readonly]{opacity:0.7;cursor:not-allowed;}
         
+        /* Install Button */
         .install-btn{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);z-index:100;padding:14px 28px;background:#0f0;color:#000;border:none;border-radius:14px;font-size:15px;font-weight:bold;cursor:pointer;display:none;box-shadow:0 4px 30px rgba(0,255,65,0.4);transition:all 0.3s;font-family:monospace;letter-spacing:0.5px;position:relative;overflow:hidden;}
         .install-btn:hover{transform:translateX(-50%) scale(1.05);box-shadow:0 6px 40px rgba(0,255,65,0.6);}
         .install-btn:active{transform:translateX(-50%) scale(0.95);}
         .install-btn.show{display:block;}
         
+        /* Loading Overlay */
         .loading-overlay{position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(10,10,15,0.92);z-index:9999;display:none;justify-content:center;align-items:center;flex-direction:column;gap:30px;}
         .loading-overlay.active{display:flex;}
         .loader{width:80px;height:80px;border:3px solid rgba(0,255,65,0.1);border-top:3px solid #0f0;border-radius:50%;animation:spin 0.8s cubic-bezier(0.4,0.0,0.2,1) infinite;box-shadow:0 0 30px rgba(0,255,65,0.15);}
@@ -860,18 +870,6 @@ HTML = '''<!DOCTYPE html>
         .offline-bar.active{display:block;}
         .offline-bar .reconnect-btn{background:white;color:#ff0041;border:none;padding:2px 12px;border-radius:4px;cursor:pointer;margin-left:10px;font-weight:bold;font-size:11px;}
         .offline-message{text-align:center;color:#ff4444;padding:20px;font-size:14px;}
-        
-        /* Full‑screen offline overlay */
-        .offline-overlay{position:fixed;top:0;left:0;right:0;bottom:0;background:#0a0a0f;z-index:99999;display:none;justify-content:center;align-items:center;flex-direction:column;gap:20px;padding:30px;}
-        .offline-overlay.active{display:flex;}
-        .offline-overlay .offline-icon{font-size:60px;margin-bottom:10px;}
-        .offline-overlay h2{color:#ff4444;font-size:24px;text-align:center;}
-        .offline-overlay p{color:#888;font-size:14px;text-align:center;max-width:300px;}
-        .offline-overlay .retry-btn{background:transparent;border:2px solid #0f0;color:#0f0;padding:14px 40px;border-radius:12px;font-size:16px;font-weight:bold;cursor:pointer;transition:all 0.3s;margin-top:10px;}
-        .offline-overlay .retry-btn:hover{background:#0f0;color:#000;}
-        .offline-overlay .retry-btn:active{transform:scale(0.95);}
-        
-        /* REMOVED .connection-status and related styles because we have online badge at top */
     </style>
 </head>
 <body>
@@ -888,14 +886,6 @@ HTML = '''<!DOCTYPE html>
             <span>.</span><span>.</span><span>.</span>
         </span>
     </div>
-</div>
-
-<!-- Full‑screen Offline Overlay -->
-<div class="offline-overlay" id="offlineOverlay">
-    <div class="offline-icon">📶</div>
-    <h2>No Internet Connection</h2>
-    <p>Please check your network settings and try again.</p>
-    <button class="retry-btn" id="retryOfflineBtn">↻ Retry</button>
 </div>
 
 <div id="loginScreen" class="login-container">
@@ -1078,7 +1068,7 @@ HTML = '''<!DOCTYPE html>
             <div class="footer">🔐 End-to-End Encrypted | Messages self-destruct after 24 hours</div>
         </div>
     </div>
-    <!-- ===== REMOVED connection-status div ===== -->
+    <div class="connection-status status-online" id="connectionStatus">🟢 Connected</div>
 </div>
 
 <!-- Install App Button -->
@@ -1145,7 +1135,7 @@ window.addEventListener('beforeinstallprompt', (e) => {
     console.log('📱 App can be installed');
 });
 
-// ===== FIX #2: Install button click listener =====
+// ====== FIX: Install button click listener ======
 document.getElementById('installBtn').addEventListener('click', function() {
     if (deferredPrompt) {
         deferredPrompt.prompt();
@@ -1212,6 +1202,7 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     });
     
+    // ====== TEXTAREA AUTO-RESIZE (capped at 80px) ======
     document.getElementById('messageInput').addEventListener('input', function() {
         this.style.height = 'auto';
         this.style.height = Math.min(this.scrollHeight, 80) + 'px';
@@ -1498,12 +1489,17 @@ function toggleSidebar() {
 }
 
 function updateStatus(online) {
+    let status = document.getElementById('connectionStatus');
     let badge = document.getElementById('connectionBadge');
     if(online) {
+        status.innerHTML = '🟢 Connected';
+        status.className = 'connection-status status-online';
         badge.innerHTML = '● Online';
         badge.style.color = '#0f0';
         document.getElementById('offlineBar').classList.remove('active');
     } else {
+        status.innerHTML = '🔴 Disconnected';
+        status.className = 'connection-status status-offline';
         badge.innerHTML = '● Offline';
         badge.style.color = '#ff4444';
     }
@@ -1810,7 +1806,7 @@ async function loadAdminData() {
         });
         document.getElementById('usersTableBody').innerHTML = usersHtml;
         
-        // ===== FIX #1: Use group_name instead of name =====
+        // ====== FIX: group_name instead of name ======
         let groupsHtml = '';
         data.groups.forEach(g => {
             groupsHtml += `<tr>
