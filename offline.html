@@ -6,43 +6,55 @@
     <title>Offline - ABAVANDIMWE</title>
     <style>
         *{margin:0;padding:0;box-sizing:border-box;}
-        body{font-family:monospace;background:#0a0a0f;color:#0f0;height:100vh;display:flex;justify-content:center;align-items:center;text-align:center;padding:20px;}
-        .offline-container{max-width:400px;}
-        .offline-icon{font-size:80px;margin-bottom:20px;display:block;}
-        h1{color:#ff4444;font-size:24px;margin-bottom:12px;}
-        p{color:#888;font-size:14px;line-height:1.6;margin-bottom:24px;}
-        .retry-btn{background:transparent;border:2px solid #0f0;color:#0f0;padding:14px 40px;border-radius:12px;font-size:16px;font-weight:bold;cursor:pointer;transition:all 0.3s;}
+        body{font-family:monospace;background:#0a0a0f;color:#0f0;height:100vh;display:flex;justify-content:center;align-items:center;text-align:center;padding:20px;margin:0;}
+        .container{max-width:400px;width:100%;}
+        .app-icon{width:96px;height:96px;margin:0 auto 20px;display:block;border-radius:20px;object-fit:contain;background:#050508;padding:12px;}
+        .brand{color:#0f0;font-size:14px;margin-bottom:4px;letter-spacing:1px;}
+        h1{color:#ff4444;font-size:22px;margin-bottom:12px;font-weight:normal;}
+        p{color:#888;font-size:14px;line-height:1.6;margin-bottom:28px;}
+        .retry-btn{background:transparent;border:2px solid #0f0;color:#0f0;padding:14px 40px;border-radius:12px;font-size:16px;font-weight:bold;cursor:pointer;transition:all 0.3s;font-family:monospace;}
         .retry-btn:hover{background:#0f0;color:#000;}
         .retry-btn:active{transform:scale(0.95);}
-        .sub-text{color:#333;font-size:10px;margin-top:20px;border-top:1px solid #1a1a2e;padding-top:16px;}
-        .checking-status{color:#ffaa00;font-size:12px;margin-top:12px;display:none;}
-        .checking-status.active{display:block;}
+        .sub-text{color:#333;font-size:10px;margin-top:24px;border-top:1px solid #1a1a2e;padding-top:16px;}
+        .status{color:#ffaa00;font-size:12px;margin-top:14px;min-height:20px;}
+        .loading-dots{display:inline-block;width:20px;text-align:left;}
     </style>
 </head>
 <body>
-    <div class="offline-container">
-        <span class="offline-icon">📶</span>
+    <div class="container">
+        <!-- App Icon from static/icons -->
+        <img class="app-icon" src="/static/icons/icon-192x192.png" alt="ABAVANDIMWE" onerror="this.style.display='none';document.getElementById('fallbackIcon').style.display='block'">
+        
+        <div class="brand"># ABAVANDIMWE</div>
         <h1>No Internet Connection</h1>
         <p>Please check your network settings and try again.</p>
         <button class="retry-btn" onclick="location.reload()">↻ Retry</button>
-        <div class="checking-status" id="checkingStatus">🔄 Checking for connection...</div>
-        <div class="sub-text">🔒 ABAVANDIMWE Secure Messaging</div>
+        <div class="status" id="status"></div>
+        <div class="sub-text">🔒 Secure Messaging · Messages auto-delete after 24 hours</div>
     </div>
     <script>
-        // Auto-check for connection every 5 seconds
-        let checkInterval = setInterval(function() {
+        // Auto-check for connection every 3 seconds
+        let checkCount = 0;
+        const statusEl = document.getElementById('status');
+        
+        function checkConnection() {
+            checkCount++;
             if (navigator.onLine) {
-                document.getElementById('checkingStatus').classList.add('active');
-                document.getElementById('checkingStatus').textContent = '✅ Connection restored! Reloading...';
+                statusEl.textContent = '✅ Connection restored! Reloading...';
+                statusEl.style.color = '#0f0';
                 setTimeout(function() {
                     window.location.reload();
-                }, 1000);
-                clearInterval(checkInterval);
+                }, 600);
             } else {
-                document.getElementById('checkingStatus').classList.add('active');
-                document.getElementById('checkingStatus').textContent = '⏳ Still offline... checking again in 5s';
+                const dots = '.'.repeat((checkCount % 3) + 1);
+                statusEl.textContent = '⏳ Checking for connection' + dots;
+                statusEl.style.color = '#ffaa00';
+                setTimeout(checkConnection, 3000);
             }
-        }, 5000);
+        }
+        
+        // Start checking after 2 seconds
+        setTimeout(checkConnection, 2000);
     </script>
 </body>
 </html>
