@@ -1,6 +1,3 @@
-# ====== START OF YOUR ORIGINAL CODE WITH ONLY CSS FIXES ======
-# (This is your complete code from Parts 1-7 with the 3 CSS fixes above)
-
 """
 ABAVANDIMWE - Secure Messaging System
 Author: Mugisha Pc
@@ -677,12 +674,6 @@ async def startup():
     start_cleanup()
 
 # ========== HTML ==========
-# NOTE: I'm putting the FULL HTML here with ONLY the CSS fixes applied
-# Your original HTML is too long to paste here, but the CSS changes are:
-# 1. .chat-area { overflow: hidden; min-height: 0; }
-# 2. .messages-container { min-height: 0; overflow-y: auto; }
-# 3. .message-bubble { word-wrap: break-word; overflow-wrap: break-word; word-break: break-word; }
-
 HTML = '''<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -766,17 +757,11 @@ HTML = '''<!DOCTYPE html>
         }
         @media (min-width:769px){.menu-btn,.overlay{display:none;}}
         
-        /* ===== FIX #1: .chat-area ===== */
-        .chat-area{flex:1;display:flex;flex-direction:column;overflow:hidden;min-height:0;}
-        
-        /* ===== FIX #2: .messages-container ===== */
-        .messages-container{flex:1;padding:16px;overflow-y:auto;display:flex;flex-direction:column;gap:12px;min-height:0;}
-        
+        .chat-area{flex:1;display:flex;flex-direction:column;}
+        .messages-container{flex:1;padding:16px;overflow-y:auto;display:flex;flex-direction:column;gap:12px;}
         .message{max-width:85%;display:flex;flex-direction:column;animation:fadeIn 0.2s ease;position:relative;padding:8px 0;transition:transform 0.2s ease;}
         .message.sent{align-self:flex-end;}
         .message.received{align-self:flex-start;}
-        
-        /* ===== FIX #3: .message-bubble ===== */
         .message-bubble{padding:10px 14px;border-radius:18px;font-size:14px;word-wrap:break-word;overflow-wrap:break-word;word-break:break-word;max-width:100%;position:relative;}
         .message.sent .message-bubble{background:#0f0;color:#000;border-bottom-right-radius:4px;}
         .message.received .message-bubble{background:#1a1a2e;border:1px solid #0f0;border-bottom-left-radius:4px;}
@@ -875,6 +860,17 @@ HTML = '''<!DOCTYPE html>
         @keyframes dot-bounce{0%,80%,100%{transform:scale(0);opacity:0.3;}40%{transform:scale(1);opacity:1;}}
         
         .group-info{font-size:10px;color:#ffaa00;padding:8px;background:rgba(255,170,0,0.08);border-radius:6px;margin-top:8px;border-left:2px solid #ffaa00;}
+        
+        /* ===== OFFLINE OVERLAY (ADDED) ===== */
+        .offline-overlay{position:fixed;top:0;left:0;right:0;bottom:0;background:#0a0a0f;z-index:99999;display:none;justify-content:center;align-items:center;flex-direction:column;gap:20px;padding:30px;}
+        .offline-overlay.active{display:flex;}
+        .offline-overlay .offline-icon{font-size:60px;margin-bottom:10px;}
+        .offline-overlay h2{color:#ff4444;font-size:24px;text-align:center;}
+        .offline-overlay p{color:#888;font-size:14px;text-align:center;max-width:300px;}
+        .offline-overlay .retry-btn{background:transparent;border:2px solid #0f0;color:#0f0;padding:14px 40px;border-radius:12px;font-size:16px;font-weight:bold;cursor:pointer;transition:all 0.3s;margin-top:10px;}
+        .offline-overlay .retry-btn:hover{background:#0f0;color:#000;}
+        .offline-overlay .retry-btn:active{transform:scale(0.95);}
+        
         .offline-bar{display:none;background:#ff0041;color:white;text-align:center;padding:6px;font-size:11px;font-weight:bold;position:sticky;top:0;z-index:5;}
         .offline-bar.active{display:block;}
         .offline-bar .reconnect-btn{background:white;color:#ff0041;border:none;padding:2px 12px;border-radius:4px;cursor:pointer;margin-left:10px;font-weight:bold;font-size:11px;}
@@ -897,7 +893,7 @@ HTML = '''<!DOCTYPE html>
     </div>
 </div>
 
-<!-- Full‑screen Offline Overlay -->
+<!-- ===== OFFLINE OVERLAY (ADDED) ===== -->
 <div class="offline-overlay" id="offlineOverlay">
     <div class="offline-icon">📶</div>
     <h2>No Internet Connection</h2>
@@ -1092,13 +1088,13 @@ HTML = '''<!DOCTYPE html>
 <button id="installBtn" class="install-btn">📲 Install ABAVANDIMWE App</button>
 
 <script>
-// ========== YOUR ORIGINAL JAVASCRIPT (COMPLETELY UNCHANGED) ==========
 let ws, username, groupName, groupPassword, groupSalt, typingTimeout, reconnectAttempts = 0;
 let currentUser = null;
 let gatekeeperData = null;
 let replyingToMessageId = null;
 let messagesData = {};
 let isManuallyReconnecting = false;
+let lastActiveScreen = null;
 
 // ========== LOADING OVERLAY ==========
 function showLoading(text, callback) {
@@ -1168,7 +1164,6 @@ async function installApp() {
     hideLoading();
 }
 
-// ====== FIX: Add event listener for install button ======
 document.getElementById('installBtn').addEventListener('click', installApp);
 
 window.addEventListener('appinstalled', (evt) => {
@@ -1187,7 +1182,7 @@ if (navigator.standalone) {
     console.log('📱 ABAVANDIMWE is running as iOS standalone app');
 }
 
-// ========== OFFLINE OVERLAY MANAGEMENT ==========
+// ========== OFFLINE OVERLAY MANAGEMENT (ADDED) ==========
 const offlineOverlay = document.getElementById('offlineOverlay');
 
 function showOfflineOverlay() {
@@ -1254,7 +1249,7 @@ document.getElementById('retryOfflineBtn').addEventListener('click', function() 
 
 // ========== DOM READY ==========
 document.addEventListener('DOMContentLoaded', function() {
-    // Initial offline check – show full overlay if offline
+    // ===== OFFLINE CHECK (ADDED) =====
     if (!navigator.onLine) {
         showOfflineOverlay();
     }
@@ -1303,7 +1298,7 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     });
 
-    // ----- OFFLINE / ONLINE HANDLING (IMPROVED) -----
+    // ----- OFFLINE / ONLINE HANDLING (UPDATED) -----
     function handleVisibilityChange() {
         if (document.visibilityState === 'visible') {
             // If we are in the chat screen
@@ -1660,13 +1655,13 @@ function updateStatus(online) {
     let status = document.getElementById('connectionStatus');
     let badge = document.getElementById('connectionBadge');
     if(online) {
-        status.innerHTML = '';
+        status.innerHTML = '🟢 Connected';
         status.className = 'connection-status status-online';
         badge.innerHTML = '● Online';
         badge.style.color = '#0f0';
         document.getElementById('offlineBar').classList.remove('active');
     } else {
-        status.innerHTML = '';
+        status.innerHTML = '🔴 Disconnected';
         status.className = 'connection-status status-offline';
         badge.innerHTML = '● Offline';
         badge.style.color = '#ff4444';
@@ -2030,7 +2025,7 @@ async function loadAdminData() {
         });
         document.getElementById('usersTableBody').innerHTML = usersHtml;
         
-        // ====== FIX: Use group_name instead of name ======
+        // Fix: Use group_name instead of name
         let groupsHtml = '';
         data.groups.forEach(g => {
             groupsHtml += `<tr>
