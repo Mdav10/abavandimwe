@@ -1083,7 +1083,7 @@ HTML = '''<!DOCTYPE html>
             <div class="footer">🔐 End-to-End Encrypted | Messages self-destruct after 24 hours</div>
         </div>
     </div>
-    <div class="connection-status status-online" id="connectionStatus">🟢 Connected</div>
+    <div class="connection-status status-online" id="connectionStatus"></div>
 </div>
 
 <!-- Install App Button -->
