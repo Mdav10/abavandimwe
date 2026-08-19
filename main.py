@@ -677,6 +677,28 @@ async def startup():
 HTML = '''<!DOCTYPE html>
 <html lang="en">
 <head>
+
+
+// ===== AUTO-RELOAD WHEN NETWORK COMES BACK =====
+let wasOffline = !navigator.onLine;
+
+// Listen for online event
+window.addEventListener('online', function() {
+    // Check if we were previously offline
+    if (wasOffline) {
+        console.log('Network came back - reloading page...');
+        // Reload the page to get fresh data
+        window.location.reload();
+    }
+    wasOffline = false;
+});
+
+window.addEventListener('offline', function() {
+    wasOffline = true;
+    console.log('Network went offline');
+});
+
+
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
     <title>ABAVANDIMWE | Secure Messaging</title>
@@ -690,6 +712,9 @@ HTML = '''<!DOCTYPE html>
     <meta name="theme-color" content="#0a0a0f">
     <meta name="msapplication-TileColor" content="#0a0a0f">
     <meta name="msapplication-TileImage" content="/icons/icon-144x144.png">
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+    <meta http-equiv="Pragma" content="no-cache">
+    <meta http-equiv="Expires" content="0">
     
     <!-- Icons -->
     <link rel="icon" type="image/png" sizes="72x72" href="/icons/icon-72x72.png">
