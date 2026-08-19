@@ -35,6 +35,7 @@ os.makedirs("static/screenshots", exist_ok=True)
 
 app.mount("/icons", StaticFiles(directory="static/icons"), name="icons")
 app.mount("/screenshots", StaticFiles(directory="static/screenshots"), name="screenshots")
+app.mount("/static/icons", StaticFiles(directory="static/icons"), name="static_icons")
 
 # ========== SERVE PWA FILES ==========
 @app.get("/manifest.json")
@@ -677,28 +678,6 @@ async def startup():
 HTML = '''<!DOCTYPE html>
 <html lang="en">
 <head>
-
-
-// ===== AUTO-RELOAD WHEN NETWORK COMES BACK =====
-let wasOffline = !navigator.onLine;
-
-// Listen for online event
-window.addEventListener('online', function() {
-    // Check if we were previously offline
-    if (wasOffline) {
-        console.log('Network came back - reloading page...');
-        // Reload the page to get fresh data
-        window.location.reload();
-    }
-    wasOffline = false;
-});
-
-window.addEventListener('offline', function() {
-    wasOffline = true;
-    console.log('Network went offline');
-});
-
-
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
     <title>ABAVANDIMWE | Secure Messaging</title>
@@ -712,9 +691,6 @@ window.addEventListener('offline', function() {
     <meta name="theme-color" content="#0a0a0f">
     <meta name="msapplication-TileColor" content="#0a0a0f">
     <meta name="msapplication-TileImage" content="/icons/icon-144x144.png">
-    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
-    <meta http-equiv="Pragma" content="no-cache">
-    <meta http-equiv="Expires" content="0">
     
     <!-- Icons -->
     <link rel="icon" type="image/png" sizes="72x72" href="/icons/icon-72x72.png">
@@ -784,6 +760,7 @@ window.addEventListener('offline', function() {
         
         .chat-area{flex:1;display:flex;flex-direction:column;}
         .messages-container{flex:1;padding:16px;overflow-y:auto;display:flex;flex-direction:column;gap:12px;}
+        
         .message{max-width:85%;display:flex;flex-direction:column;animation:fadeIn 0.2s ease;position:relative;padding:8px 0;transition:transform 0.2s ease;}
         .message.sent{align-self:flex-end;}
         .message.received{align-self:flex-start;}
@@ -886,7 +863,7 @@ window.addEventListener('offline', function() {
         
         .group-info{font-size:10px;color:#ffaa00;padding:8px;background:rgba(255,170,0,0.08);border-radius:6px;margin-top:8px;border-left:2px solid #ffaa00;}
         
-        /* ===== OFFLINE OVERLAY (ADDED) ===== */
+        /* ===== OFFLINE OVERLAY ===== */
         .offline-overlay{position:fixed;top:0;left:0;right:0;bottom:0;background:#0a0a0f;z-index:99999;display:none;justify-content:center;align-items:center;flex-direction:column;gap:20px;padding:30px;}
         .offline-overlay.active{display:flex;}
         .offline-overlay .offline-icon{font-size:60px;margin-bottom:10px;}
@@ -918,7 +895,7 @@ window.addEventListener('offline', function() {
     </div>
 </div>
 
-<!-- ===== OFFLINE OVERLAY (ADDED) ===== -->
+<!-- ===== OFFLINE OVERLAY ===== -->
 <div class="offline-overlay" id="offlineOverlay">
     <div class="offline-icon">📶</div>
     <h2>No Internet Connection</h2>
@@ -1113,6 +1090,7 @@ window.addEventListener('offline', function() {
 <button id="installBtn" class="install-btn">📲 Install ABAVANDIMWE App</button>
 
 <script>
+// ========== GLOBALS ==========
 let ws, username, groupName, groupPassword, groupSalt, typingTimeout, reconnectAttempts = 0;
 let currentUser = null;
 let gatekeeperData = null;
@@ -1120,6 +1098,7 @@ let replyingToMessageId = null;
 let messagesData = {};
 let isManuallyReconnecting = false;
 let lastActiveScreen = null;
+let wasOffline = !navigator.onLine;
 
 // ========== LOADING OVERLAY ==========
 function showLoading(text, callback) {
@@ -1207,7 +1186,7 @@ if (navigator.standalone) {
     console.log('📱 ABAVANDIMWE is running as iOS standalone app');
 }
 
-// ========== OFFLINE OVERLAY MANAGEMENT (ADDED) ==========
+// ========== OFFLINE OVERLAY MANAGEMENT ==========
 const offlineOverlay = document.getElementById('offlineOverlay');
 
 function showOfflineOverlay() {
@@ -1239,34 +1218,29 @@ function hideOfflineOverlay() {
     offlineOverlay.classList.remove('active');
     // Restore the previous screen
     if (lastActiveScreen === 'chat') {
-        // If we were in chat, try to reconnect
         if (window.chatUsername && window.chatGroup) {
             document.getElementById('chatScreen').classList.add('active');
             connectToChat(window.chatUsername, window.chatGroup);
         } else {
-            // Fallback to login if no chat session
             document.getElementById('loginScreen').style.display = 'flex';
         }
     } else if (lastActiveScreen === 'admin') {
         document.getElementById('adminPanel').classList.add('active');
-        loadAdminData(); // reload data
+        loadAdminData();
     } else if (lastActiveScreen === 'gatekeeper') {
         document.getElementById('gatekeeperScreen').classList.add('active');
     } else if (lastActiveScreen === 'userSetup') {
         document.getElementById('userSetupScreen').classList.add('active');
     } else {
-        // Default to login
         document.getElementById('loginScreen').style.display = 'flex';
     }
     lastActiveScreen = null;
 }
 
-// Retry button
 document.getElementById('retryOfflineBtn').addEventListener('click', function() {
     if (navigator.onLine) {
         hideOfflineOverlay();
     } else {
-        // Still offline, show a quick feedback
         this.textContent = '⏳ Still offline...';
         setTimeout(() => { this.textContent = '↻ Retry'; }, 1000);
     }
@@ -1274,7 +1248,7 @@ document.getElementById('retryOfflineBtn').addEventListener('click', function() 
 
 // ========== DOM READY ==========
 document.addEventListener('DOMContentLoaded', function() {
-    // ===== OFFLINE CHECK (ADDED) =====
+    // Initial offline check – show full overlay if offline
     if (!navigator.onLine) {
         showOfflineOverlay();
     }
@@ -1323,16 +1297,13 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     });
 
-    // ----- OFFLINE / ONLINE HANDLING (UPDATED) -----
+    // ----- OFFLINE / ONLINE HANDLING -----
     function handleVisibilityChange() {
         if (document.visibilityState === 'visible') {
-            // If we are in the chat screen
             if (document.getElementById('chatScreen').classList.contains('active')) {
                 if (!navigator.onLine) {
-                    // Offline -> clear messages and show inline offline message inside chat
                     clearMessagesOffline();
                 } else {
-                    // Online -> if WebSocket is not open, reconnect
                     if (!ws || ws.readyState !== WebSocket.OPEN) {
                         if (window.chatUsername && window.chatGroup) {
                             connectToChat(window.chatUsername, window.chatGroup);
@@ -1345,13 +1316,22 @@ document.addEventListener('DOMContentLoaded', function() {
 
     document.addEventListener('visibilitychange', handleVisibilityChange);
 
-    // When the device goes online, hide the full overlay and reconnect if needed
+    // ===== AUTO-RELOAD WHEN NETWORK COMES BACK =====
     window.addEventListener('online', function() {
         // Hide the overlay
         if (offlineOverlay.classList.contains('active')) {
             hideOfflineOverlay();
         }
         document.getElementById('offlineBar').classList.remove('active');
+        
+        // Check if we were previously offline
+        if (wasOffline) {
+            console.log('Network came back - reloading page...');
+            // Reload the page to get fresh data
+            window.location.reload();
+        }
+        wasOffline = false;
+        
         if (document.getElementById('chatScreen').classList.contains('active')) {
             if (!ws || ws.readyState !== WebSocket.OPEN) {
                 if (window.chatUsername && window.chatGroup) {
@@ -1361,17 +1341,17 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     });
 
-    // When the device goes offline, show full overlay
     window.addEventListener('offline', function() {
+        wasOffline = true;
+        console.log('Network went offline');
         showOfflineOverlay();
-        // Also clear any chat messages if chat is visible
         if (document.getElementById('chatScreen').classList.contains('active')) {
             clearMessagesOffline();
         }
     });
 });
 
-// Helper to clear messages and show offline state inside chat (used when network drops while in chat)
+// Helper to clear messages and show offline state inside chat
 function clearMessagesOffline() {
     const container = document.getElementById('messages');
     container.innerHTML = '<div class="offline-message">🔴 No internet connection. Messages are hidden.</div>';
@@ -1533,13 +1513,11 @@ async function enterChat() {
 
 // ========== CONNECT TO CHAT ==========
 function connectToChat(username, group) {
-    // Clear old messages immediately
     messagesData = {};
     const container = document.getElementById('messages');
     container.innerHTML = '<div style="text-align:center;color:#666;padding:40px 0;">Connecting...</div>';
     document.getElementById('offlineBar').classList.remove('active');
     
-    // If offline, show inline offline message and abort
     if (!navigator.onLine) {
         container.innerHTML = '<div class="offline-message">🔴 No internet connection. Messages are hidden.</div>';
         document.getElementById('offlineBar').classList.add('active');
@@ -1557,7 +1535,6 @@ function connectToChat(username, group) {
     ws.onopen = function() {
         updateStatus(true);
         document.getElementById('offlineBar').classList.remove('active');
-        // Remove offline message if present
         const offlineMsg = document.querySelector('.offline-message');
         if (offlineMsg) offlineMsg.remove();
         ws.send(JSON.stringify({
@@ -1582,7 +1559,6 @@ function connectToChat(username, group) {
                 groupSalt = d.salt;
                 addSystemMessage('🔐 Connected - Messages last 24 hours');
             } else if(d.type === 'history') {
-                // Clear messages and remove offline message
                 document.getElementById('messages').innerHTML = '';
                 const offlineMsg = document.querySelector('.offline-message');
                 if (offlineMsg) offlineMsg.remove();
@@ -1639,7 +1615,6 @@ function connectToChat(username, group) {
     ws.onclose = function() {
         updateStatus(false);
         document.getElementById('offlineBar').classList.add('active');
-        // Clear messages and show offline message
         const messagesContainer = document.getElementById('messages');
         messagesContainer.innerHTML = '<div class="offline-message">🔴 No internet connection. Messages are hidden.</div>';
         messagesData = {};
@@ -1660,7 +1635,6 @@ function reconnectManually() {
     if (ws) {
         ws.close();
     }
-    // Clear messages before retry
     messagesData = {};
     const container = document.getElementById('messages');
     container.innerHTML = '<div style="text-align:center;color:#666;padding:40px 0;">Connecting...</div>';
@@ -1695,7 +1669,6 @@ function updateStatus(online) {
 
 function addSystemMessage(text) {
     let msgs = document.getElementById('messages');
-    // Remove offline message if present
     const offlineMsg = document.querySelector('.offline-message');
     if (offlineMsg) offlineMsg.remove();
     let div = document.createElement('div');
@@ -1707,7 +1680,6 @@ function addSystemMessage(text) {
 
 function addMessage(sender, text, isSent, timestamp, messageId, replyTo) {
     let msgs = document.getElementById('messages');
-    // Remove offline message if present
     const offlineMsg = document.querySelector('.offline-message');
     if (offlineMsg) offlineMsg.remove();
     let div = document.createElement('div');
@@ -1739,77 +1711,55 @@ function addMessage(sender, text, isSent, timestamp, messageId, replyTo) {
                     '<div class="message-bubble">' + escapeHtml(text) + '</div>' + 
                     '<div class="message-time">' + time + '</div>';
     
-    // Swipe to reply on mobile
-    let touchStartX = 0;
-    let touchCurrentX = 0;
-    let touchStartY = 0;
-    
+    // Swipe to reply
+    let touchStartX = 0, touchCurrentX = 0, touchStartY = 0;
     div.addEventListener('touchstart', function(e) {
         touchStartX = e.touches[0].clientX;
         touchStartY = e.touches[0].clientY;
         touchCurrentX = touchStartX;
     }, {passive: true});
-    
     div.addEventListener('touchmove', function(e) {
         touchCurrentX = e.touches[0].clientX;
         let diffX = touchCurrentX - touchStartX;
         let diffY = e.touches[0].clientY - touchStartY;
-        
         if (diffX > 0 && diffX < 80 && Math.abs(diffY) < 30) {
             div.style.transform = 'translateX(' + diffX + 'px)';
         }
     }, {passive: true});
-    
     div.addEventListener('touchend', function(e) {
         let diffX = touchCurrentX - touchStartX;
         div.style.transform = '';
-        
         if (diffX >= 60) {
             startReply(messageId);
         }
-        touchStartX = 0;
-        touchCurrentX = 0;
-        touchStartY = 0;
+        touchStartX = 0; touchCurrentX = 0; touchStartY = 0;
     }, {passive: true});
     
-    // Mouse swipe for desktop
-    let mouseStartX = 0;
-    let mouseCurrentX = 0;
-    let mouseStartY = 0;
-    let isMouseDown = false;
-    
+    let mouseStartX = 0, mouseCurrentX = 0, mouseStartY = 0, isMouseDown = false;
     div.addEventListener('mousedown', function(e) {
         mouseStartX = e.clientX;
         mouseStartY = e.clientY;
         mouseCurrentX = mouseStartX;
         isMouseDown = true;
     });
-    
     div.addEventListener('mousemove', function(e) {
         if (!isMouseDown) return;
         mouseCurrentX = e.clientX;
         let diffX = mouseCurrentX - mouseStartX;
         let diffY = e.clientY - mouseStartY;
-        
         if (diffX > 0 && diffX < 80 && Math.abs(diffY) < 30) {
             div.style.transform = 'translateX(' + diffX + 'px)';
         }
     });
-    
     div.addEventListener('mouseup', function(e) {
         if (!isMouseDown) return;
         let diffX = mouseCurrentX - mouseStartX;
         div.style.transform = '';
-        
         if (diffX >= 60) {
             startReply(messageId);
         }
         isMouseDown = false;
-        mouseStartX = 0;
-        mouseCurrentX = 0;
-        mouseStartY = 0;
     });
-    
     div.addEventListener('mouseleave', function() {
         if (isMouseDown) {
             div.style.transform = '';
@@ -1823,10 +1773,8 @@ function addMessage(sender, text, isSent, timestamp, messageId, replyTo) {
 
 function startReply(messageId) {
     if (!messageId || !messagesData[messageId]) return;
-    
     replyingToMessageId = messageId;
     let original = messagesData[messageId];
-    
     document.getElementById('replyPreviewSender').textContent = original.sender;
     document.getElementById('replyPreviewText').textContent = original.text.substring(0, 60) + (original.text.length > 60 ? '...' : '');
     document.getElementById('replyPreview').style.display = 'flex';
@@ -1844,9 +1792,7 @@ function scrollToMessage(messageId) {
         if (msg.dataset.messageId == messageId) {
             msg.scrollIntoView({ behavior: 'smooth', block: 'center' });
             msg.style.border = '2px solid #ffaa00';
-            setTimeout(() => {
-                msg.style.border = '';
-            }, 2000);
+            setTimeout(() => { msg.style.border = ''; }, 2000);
             break;
         }
     }
@@ -1917,19 +1863,15 @@ async function sendMessage() {
     if(!text || !ws || ws.readyState !== WebSocket.OPEN || !groupSalt) {
         return;
     }
-    
     try {
         let cipher = await encrypt(text, window.groupPassword, groupSalt);
         let timestamp = Date.now() / 1000;
-        
         let replyToId = replyingToMessageId;
-        
         let newId = Date.now();
         messagesData[newId] = {sender: window.chatUsername, text: text, timestamp: timestamp};
         addMessage(window.chatUsername, text, true, timestamp, newId, replyToId);
         input.value = '';
         input.style.height = 'auto';
-        
         ws.send(JSON.stringify({
             type:'message',
             ciphertext:cipher,
@@ -1937,7 +1879,6 @@ async function sendMessage() {
             timestamp: timestamp,
             reply_to: replyToId
         }));
-        
         cancelReply();
     } catch(e) {
         alert('Failed to send message');
@@ -1960,7 +1901,6 @@ function showError(msg) {
     document.getElementById('loginSuccess').style.display = 'none';
     setTimeout(() => err.style.display = 'none', 5000);
 }
-
 function showSuccess(msg) {
     let success = document.getElementById('loginSuccess');
     success.textContent = msg;
@@ -1968,14 +1908,12 @@ function showSuccess(msg) {
     document.getElementById('loginError').style.display = 'none';
     setTimeout(() => success.style.display = 'none', 5000);
 }
-
 function showGatekeeperError(msg) {
     let err = document.getElementById('gatekeeperError');
     err.textContent = msg;
     err.style.display = 'block';
     setTimeout(() => err.style.display = 'none', 5000);
 }
-
 function showSetupError(msg) {
     let err = document.getElementById('setupError');
     err.textContent = msg;
@@ -1983,7 +1921,6 @@ function showSetupError(msg) {
     document.getElementById('setupSuccess').style.display = 'none';
     setTimeout(() => err.style.display = 'none', 5000);
 }
-
 function showSetupSuccess(msg) {
     let success = document.getElementById('setupSuccess');
     success.textContent = msg;
@@ -1995,11 +1932,7 @@ function showSetupSuccess(msg) {
 async function logout() {
     if(ws) ws.close();
     ws = null;
-    
-    try {
-        await fetch('/logout', {method: 'POST'});
-    } catch(e) {}
-    
+    try { await fetch('/logout', {method: 'POST'}); } catch(e) {}
     document.getElementById('chatScreen').classList.remove('active');
     document.getElementById('adminPanel').classList.remove('active');
     document.getElementById('gatekeeperScreen').classList.remove('active');
@@ -2030,7 +1963,6 @@ async function loadAdminData() {
     try {
         const response = await fetch('/admin/data');
         const data = await response.json();
-        
         document.getElementById('statUsers').textContent = data.users.length;
         document.getElementById('statMessages').textContent = data.messages_count;
         document.getElementById('statGroups').textContent = data.groups.length;
@@ -2084,7 +2016,6 @@ async function loadAdminData() {
             </tr>`;
         });
         document.getElementById('logsTableBody').innerHTML = logsHtml;
-        
     } catch(e) {
         console.error('Failed to load admin data:', e);
     }
@@ -2095,13 +2026,11 @@ async function createUser() {
     const password = document.getElementById('newPassword').value.trim();
     const group_name = document.getElementById('newGroupName').value.trim();
     const group_password = document.getElementById('newGroupPassword').value.trim();
-    
     if(!username || !password || !group_name || !group_password) {
         alert('Please fill all fields');
         hideLoading();
         return;
     }
-    
     try {
         const response = await fetch('/admin/create_user', {
             method: 'POST',
