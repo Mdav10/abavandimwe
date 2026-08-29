@@ -1,6 +1,6 @@
 // ABAVANDIMWE - Service Worker
 // Version: 5.3 - Cache icons from static/icons
-const CACHE_NAME = 'abavandimwe-v5';
+const CACHE_NAME = 'abavandimwe-v15.0.0';
 const STATIC_ASSETS = [
     '/manifest.json',
     '/offline.html',
