@@ -926,7 +926,7 @@ HTML = '''<!DOCTYPE html>
             
             <div class="login-footer">
                 🔒 AES-256 | ⏰ Messages auto-delete after 24 hours<br>
-                <span style="color:#1a1a2e;">Developed by Mugisha Pc</span>
+                <span style="color:#ff4444;">Developed by Mugisha Pc</span>
             </div>
         </div>
     </div>
@@ -1017,7 +1017,7 @@ HTML = '''<!DOCTYPE html>
         <div id="gatekeeperError" class="error-message"></div>
         
         <div class="login-footer" style="margin-top:20px;padding-top:16px;border-top:1px solid #1a1a2e;">
-            🔒 Credentials provided by admin
+            🔒 Credentials provided by Mugisha Pc, So whatsapp him if you wanna join us!
         </div>
     </div>
 </div>
