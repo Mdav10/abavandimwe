@@ -925,7 +925,7 @@ HTML = '''<!DOCTYPE html>
             <div id="loginSuccess" class="success-message"></div>
             
             <div class="login-footer">
-                🔒 AES-256 | ⏰ Messages auto-delete after 24 hours<br>
+             <span style="color:#ff4444;" >🔒 AES-256 | ⏰ Messages auto-delete after 24 hours<br></span>
                 <span style="color:#ff4444;">Developed by Mugisha Pc</span>
             </div>
         </div>
