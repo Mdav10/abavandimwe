@@ -1,6 +1,6 @@
 // ABAVANDIMWE - Service Worker
-// Version: 5.3 - Cache icons from static/icons
-const CACHE_NAME = 'abavandimwe-v15.0.0';
+// Version: 6.0 - With Push Notification Support
+const CACHE_NAME = 'abavandimwe-v6.0.1';
 const STATIC_ASSETS = [
     '/manifest.json',
     '/offline.html',
@@ -51,6 +51,74 @@ self.addEventListener('activate', (event) => {
     );
 });
 
+// ===== PUSH NOTIFICATION HANDLER =====
+self.addEventListener('push', (event) => {
+    console.log('🔔 Push notification received!');
+    
+    let data = {};
+    try {
+        data = event.data.json();
+    } catch (e) {
+        data = {
+            title: 'ABAVANDIMWE',
+            body: 'You have a new message!',
+            badge: '/static/icons/icon-192x192.png',
+            icon: '/static/icons/icon-192x192.png',
+            data: { url: '/' }
+        };
+    }
+
+    const options = {
+        body: data.body || 'You have a new message on ABAVANDIMWE.',
+        icon: data.icon || '/static/icons/icon-192x192.png',
+        badge: data.badge || '/static/icons/icon-192x192.png',
+        vibrate: [200, 100, 200],
+        data: {
+            url: data.data?.url || '/'
+        },
+        tag: 'new-message',
+        renotify: true,
+        requireInteraction: true,
+        actions: [
+            {
+                action: 'open',
+                title: 'Open App'
+            }
+        ]
+    };
+
+    event.waitUntil(
+        self.registration.showNotification(
+            data.title || 'ABAVANDIMWE',
+            options
+        )
+    );
+});
+
+// ===== NOTIFICATION CLICK HANDLER =====
+self.addEventListener('notificationclick', (event) => {
+    console.log('🔔 Notification clicked!');
+    event.notification.close();
+
+    const urlToOpen = event.notification.data?.url || '/';
+
+    event.waitUntil(
+        clients.matchAll({
+            type: 'window',
+            includeUncontrolled: true
+        }).then((clientList) => {
+            // Check if there's already a window/tab open with the target URL
+            for (const client of clientList) {
+                if (client.url === urlToOpen && 'focus' in client) {
+                    return client.focus();
+                }
+            }
+            // If not, open a new window
+            return clients.openWindow(urlToOpen);
+        })
+    );
+});
+
 // ===== MAIN FETCH HANDLER =====
 self.addEventListener('fetch', (event) => {
     const request = event.request;
@@ -67,7 +135,9 @@ self.addEventListener('fetch', (event) => {
         url.pathname === '/save_display_name' ||
         url.pathname === '/logout' ||
         url.pathname === '/health' ||
-        url.pathname.startsWith('/admin/')) {
+        url.pathname.startsWith('/admin/') ||
+        url.pathname === '/api/push/subscribe' ||
+        url.pathname === '/api/push/vapid_public_key') {
         event.respondWith(fetch(request).catch(() => new Response('API Error', { status: 503 })));
         return;
     }
@@ -78,8 +148,8 @@ self.addEventListener('fetch', (event) => {
     }
 
     // ==== 3. FOR HTML PAGES - NEVER CACHE, ALWAYS FETCH ====
-    if (request.mode === 'navigate' || 
-        url.pathname === '/' || 
+    if (request.mode === 'navigate' ||
+        url.pathname === '/' ||
         url.pathname === '/chat' ||
         url.pathname === '/offline.html') {
         event.respondWith(
