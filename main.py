@@ -1446,10 +1446,10 @@ async function toggleNotifications() {
 function updateNotificationButton() {
     const btn = document.getElementById('notificationBtn');
     if (notificationsEnabled) {
-        btn.textContent = '🔔 Enabled';
+        btn.textContent = '🔔';
         btn.classList.add('enabled');
     } else {
-        btn.textContent = '🔔 Enable';
+        btn.textContent = '🔔';
         btn.classList.remove('enabled');
     }
 }
