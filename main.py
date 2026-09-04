@@ -4,6 +4,7 @@ Author: Mugisha Pc
 Messages stay for 24 hours then auto-delete
 Database: PostgreSQL (Neon) with asyncpg
 PWA Ready - Install as Android App with one click
+Push Notifications: Web Push API with VAPID
 """
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request, Depends, HTTPException
@@ -19,7 +20,7 @@ import hashlib
 import threading
 import time
 from datetime import datetime
-from typing import Dict, Optional
+from typing import Dict, Optional, List
 from collections import defaultdict
 from pydantic import BaseModel
 from argon2 import PasswordHasher
@@ -27,7 +28,39 @@ from argon2.exceptions import VerificationError
 import asyncpg
 from asyncpg import create_pool
 
+# ========== PUSH NOTIFICATION IMPORTS ==========
+from pywebpush import WebPushException, webpush
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.backends import default_backend
+
 app = FastAPI()
+
+# ========== VAPID CONFIGURATION ==========
+VAPID_PUBLIC_KEY = 'BL0X3NSYm0EbNslkt1afTEkuktGcvLRD4RS0MoWaYw6jEF8Yf9iryvnNBoDm7encOEBI2CPLNmCyYiehnWAbGQU'
+VAPID_CLAIMS = {
+    "sub": "mailto:abavandimwe@example.com"
+}
+
+def get_vapid_private_key():
+    try:
+        # Try environment variable first
+        private_key_pem = os.getenv('VAPID_PRIVATE_KEY')
+        if private_key_pem:
+            return serialization.load_pem_private_key(
+                private_key_pem.encode(),
+                password=None,
+                backend=default_backend()
+            )
+        # Fallback to file
+        with open("vapid_private_key.pem", "rb") as f:
+            return serialization.load_pem_private_key(
+                f.read(),
+                password=None,
+                backend=default_backend()
+            )
+    except Exception as e:
+        print(f"⚠️ Could not load VAPID private key: {e}")
+        return None
 
 # ========== SERVE STATIC FILES FOR PWA ==========
 os.makedirs("static/icons", exist_ok=True)
@@ -178,6 +211,88 @@ class DeleteMessageRequest(BaseModel):
 class SaveDisplayNameRequest(BaseModel):
     username: str
     display_name: str
+
+# ========== PUSH SUBSCRIPTIONS STORAGE ==========
+push_subscriptions: Dict[str, List[Dict]] = defaultdict(list)
+
+async def save_push_subscription(username: str, subscription: Dict):
+    """Save a push subscription for a user"""
+    for sub in push_subscriptions[username]:
+        if sub.get('endpoint') == subscription.get('endpoint'):
+            return
+    push_subscriptions[username].append(subscription)
+    print(f"[🔔] Push subscription saved for {username}")
+
+async def get_push_subscriptions(username: str) -> List[Dict]:
+    """Get all push subscriptions for a user"""
+    return push_subscriptions.get(username, [])
+
+async def send_push_notification(subscription: Dict, message: str, badge_count: int = 0):
+    """Send a push notification to a subscription"""
+    private_key = get_vapid_private_key()
+    if not private_key:
+        print("[❌] No VAPID private key found!")
+        return False
+    
+    try:
+        data = json.dumps({
+            "title": "ABAVANDIMWE",
+            "body": message,
+            "badge": "/static/icons/badge-72x72.png",
+            "icon": "/static/icons/icon-192x192.png",
+            "data": {
+                "url": "/"
+            },
+            "tag": "new-message",
+            "renotify": True,
+            "requireInteraction": True
+        })
+        
+        webpush(
+            subscription_info={
+                "endpoint": subscription['endpoint'],
+                "keys": subscription['keys']
+            },
+            data=data,
+            vapid_private_key=private_key,
+            vapid_claims=VAPID_CLAIMS
+        )
+        print(f"[✅] Push notification sent successfully")
+        return True
+    except WebPushException as e:
+        print(f"[❌] Push notification failed: {e}")
+        if "expired" in str(e).lower() or "410" in str(e):
+            for user, subs in push_subscriptions.items():
+                push_subscriptions[user] = [s for s in subs if s.get('endpoint') != subscription.get('endpoint')]
+        return False
+
+async def send_notification_to_group(group_name: str, sender: str):
+    """Send push notifications to all users in a group (except sender)"""
+    conn = await get_db_connection()
+    try:
+        rows = await conn.fetch(
+            "SELECT username FROM users WHERE assigned_group = $1 AND username != $2",
+            group_name, sender
+        )
+        users = [row['username'] for row in rows]
+    finally:
+        await return_db_connection(conn)
+    
+    notification_sent = 0
+    for username in users:
+        subs = await get_push_subscriptions(username)
+        for sub in subs:
+            success = await send_push_notification(
+                sub,
+                "You have a new message on ABAVANDIMWE.",
+                1
+            )
+            if success:
+                notification_sent += 1
+    
+    if notification_sent > 0:
+        print(f"[🔔] Sent {notification_sent} notifications to group {group_name}")
+    return notification_sent
 
 # ========== CRYPTO FUNCTIONS ==========
 ph = PasswordHasher()
@@ -674,6 +789,27 @@ async def startup():
     await init_db()
     start_cleanup()
 
+# ========== PUSH NOTIFICATION ENDPOINTS ==========
+@app.post("/api/push/subscribe")
+async def subscribe_to_push(request: Request):
+    """Save a push subscription for the current user"""
+    try:
+        session = await get_session_from_cookie(request)
+        username = session["username"]
+        data = await request.json()
+        subscription = data.get("subscription", {})
+        await save_push_subscription(username, subscription)
+        return {"success": True}
+    except HTTPException:
+        return JSONResponse({"success": False, "error": "Not authenticated"}, status_code=401)
+    except Exception as e:
+        return JSONResponse({"success": False, "error": str(e)}, status_code=500)
+
+@app.get("/api/push/vapid_public_key")
+async def get_vapid_public_key():
+    """Return the VAPID public key for the client"""
+    return {"publicKey": VAPID_PUBLIC_KEY}
+
 # ========== HTML ==========
 HTML = '''<!DOCTYPE html>
 <html lang="en">
@@ -760,7 +896,6 @@ HTML = '''<!DOCTYPE html>
         
         .chat-area{flex:1;display:flex;flex-direction:column;}
         .messages-container{flex:1;padding:16px;overflow-y:auto;display:flex;flex-direction:column;gap:12px;}
-        
         .message{max-width:85%;display:flex;flex-direction:column;animation:fadeIn 0.2s ease;position:relative;padding:8px 0;transition:transform 0.2s ease;}
         .message.sent{align-self:flex-end;}
         .message.received{align-self:flex-start;}
@@ -877,6 +1012,12 @@ HTML = '''<!DOCTYPE html>
         .offline-bar.active{display:block;}
         .offline-bar .reconnect-btn{background:white;color:#ff0041;border:none;padding:2px 12px;border-radius:4px;cursor:pointer;margin-left:10px;font-weight:bold;font-size:11px;}
         .offline-message{text-align:center;color:#ff4444;padding:20px;font-size:14px;}
+        
+        /* ===== NOTIFICATION BUTTON ===== */
+        .notification-btn{background:transparent;border:1px solid #0f0;color:#0f0;padding:4px 12px;border-radius:20px;cursor:pointer;font-size:10px;font-family:monospace;transition:all 0.3s;margin-left:8px;}
+        .notification-btn:hover{background:#0f0;color:#000;}
+        .notification-btn.enabled{background:#0f0;color:#000;}
+        .notification-btn.enabled:hover{background:transparent;color:#0f0;}
     </style>
 </head>
 <body>
@@ -925,8 +1066,8 @@ HTML = '''<!DOCTYPE html>
             <div id="loginSuccess" class="success-message"></div>
             
             <div class="login-footer">
-             <span style="color:#ff4444;" >🔒 AES-256 | ⏰ Messages auto-delete after 24 hours<br></span>
-                <span style="color:#ff4444;">Developed by  Bernar&Antoine</span>
+                🔒 AES-256 | ⏰ Messages auto-delete after 24 hours<br>
+                <span style="color:#1a1a2e;">Developed by Mugisha Pc</span>
             </div>
         </div>
     </div>
@@ -1017,7 +1158,7 @@ HTML = '''<!DOCTYPE html>
         <div id="gatekeeperError" class="error-message"></div>
         
         <div class="login-footer" style="margin-top:20px;padding-top:16px;border-top:1px solid #1a1a2e;">
-            🔒 Credentials provided by Mugisha Pc, So whatsapp him if you wanna join us!
+            🔒 Credentials provided by admin
         </div>
     </div>
 </div>
@@ -1047,6 +1188,7 @@ HTML = '''<!DOCTYPE html>
         <div class="chat-header-left">
             <button class="menu-btn" onclick="toggleSidebar()">☰</button>
             <span class="online-badge" id="connectionBadge">● Online</span>
+            <button class="notification-btn" id="notificationBtn" onclick="toggleNotifications()">🔔 Enable</button>
         </div>
         <h2 id="groupTitle"># LOADING</h2>
         <button class="logout-btn" onclick="logout()">Leave</button>
@@ -1083,7 +1225,7 @@ HTML = '''<!DOCTYPE html>
             <div class="footer">🔐 End-to-End Encrypted | Messages self-destruct after 24 hours</div>
         </div>
     </div>
-    <div class="connection-status status-online" id="connectionStatus"></div>
+    <div class="connection-status status-online" id="connectionStatus">🟢 Connected</div>
 </div>
 
 <!-- Install App Button -->
@@ -1098,6 +1240,9 @@ let replyingToMessageId = null;
 let messagesData = {};
 let isManuallyReconnecting = false;
 let lastActiveScreen = null;
+let pushSubscription = null;
+let vapidPublicKey = null;
+let notificationsEnabled = false;
 
 // ========== LOADING OVERLAY ==========
 function showLoading(text, callback) {
@@ -1134,6 +1279,7 @@ if ('serviceWorker' in navigator) {
         navigator.serviceWorker.register('/sw.js')
             .then((registration) => {
                 console.log('✅ Service Worker registered successfully');
+                window.swRegistration = registration;
             })
             .catch((error) => {
                 console.log('❌ Service Worker registration failed:', error);
@@ -1185,11 +1331,137 @@ if (navigator.standalone) {
     console.log('📱 ABAVANDIMWE is running as iOS standalone app');
 }
 
+// ========== PUSH NOTIFICATIONS ==========
+function urlBase64ToUint8Array(base64String) {
+    const padding = '='.repeat((4 - base64String.length % 4) % 4);
+    const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
+    const rawData = window.atob(base64);
+    const outputArray = new Uint8Array(rawData.length);
+    for (let i = 0; i < rawData.length; ++i) {
+        outputArray[i] = rawData.charCodeAt(i);
+    }
+    return outputArray;
+}
+
+async function getVapidPublicKey() {
+    try {
+        const response = await fetch('/api/push/vapid_public_key');
+        const data = await response.json();
+        vapidPublicKey = data.publicKey;
+        console.log('📱 VAPID public key loaded');
+        return vapidPublicKey;
+    } catch (e) {
+        console.error('Failed to get VAPID public key:', e);
+        return null;
+    }
+}
+
+async function subscribeToPush() {
+    if (!window.swRegistration) {
+        console.log('⚠️ Service Worker not ready');
+        return false;
+    }
+    
+    if (!vapidPublicKey) {
+        await getVapidPublicKey();
+        if (!vapidPublicKey) return false;
+    }
+    
+    try {
+        const subscription = await window.swRegistration.pushManager.subscribe({
+            userVisibleOnly: true,
+            applicationServerKey: urlBase64ToUint8Array(vapidPublicKey)
+        });
+        pushSubscription = subscription;
+        
+        await fetch('/api/push/subscribe', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                subscription: {
+                    endpoint: subscription.endpoint,
+                    keys: {
+                        p256dh: btoa(String.fromCharCode.apply(null, new Uint8Array(subscription.getKey('p256dh')))),
+                        auth: btoa(String.fromCharCode.apply(null, new Uint8Array(subscription.getKey('auth'))))
+                    }
+                }
+            })
+        });
+        notificationsEnabled = true;
+        updateNotificationButton();
+        return true;
+    } catch (e) {
+        console.error('Push subscription failed:', e);
+        return false;
+    }
+}
+
+async function unsubscribeFromPush() {
+    if (!pushSubscription) {
+        if (window.swRegistration) {
+            const subscription = await window.swRegistration.pushManager.getSubscription();
+            if (subscription) pushSubscription = subscription;
+        }
+    }
+    if (!pushSubscription) return;
+    try {
+        await pushSubscription.unsubscribe();
+        pushSubscription = null;
+        notificationsEnabled = false;
+        updateNotificationButton();
+        console.log('✅ Unsubscribed from push notifications');
+    } catch (e) {
+        console.error('Unsubscribe failed:', e);
+    }
+}
+
+async function toggleNotifications() {
+    if (!('Notification' in window)) {
+        alert('Push notifications are not supported in this browser.');
+        return;
+    }
+    if (notificationsEnabled) {
+        await unsubscribeFromPush();
+        return;
+    }
+    if (Notification.permission === 'denied') {
+        alert('Notifications are blocked. Please enable them in your browser settings.');
+        return;
+    }
+    if (Notification.permission === 'default') {
+        const permission = await Notification.requestPermission();
+        if (permission !== 'granted') {
+            alert('You need to allow notifications to receive message alerts.');
+            return;
+        }
+    }
+    const success = await subscribeToPush();
+    if (success) {
+        alert('🔔 Notifications enabled! You will receive alerts for new messages.');
+    } else {
+        alert('❌ Failed to enable notifications. Please try again.');
+    }
+}
+
+function updateNotificationButton() {
+    const btn = document.getElementById('notificationBtn');
+    if (notificationsEnabled) {
+        btn.textContent = '🔔 Enabled';
+        btn.classList.add('enabled');
+    } else {
+        btn.textContent = '🔔 Enable';
+        btn.classList.remove('enabled');
+    }
+}
+
+function isPushSupported() {
+    return 'PushManager' in window && 'serviceWorker' in navigator && 'Notification' in window;
+}
+
 // ========== OFFLINE OVERLAY MANAGEMENT ==========
 const offlineOverlay = document.getElementById('offlineOverlay');
 
 function showOfflineOverlay() {
-    // Store the currently active screen before we hide everything
     const chatActive = document.getElementById('chatScreen').classList.contains('active');
     const adminActive = document.getElementById('adminPanel').classList.contains('active');
     const gatekeeperActive = document.getElementById('gatekeeperScreen').classList.contains('active');
@@ -1203,7 +1475,6 @@ function showOfflineOverlay() {
     else if (loginVisible) lastActiveScreen = 'login';
     else lastActiveScreen = null;
 
-    // Hide all screens and show overlay
     document.getElementById('loginScreen').style.display = 'none';
     document.getElementById('adminPanel').classList.remove('active');
     document.getElementById('gatekeeperScreen').classList.remove('active');
@@ -1215,14 +1486,11 @@ function showOfflineOverlay() {
 
 function hideOfflineOverlay() {
     offlineOverlay.classList.remove('active');
-    // Restore the previous screen
     if (lastActiveScreen === 'chat') {
-        // If we were in chat, try to reconnect - stay in chat
         if (window.chatUsername && window.chatGroup) {
             document.getElementById('chatScreen').classList.add('active');
             connectToChat(window.chatUsername, window.chatGroup);
         } else {
-            // Fallback to login if no chat session
             document.getElementById('loginScreen').style.display = 'flex';
         }
     } else if (lastActiveScreen === 'admin') {
@@ -1233,7 +1501,6 @@ function hideOfflineOverlay() {
     } else if (lastActiveScreen === 'userSetup') {
         document.getElementById('userSetupScreen').classList.add('active');
     } else {
-        // Default to login
         document.getElementById('loginScreen').style.display = 'flex';
     }
     lastActiveScreen = null;
@@ -1250,7 +1517,6 @@ document.getElementById('retryOfflineBtn').addEventListener('click', function() 
 
 // ========== DOM READY ==========
 document.addEventListener('DOMContentLoaded', function() {
-    // Initial offline check – show full overlay if offline
     if (!navigator.onLine) {
         showOfflineOverlay();
     }
@@ -1299,7 +1565,6 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     });
 
-    // ----- OFFLINE / ONLINE HANDLING (UPDATED) -----
     function handleVisibilityChange() {
         if (document.visibilityState === 'visible') {
             if (document.getElementById('chatScreen').classList.contains('active')) {
@@ -1318,13 +1583,9 @@ document.addEventListener('DOMContentLoaded', function() {
 
     document.addEventListener('visibilitychange', handleVisibilityChange);
 
-    // ===== WHEN NETWORK COMES BACK - STAY IN CHAT =====
     window.addEventListener('online', function() {
         console.log('Network came back - reconnecting...');
-        
-        // Hide the overlay
         if (offlineOverlay.classList.contains('active')) {
-            // If we were in chat, restore chat without reloading
             if (lastActiveScreen === 'chat' && window.chatUsername && window.chatGroup) {
                 offlineOverlay.classList.remove('active');
                 document.getElementById('chatScreen').classList.add('active');
@@ -1332,14 +1593,11 @@ document.addEventListener('DOMContentLoaded', function() {
                 connectToChat(window.chatUsername, window.chatGroup);
                 lastActiveScreen = null;
             } else {
-                // For other screens, use the normal hide function
                 hideOfflineOverlay();
             }
         } else {
             document.getElementById('offlineBar').classList.remove('active');
         }
-        
-        // If chat is active and WebSocket is not open, reconnect
         if (document.getElementById('chatScreen').classList.contains('active')) {
             if (!ws || ws.readyState !== WebSocket.OPEN) {
                 if (window.chatUsername && window.chatGroup) {
@@ -1356,9 +1614,28 @@ document.addEventListener('DOMContentLoaded', function() {
             clearMessagesOffline();
         }
     });
+    
+    // Initialize push notifications if supported
+    if (isPushSupported()) {
+        getVapidPublicKey();
+        if (window.swRegistration) {
+            window.swRegistration.pushManager.getSubscription()
+                .then((subscription) => {
+                    if (subscription) {
+                        pushSubscription = subscription;
+                        notificationsEnabled = true;
+                        updateNotificationButton();
+                        console.log('📱 Existing push subscription found');
+                    }
+                })
+                .catch((e) => console.error('Error checking subscription:', e));
+        }
+    } else {
+        const btn = document.getElementById('notificationBtn');
+        if (btn) btn.style.display = 'none';
+    }
 });
 
-// Helper to clear messages and show offline state inside chat
 function clearMessagesOffline() {
     const container = document.getElementById('messages');
     container.innerHTML = '<div class="offline-message">🔴 No internet connection. Messages are hidden.</div>';
@@ -1661,13 +1938,13 @@ function updateStatus(online) {
     let status = document.getElementById('connectionStatus');
     let badge = document.getElementById('connectionBadge');
     if(online) {
-        
+        status.innerHTML = '🟢 Connected';
         status.className = 'connection-status status-online';
         badge.innerHTML = '● Online';
         badge.style.color = '#0f0';
         document.getElementById('offlineBar').classList.remove('active');
     } else {
-        
+        status.innerHTML = '🔴 Disconnected';
         status.className = 'connection-status status-offline';
         badge.innerHTML = '● Offline';
         badge.style.color = '#ff4444';
@@ -1989,7 +2266,6 @@ async function loadAdminData() {
         });
         document.getElementById('usersTableBody').innerHTML = usersHtml;
         
-        // Fix: Use group_name instead of name
         let groupsHtml = '';
         data.groups.forEach(g => {
             groupsHtml += `<tr>
@@ -2134,6 +2410,7 @@ console.log('💬 Reply feature: Swipe any message left to right to reply');
 console.log('📱 PWA: Click "Install ABAVANDIMWE App" to install as Android app');
 console.log('⚠️ IMPORTANT: All users in a group must use the SAME group password');
 console.log('📝 Enter key inserts new line. Use Send button to send.');
+console.log('🔔 Push notifications: Click "Enable" to receive message alerts');
 </script>
 </body>
 </html>'''
@@ -2145,7 +2422,6 @@ async def root():
 
 @app.post("/login")
 async def login(request: Request, login_data: LoginRequest):
-    # Check rate limit
     allowed, message = check_login_rate_limit(login_data.username)
     if not allowed:
         return JSONResponse(
@@ -2182,10 +2458,7 @@ async def login(request: Request, login_data: LoginRequest):
         )
     
     if verify_password_argon2(login_data.password, stored_hash):
-        # Reset attempts on successful login
         reset_login_attempts(login_data.username)
-        
-        # Get the actual group password
         group_password = None
         if assigned_group:
             group_password = await get_group_password(assigned_group)
@@ -2193,7 +2466,6 @@ async def login(request: Request, login_data: LoginRequest):
                 group_password = login_data.password
         
         session_id = create_session(login_data.username, role, assigned_group, group_password)
-        
         response = JSONResponse({
             "success": True, 
             "username": login_data.username, 
@@ -2253,10 +2525,7 @@ async def gatekeeper(login_data: LoginRequest):
             content={"success": False, "message": "No group assigned to this user"}
         )
     
-    # Get the actual group password from the groups table
     group_password = await get_group_password(assigned_group)
-    
-    # If no group password stored, use the user's login password
     if not group_password:
         group_password = login_data.password
         print(f"[!] No group password found for '{assigned_group}', using login password")
@@ -2274,7 +2543,6 @@ async def save_display_name(data: SaveDisplayNameRequest, request: Request):
     session = await get_session_from_cookie(request)
     if session["username"] != data.username:
         raise HTTPException(status_code=403, detail="Cannot modify other users")
-    
     await save_user_display_name(data.username, data.display_name)
     return {"success": True}
 
@@ -2388,13 +2656,10 @@ async def ws_endpoint(websocket: WebSocket):
     await manager.add(group_name, username, websocket)
     await set_user_status(username, 'online', group_name)
     
-    # Send users list
     online = await get_online_users(group_name)
     await websocket.send_json({'type': 'users', 'users': online})
     
-    # Send message history with reply_to
     messages = await get_messages(group_name)
-    
     history_messages = []
     for msg in messages:
         history_messages.append({
@@ -2411,7 +2676,6 @@ async def ws_endpoint(websocket: WebSocket):
         'messages': history_messages
     })
     
-    # Broadcast user joined
     await manager.broadcast(group_name, {'type': 'user_joined', 'user': username}, exclude=username)
     await websocket.send_json({'type': 'ready', 'salt': group_salt, 'group': group_name})
     print(f"[+] {username} joined {group_name}")
@@ -2430,6 +2694,9 @@ async def ws_endpoint(websocket: WebSocket):
                     result = await save_message(cipher, group_name, username, salt, reply_to)
                     message_id = result['id']
                     created_at = result['created_at']
+                    
+                    # ===== SEND PUSH NOTIFICATION =====
+                    asyncio.create_task(send_notification_to_group(group_name, username))
                     
                     await manager.broadcast(group_name, {
                         'type': 'message',
@@ -2486,6 +2753,7 @@ if __name__ == "__main__":
 ║                    Author: Mugisha Pc                      ║
 ║                                                            ║
 ║                   📱 PWA Ready - Install as App!           ║
+║                   🔔 Push Notifications Enabled!           ║
 ║                                                            ║
 ╚════════════════════════════════════════════════════════════╝
 """)
@@ -2500,6 +2768,12 @@ if __name__ == "__main__":
     print(f"   ✅ Offline support")
     print(f"   ✅ Custom app icon")
     print(f"   ✅ Loading animation on all button clicks")
+    print(f"\n🔔 Push Notifications:")
+    print(f"   ✅ VAPID enabled")
+    print(f"   ✅ Users can enable/disable notifications")
+    print(f"   ✅ Only 'You have a new message' sent")
+    print(f"   ✅ No message content in notification")
+    print(f"   ✅ Badge count on app icon")
     print(f"\n🔐 Group Encryption:")
     print(f"   ✅ All users in same group must use SAME group password")
     print(f"   ✅ Group password stored for consistent decryption")
