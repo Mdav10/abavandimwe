@@ -1067,7 +1067,7 @@ HTML = '''<!DOCTYPE html>
             
             <div class="login-footer">
                 🔒 AES-256 | ⏰ Messages auto-delete after 24 hours<br>
-                <span style="color:#1a1a2e;">Developed by Mugisha Pc</span>
+                <span style="color:#1a1a2e;">Developed by Bernard MANIRUMVA</span>
             </div>
         </div>
     </div>
@@ -1075,7 +1075,7 @@ HTML = '''<!DOCTYPE html>
 
 <div id="adminPanel" class="admin-panel">
     <div class="admin-panel-header">
-        <h2>⚙️ Admin Dashboard <span class="admin-username">(Logged in as: <span id="adminUsername">Mpc</span>)</span></h2>
+        <h2>⚙️ Admin Dashboard <span class="admin-username">(Logged in as: <span id="adminUsername">MB&A</span>)</span></h2>
         <div>
             <button class="close-admin" onclick="logout()">🚪 Logout</button>
         </div>
@@ -1187,8 +1187,8 @@ HTML = '''<!DOCTYPE html>
     <div class="chat-header">
         <div class="chat-header-left">
             <button class="menu-btn" onclick="toggleSidebar()">☰</button>
-            <span class="online-badge" id="connectionBadge">● Online</span>
-            <button class="notification-btn" id="notificationBtn" onclick="toggleNotifications()">🔔 Enable</button>
+            <span class="online-badge" id="connectionBadge">●Online</span>
+            <button class="notification-btn" id="notificationBtn" onclick="toggleNotifications()">🔔</button>
         </div>
         <h2 id="groupTitle"># LOADING</h2>
         <button class="logout-btn" onclick="logout()">Leave</button>
@@ -1938,15 +1938,15 @@ function updateStatus(online) {
     let status = document.getElementById('connectionStatus');
     let badge = document.getElementById('connectionBadge');
     if(online) {
-        status.innerHTML = '🟢 Connected';
+        
         status.className = 'connection-status status-online';
-        badge.innerHTML = '● Online';
+        badge.innerHTML = '●Online';
         badge.style.color = '#0f0';
         document.getElementById('offlineBar').classList.remove('active');
     } else {
-        status.innerHTML = '🔴 Disconnected';
+        
         status.className = 'connection-status status-offline';
-        badge.innerHTML = '● Offline';
+        badge.innerHTML = '●Offline';
         badge.style.color = '#ff4444';
     }
 }
