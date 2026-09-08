@@ -1,15 +1,13 @@
 """
-ABAVANDIMWE - Secure Messaging System
+ABAVANDIMWE - Secure Messaging (Final)
+All data in Neon PostgreSQL
 Author: Mugisha Pc
-Everything stored in Neon PostgreSQL database
-Messages: 24 hours auto-delete
-Files (voice, media): 7 days auto-delete
 """
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request, HTTPException, UploadFile, File
 from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
+from contextlib import asynccontextmanager
 import asyncio
 import json
 import os
@@ -19,14 +17,31 @@ import hashlib
 import time
 import uuid
 from typing import Dict, Optional, List
-from collections import defaultdict
-from pydantic import BaseModel
 from argon2 import PasswordHasher
-from argon2.exceptions import VerificationError
 import asyncpg
 from asyncpg import create_pool
 
-app = FastAPI()
+# ========== LIFESPAN (no deprecation warnings) ==========
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    print("🚀 Starting ABAVANDIMWE...")
+    await init_db()
+    asyncio.create_task(cleanup_loop())
+    print("✅ Server ready")
+    yield
+    if db_pool:
+        await db_pool.close()
+
+app = FastAPI(lifespan=lifespan)
+
+# ========== CORS ==========
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # ========== DATABASE ==========
 DATABASE_URL = os.getenv('DATABASE_URL')
@@ -35,17 +50,16 @@ db_pool = None
 async def get_db():
     global db_pool
     if db_pool is None:
-        db_pool = await create_pool(DATABASE_URL, min_size=1, max_size=10, ssl='require')
+        db_pool = await create_pool(DATABASE_URL, min_size=2, max_size=10, ssl='require')
     return await db_pool.acquire()
 
 async def release_db(conn):
     await db_pool.release(conn)
 
-# ========== TABLES ==========
+# ========== INIT TABLES ==========
 async def init_db():
     conn = await get_db()
     try:
-        # Users
         await conn.execute('''
             CREATE TABLE IF NOT EXISTS users (
                 username TEXT PRIMARY KEY,
@@ -53,12 +67,9 @@ async def init_db():
                 role TEXT DEFAULT 'user',
                 assigned_group TEXT,
                 display_name TEXT,
-                status TEXT,
                 created_at DOUBLE PRECISION
             )
         ''')
-        
-        # Messages
         await conn.execute('''
             CREATE TABLE IF NOT EXISTS messages (
                 id SERIAL PRIMARY KEY,
@@ -73,12 +84,9 @@ async def init_db():
                 media_url TEXT,
                 media_type TEXT,
                 edited BOOLEAN DEFAULT FALSE,
-                read_by TEXT[] DEFAULT '{}',
                 reactions JSONB DEFAULT '{}'
             )
         ''')
-        
-        # Groups
         await conn.execute('''
             CREATE TABLE IF NOT EXISTS groups (
                 group_name TEXT PRIMARY KEY,
@@ -87,8 +95,6 @@ async def init_db():
                 created_at DOUBLE PRECISION
             )
         ''')
-        
-        # Files (voice + media stored here)
         await conn.execute('''
             CREATE TABLE IF NOT EXISTS files (
                 id SERIAL PRIMARY KEY,
@@ -100,8 +106,6 @@ async def init_db():
                 username TEXT
             )
         ''')
-        
-        # Sessions
         await conn.execute('''
             CREATE TABLE IF NOT EXISTS sessions (
                 session_id TEXT PRIMARY KEY,
@@ -113,197 +117,154 @@ async def init_db():
                 expires_at DOUBLE PRECISION
             )
         ''')
-        
-        # Admin logs
-        await conn.execute('''
-            CREATE TABLE IF NOT EXISTS admin_logs (
-                id SERIAL PRIMARY KEY,
-                admin_username TEXT,
-                action TEXT,
-                target TEXT,
-                details TEXT,
-                created_at DOUBLE PRECISION
-            )
-        ''')
-        
-        # Create admin
-        admin_pass = os.getenv('ADMIN_PASSWORD', 'Mpc@Secure+_+')
+        # Admin
         ph = PasswordHasher()
-        admin_hash = ph.hash(admin_pass)
-        
+        admin_hash = ph.hash(os.getenv('ADMIN_PASSWORD', 'Mpc@Secure+_+'))
         await conn.execute('''
             INSERT INTO users (username, password_hash, role, created_at) 
             VALUES ($1, $2, 'admin', $3)
             ON CONFLICT (username) DO NOTHING
         ''', 'Mpc', admin_hash, time.time())
-        
         print("✅ Database ready")
     finally:
         await release_db(conn)
 
-# ========== CRYPTO ==========
-ph = PasswordHasher()
-
-def hash_password(pw):
-    return ph.hash(pw)
-
-def verify_password(pw, hashed):
-    try:
-        ph.verify(hashed, pw)
-        return True
-    except:
-        return False
-
-def encrypt(text, password, salt):
-    key = hashlib.pbkdf2_hmac('sha256', password.encode(), salt.encode(), 100000, 32)
-    text_bytes = text.encode()
-    encrypted = bytearray()
-    for i in range(len(text_bytes)):
-        encrypted.append(text_bytes[i] ^ key[i % len(key)])
-    nonce = secrets.token_bytes(8)
-    result = nonce + encrypted
-    return base64.b64encode(result).decode()
-
-def decrypt(encrypted, password, salt):
-    key = hashlib.pbkdf2_hmac('sha256', password.encode(), salt.encode(), 100000, 32)
-    data = base64.b64decode(encrypted)
-    ciphertext = data[8:]
-    decrypted = bytearray()
-    for i in range(len(ciphertext)):
-        decrypted.append(ciphertext[i] ^ key[i % len(key)])
-    return decrypted.decode()
-
-def generate_salt():
-    return base64.b64encode(secrets.token_bytes(32)).decode()
-
-# ========== SESSIONS ==========
-SESSION_TIMEOUT = 7 * 24 * 3600
-
-async def create_session(username, role, assigned_group, group_password):
-    session_id = secrets.token_urlsafe(32)
+# ========== CLEANUP ==========
+async def cleanup_old():
     conn = await get_db()
     try:
-        await conn.execute('''
-            INSERT INTO sessions (session_id, username, role, assigned_group, group_password, created_at, expires_at)
-            VALUES ($1, $2, $3, $4, $5, $6, $7)
-        ''', session_id, username, role, assigned_group, group_password, time.time(), time.time() + SESSION_TIMEOUT)
-        return session_id
+        now = time.time()
+        await conn.execute('DELETE FROM messages WHERE expires_at < $1', now)
+        await conn.execute('DELETE FROM files WHERE expires_at < $1', now)
+        await conn.execute('DELETE FROM sessions WHERE expires_at < $1', now)
     finally:
         await release_db(conn)
 
-async def get_session(session_id):
+async def cleanup_loop():
+    while True:
+        await asyncio.sleep(3600)
+        await cleanup_old()
+
+# ========== CRYPTO ==========
+ph = PasswordHasher()
+
+def hash_pw(pw): return ph.hash(pw)
+def verify_pw(pw, h):
+    try: return ph.verify(h, pw)
+    except: return False
+
+def gen_salt():
+    return base64.b64encode(secrets.token_bytes(32)).decode()
+
+def encrypt(text, password, salt):
+    key = hashlib.pbkdf2_hmac('sha256', password.encode(), salt.encode(), 100000, 32)
+    encrypted = bytearray()
+    for i, c in enumerate(text.encode()):
+        encrypted.append(c ^ key[i % len(key)])
+    return base64.b64encode(secrets.token_bytes(8) + encrypted).decode()
+
+def decrypt(encrypted, password, salt):
+    data = base64.b64decode(encrypted)
+    key = hashlib.pbkdf2_hmac('sha256', password.encode(), salt.encode(), 100000, 32)
+    decrypted = bytearray()
+    for i, c in enumerate(data[8:]):
+        decrypted.append(c ^ key[i % len(key)])
+    return decrypted.decode()
+
+# ========== SESSIONS ==========
+async def create_session(username, role, group, gpass):
+    sid = secrets.token_urlsafe(32)
     conn = await get_db()
     try:
-        row = await conn.fetchrow('SELECT * FROM sessions WHERE session_id = $1 AND expires_at > $2', session_id, time.time())
+        await conn.execute('INSERT INTO sessions VALUES ($1,$2,$3,$4,$5,$6,$7)',
+                          sid, username, role, group, gpass, time.time(), time.time()+604800)
+        return sid
+    finally:
+        await release_db(conn)
+
+async def get_session(sid):
+    conn = await get_db()
+    try:
+        row = await conn.fetchrow('SELECT * FROM sessions WHERE session_id=$1 AND expires_at>$2', sid, time.time())
         return dict(row) if row else None
     finally:
         await release_db(conn)
 
-async def delete_session(session_id):
+async def delete_session(sid):
     conn = await get_db()
     try:
-        await conn.execute('DELETE FROM sessions WHERE session_id = $1', session_id)
+        await conn.execute('DELETE FROM sessions WHERE session_id=$1', sid)
     finally:
         await release_db(conn)
 
-# ========== AUTH ==========
 async def get_user(username):
     conn = await get_db()
     try:
-        return await conn.fetchrow('SELECT * FROM users WHERE username = $1', username)
+        return await conn.fetchrow('SELECT * FROM users WHERE username=$1', username)
     finally:
         await release_db(conn)
 
-async def authenticate_user(username, password):
+async def auth_user(username, password):
     user = await get_user(username)
-    if not user:
-        return None
-    if verify_password(password, user['password_hash']):
+    if not user: return None
+    if verify_pw(password, user['password_hash']):
         return dict(user)
     return None
 
-async def get_session_from_request(request):
-    session_id = request.cookies.get('abavandimwe_session')
-    if not session_id:
-        return None
-    return await get_session(session_id)
+async def get_group_pass(group):
+    conn = await get_db()
+    try:
+        row = await conn.fetchrow('SELECT group_password FROM groups WHERE group_name=$1', group)
+        return row['group_password'] if row else None
+    finally:
+        await release_db(conn)
 
-# ========== MESSAGES ==========
-async def save_message(ciphertext, group, sender, salt, reply_to=None, voice_url=None, media_url=None, media_type=None):
+async def save_msg(cipher, group, sender, salt, reply=None, voice=None, media=None, mtype=None):
     now = time.time()
-    expiry = now + (24 * 3600)
     conn = await get_db()
     try:
         result = await conn.fetchrow('''
             INSERT INTO messages (ciphertext, group_name, sender, salt, created_at, expires_at, reply_to, voice_url, media_url, media_type)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-            RETURNING id, created_at
-        ''', ciphertext, group, sender, salt, now, expiry, reply_to, voice_url, media_url, media_type)
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING id, created_at
+        ''', cipher, group, sender, salt, now, now+86400, reply, voice, media, mtype)
         return dict(result)
     finally:
         await release_db(conn)
 
-async def get_messages(group):
+async def get_msgs(group):
     conn = await get_db()
     try:
-        rows = await conn.fetch('''
-            SELECT * FROM messages 
-            WHERE group_name = $1 AND created_at > $2 
-            ORDER BY id ASC
-        ''', group, time.time() - (24 * 3600))
-        return [dict(row) for row in rows]
+        rows = await conn.fetch('SELECT * FROM messages WHERE group_name=$1 AND created_at>$2 ORDER BY id',
+                               group, time.time()-86400)
+        return [dict(r) for r in rows]
     finally:
         await release_db(conn)
 
-# ========== FILES ==========
-async def save_file(filename, data, mime_type, username):
+async def save_file(filename, data, mime, username):
     conn = await get_db()
     try:
-        await conn.execute('''
-            INSERT INTO files (filename, file_data, mime_type, created_at, expires_at, username)
-            VALUES ($1, $2, $3, $4, $5, $6)
-        ''', filename, data, mime_type, time.time(), time.time() + (7 * 24 * 3600), username)
+        await conn.execute('INSERT INTO files (filename,file_data,mime_type,created_at,expires_at,username) VALUES ($1,$2,$3,$4,$5,$6)',
+                          filename, data, mime, time.time(), time.time()+604800, username)
     finally:
         await release_db(conn)
 
 async def get_file(filename):
     conn = await get_db()
     try:
-        return await conn.fetchrow('SELECT file_data, mime_type FROM files WHERE filename = $1', filename)
+        return await conn.fetchrow('SELECT file_data,mime_type FROM files WHERE filename=$1', filename)
     finally:
         await release_db(conn)
 
-# ========== GROUPS ==========
-async def get_group_password(group_name):
+async def create_user_group(username, password, group, gpass):
     conn = await get_db()
     try:
-        row = await conn.fetchrow('SELECT group_password FROM groups WHERE group_name = $1', group_name)
-        return row['group_password'] if row else None
-    finally:
-        await release_db(conn)
-
-async def create_user_with_group(username, password, group_name, group_password):
-    conn = await get_db()
-    try:
-        # Check if group exists
-        row = await conn.fetchrow('SELECT group_password FROM groups WHERE group_name = $1', group_name)
-        if row:
-            if row['group_password'] != group_password:
-                return {"error": "Wrong group password"}
-        else:
-            # Create group
-            await conn.execute('''
-                INSERT INTO groups (group_name, group_password, created_by, created_at)
-                VALUES ($1, $2, $3, $4)
-            ''', group_name, group_password, 'admin', time.time())
-        
-        # Create user
-        pw_hash = hash_password(password)
-        await conn.execute('''
-            INSERT INTO users (username, password_hash, role, assigned_group, created_at)
-            VALUES ($1, $2, 'user', $3, $4)
-        ''', username, pw_hash, group_name, time.time())
-        
+        row = await conn.fetchrow('SELECT group_password FROM groups WHERE group_name=$1', group)
+        if row and row['group_password'] != gpass:
+            return {"error": "Wrong group password"}
+        if not row:
+            await conn.execute('INSERT INTO groups VALUES ($1,$2,$3,$4)', group, gpass, 'admin', time.time())
+        await conn.execute('INSERT INTO users VALUES ($1,$2,$3,$4,$5,$6)',
+                          username, hash_pw(password), 'user', group, None, time.time())
         return {"success": True}
     except Exception as e:
         return {"error": str(e)}
@@ -311,21 +272,20 @@ async def create_user_with_group(username, password, group_name, group_password)
         await release_db(conn)
 
 async def delete_user(username):
-    if username == 'Mpc':
-        return False
+    if username == 'Mpc': return False
     conn = await get_db()
     try:
-        await conn.execute('DELETE FROM users WHERE username = $1', username)
+        await conn.execute('DELETE FROM users WHERE username=$1', username)
         return True
     finally:
         await release_db(conn)
 
-async def delete_group(group_name):
+async def delete_group(name):
     conn = await get_db()
     try:
-        await conn.execute('DELETE FROM users WHERE assigned_group = $1', group_name)
-        await conn.execute('DELETE FROM messages WHERE group_name = $1', group_name)
-        await conn.execute('DELETE FROM groups WHERE group_name = $1', group_name)
+        await conn.execute('DELETE FROM users WHERE assigned_group=$1', name)
+        await conn.execute('DELETE FROM messages WHERE group_name=$1', name)
+        await conn.execute('DELETE FROM groups WHERE group_name=$1', name)
         return True
     finally:
         await release_db(conn)
@@ -333,165 +293,112 @@ async def delete_group(group_name):
 async def get_all_users():
     conn = await get_db()
     try:
-        rows = await conn.fetch('SELECT username, assigned_group, status FROM users ORDER BY created_at DESC')
-        return [dict(row) for row in rows]
+        return [dict(r) for r in await conn.fetch('SELECT username, assigned_group FROM users')]
     finally:
         await release_db(conn)
 
 async def get_all_groups():
     conn = await get_db()
     try:
-        rows = await conn.fetch('SELECT * FROM groups ORDER BY created_at DESC')
-        return [dict(row) for row in rows]
+        return [dict(r) for r in await conn.fetch('SELECT * FROM groups')]
     finally:
         await release_db(conn)
 
-async def get_all_messages():
+async def get_all_msgs():
     conn = await get_db()
     try:
-        rows = await conn.fetch('SELECT id, sender, group_name, created_at FROM messages ORDER BY created_at DESC LIMIT 50')
-        return [dict(row) for row in rows]
+        return [dict(r) for r in await conn.fetch('SELECT id, sender, group_name FROM messages ORDER BY id DESC LIMIT 50')]
     finally:
         await release_db(conn)
-
-# ========== CLEANUP ==========
-async def cleanup_old_data():
-    conn = await get_db()
-    try:
-        # Delete old messages
-        await conn.execute('DELETE FROM messages WHERE expires_at < $1', time.time())
-        # Delete old files
-        await conn.execute('DELETE FROM files WHERE expires_at < $1', time.time())
-        # Delete old sessions
-        await conn.execute('DELETE FROM sessions WHERE expires_at < $1', time.time())
-    finally:
-        await release_db(conn)
-
-async def cleanup_loop():
-    while True:
-        await asyncio.sleep(3600)  # Every hour
-        await cleanup_old_data()
 
 # ========== WEBSOCKET MANAGER ==========
-class ConnectionManager:
+class Manager:
     def __init__(self):
         self.connections: Dict[str, Dict[str, WebSocket]] = {}
-
-    async def add(self, group: str, username: str, websocket: WebSocket):
+    async def add(self, group, user, ws):
         if group not in self.connections:
             self.connections[group] = {}
-        self.connections[group][username] = websocket
-
-    def remove(self, group: str, username: str):
+        self.connections[group][user] = ws
+    def remove(self, group, user):
         if group in self.connections:
-            self.connections[group].pop(username, None)
+            self.connections[group].pop(user, None)
             if not self.connections[group]:
                 del self.connections[group]
+    async def broadcast(self, group, msg, exclude=None):
+        if group not in self.connections: return
+        for user, ws in self.connections[group].items():
+            if user != exclude:
+                try: await ws.send_json(msg)
+                except: pass
 
-    async def broadcast(self, group: str, message: dict, exclude: str = None):
-        if group not in self.connections:
-            return
-        for username, ws in self.connections[group].items():
-            if username != exclude:
-                try:
-                    await ws.send_json(message)
-                except:
-                    pass
-
-manager = ConnectionManager()
+manager = Manager()
 
 # ========== API ENDPOINTS ==========
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-@app.on_event("startup")
-async def startup():
-    await init_db()
-    asyncio.create_task(cleanup_loop())
-    print("🚀 Server started")
-
 @app.post("/login")
-async def login(request: Request, data: dict):
-    username = data.get('username')
-    password = data.get('password')
-    
-    user = await authenticate_user(username, password)
+async def login(data: dict):
+    user = await auth_user(data.get('username'), data.get('password'))
     if not user:
-        return JSONResponse({"success": False, "message": "Invalid credentials"}, status_code=401)
-    
-    group_password = await get_group_password(user['assigned_group']) if user['assigned_group'] else None
-    session_id = await create_session(username, user['role'], user['assigned_group'], group_password)
-    
-    response = JSONResponse({
+        return JSONResponse({"success": False, "message": "Invalid"}, status_code=401)
+    gpass = await get_group_pass(user['assigned_group']) if user['assigned_group'] else None
+    sid = await create_session(user['username'], user['role'], user['assigned_group'], gpass)
+    resp = JSONResponse({
         "success": True,
-        "username": username,
+        "username": user['username'],
         "role": user['role'],
         "display_name": user.get('display_name')
     })
-    response.set_cookie("abavandimwe_session", session_id, httponly=True, max_age=SESSION_TIMEOUT, path="/")
-    return response
+    resp.set_cookie("abavandimwe_session", sid, httponly=True, max_age=604800, path="/")
+    return resp
 
 @app.post("/gatekeeper")
 async def gatekeeper(data: dict):
-    username = data.get('username')
-    password = data.get('password')
-    
-    user = await authenticate_user(username, password)
+    user = await auth_user(data.get('username'), data.get('password'))
     if not user:
-        return JSONResponse({"success": False, "message": "Invalid credentials"}, status_code=401)
-    
+        return JSONResponse({"success": False, "message": "Invalid"}, status_code=401)
     if user['role'] == 'admin':
-        return JSONResponse({"success": False, "message": "Admin cannot access chat"}, status_code=403)
-    
-    group_password = await get_group_password(user['assigned_group'])
+        return JSONResponse({"success": False, "message": "Admin cannot chat"}, status_code=403)
+    gpass = await get_group_pass(user['assigned_group'])
     return {
         "success": True,
-        "username": username,
+        "username": user['username'],
         "assigned_group": user['assigned_group'],
-        "assigned_group_password": group_password,
+        "assigned_group_password": gpass,
         "display_name": user.get('display_name')
     }
 
 @app.post("/save_display_name")
 async def save_display_name(data: dict, request: Request):
-    session = await get_session_from_request(request)
+    sid = request.cookies.get('abavandimwe_session')
+    session = await get_session(sid) if sid else None
     if not session:
-        return JSONResponse({"success": False, "message": "Not authenticated"}, status_code=401)
-    
+        return JSONResponse({"success": False}, status_code=401)
     conn = await get_db()
     try:
-        await conn.execute('UPDATE users SET display_name = $1 WHERE username = $2', data['display_name'], data['username'])
+        await conn.execute('UPDATE users SET display_name=$1 WHERE username=$2', data['display_name'], data['username'])
     finally:
         await release_db(conn)
     return {"success": True}
 
 @app.post("/api/upload_voice")
 async def upload_voice(request: Request, file: UploadFile = File(...)):
-    session = await get_session_from_request(request)
+    sid = request.cookies.get('abavandimwe_session')
+    session = await get_session(sid) if sid else None
     if not session:
-        return JSONResponse({"success": False, "error": "Not authenticated"}, status_code=401)
-    
+        return JSONResponse({"success": False, "error": "Auth required"}, status_code=401)
     content = await file.read()
     filename = f"{uuid.uuid4()}.webm"
-    
     await save_file(filename, content, 'audio/webm', session['username'])
     return {"success": True, "url": f"/api/files/{filename}"}
 
 @app.post("/api/upload_media")
 async def upload_media(request: Request, file: UploadFile = File(...)):
-    session = await get_session_from_request(request)
+    sid = request.cookies.get('abavandimwe_session')
+    session = await get_session(sid) if sid else None
     if not session:
-        return JSONResponse({"success": False, "error": "Not authenticated"}, status_code=401)
-    
+        return JSONResponse({"success": False, "error": "Auth required"}, status_code=401)
     content = await file.read()
     ext = file.filename.split('.')[-1]
     filename = f"{uuid.uuid4()}.{ext}"
-    
     await save_file(filename, content, file.content_type, session['username'])
     return {"success": True, "url": f"/api/files/{filename}", "type": file.content_type}
 
@@ -504,134 +411,115 @@ async def get_file(filename: str):
 
 @app.post("/edit_message")
 async def edit_message(data: dict, request: Request):
-    session = await get_session_from_request(request)
+    sid = request.cookies.get('abavandimwe_session')
+    session = await get_session(sid) if sid else None
     if not session:
-        return JSONResponse({"success": False, "error": "Not authenticated"}, status_code=401)
-    
+        return JSONResponse({"success": False}, status_code=401)
     conn = await get_db()
     try:
-        row = await conn.fetchrow('SELECT sender, group_name FROM messages WHERE id = $1', data['message_id'])
+        row = await conn.fetchrow('SELECT sender, group_name FROM messages WHERE id=$1', data['message_id'])
         if not row or row['sender'] != session['username']:
             return JSONResponse({"success": False, "error": "Not your message"})
-        
-        salt = generate_salt()
+        salt = gen_salt()
         new_cipher = encrypt(data['new_text'], session['group_password'], salt)
-        await conn.execute('UPDATE messages SET ciphertext = $1, salt = $2, edited = TRUE WHERE id = $3', 
+        await conn.execute('UPDATE messages SET ciphertext=$1, salt=$2, edited=TRUE WHERE id=$3',
                           new_cipher, salt, data['message_id'])
-        
         await manager.broadcast(row['group_name'], {
             'type': 'message_edited',
             'message_id': data['message_id'],
             'ciphertext': new_cipher,
             'salt': salt
-        }, exclude=session['username'])
-        
+        })
         return {"success": True}
     finally:
         await release_db(conn)
 
 @app.post("/reaction")
 async def reaction(data: dict, request: Request):
-    session = await get_session_from_request(request)
+    sid = request.cookies.get('abavandimwe_session')
+    session = await get_session(sid) if sid else None
     if not session:
-        return JSONResponse({"success": False, "error": "Not authenticated"}, status_code=401)
-    
+        return JSONResponse({"success": False}, status_code=401)
     conn = await get_db()
     try:
-        row = await conn.fetchrow('SELECT group_name, reactions FROM messages WHERE id = $1', data['message_id'])
+        row = await conn.fetchrow('SELECT group_name, reactions FROM messages WHERE id=$1', data['message_id'])
         if not row:
-            return JSONResponse({"success": False, "error": "Message not found"})
-        
+            return JSONResponse({"success": False, "error": "Not found"})
         reactions = row['reactions'] or {}
         emoji = data['emoji']
-        
         if emoji in reactions and session['username'] in reactions[emoji]:
             reactions[emoji].remove(session['username'])
             if not reactions[emoji]:
                 del reactions[emoji]
         else:
-            if emoji not in reactions:
-                reactions[emoji] = []
-            reactions[emoji].append(session['username'])
-        
-        await conn.execute('UPDATE messages SET reactions = $1 WHERE id = $2', json.dumps(reactions), data['message_id'])
-        
-        reaction_counts = {e: len(users) for e, users in reactions.items()}
+            reactions.setdefault(emoji, []).append(session['username'])
+        await conn.execute('UPDATE messages SET reactions=$1 WHERE id=$2', json.dumps(reactions), data['message_id'])
+        counts = {e: len(u) for e, u in reactions.items()}
         await manager.broadcast(row['group_name'], {
             'type': 'reaction_update',
             'message_id': data['message_id'],
-            'reactions': reaction_counts
+            'reactions': counts
         })
-        
-        return {"success": True, "reactions": reaction_counts}
+        return {"success": True, "reactions": counts}
     finally:
         await release_db(conn)
 
 @app.get("/admin/data")
 async def admin_data(request: Request):
-    session = await get_session_from_request(request)
+    sid = request.cookies.get('abavandimwe_session')
+    session = await get_session(sid) if sid else None
     if not session or session['role'] != 'admin':
-        return JSONResponse({"success": False, "error": "Admin only"}, status_code=403)
-    
+        return JSONResponse({"success": False}, status_code=403)
     users = await get_all_users()
     groups = await get_all_groups()
-    messages = await get_all_messages()
-    
-    return {
-        "users": users,
-        "groups": groups,
-        "messages": messages,
-        "messages_count": len(messages)
-    }
+    messages = await get_all_msgs()
+    return {"users": users, "groups": groups, "messages": messages}
 
 @app.post("/admin/create_user")
 async def admin_create_user(data: dict, request: Request):
-    session = await get_session_from_request(request)
+    sid = request.cookies.get('abavandimwe_session')
+    session = await get_session(sid) if sid else None
     if not session or session['role'] != 'admin':
-        return JSONResponse({"success": False, "error": "Admin only"}, status_code=403)
-    
-    result = await create_user_with_group(data['username'], data['password'], data['group_name'], data['group_password'])
-    return result
+        return JSONResponse({"success": False}, status_code=403)
+    return await create_user_group(data['username'], data['password'], data['group_name'], data['group_password'])
 
 @app.post("/admin/delete_user")
 async def admin_delete_user(data: dict, request: Request):
-    session = await get_session_from_request(request)
+    sid = request.cookies.get('abavandimwe_session')
+    session = await get_session(sid) if sid else None
     if not session or session['role'] != 'admin':
-        return JSONResponse({"success": False, "error": "Admin only"}, status_code=403)
-    
-    success = await delete_user(data['username'])
-    return {"success": success}
+        return JSONResponse({"success": False}, status_code=403)
+    return {"success": await delete_user(data['username'])}
 
 @app.post("/admin/delete_group")
 async def admin_delete_group(data: dict, request: Request):
-    session = await get_session_from_request(request)
+    sid = request.cookies.get('abavandimwe_session')
+    session = await get_session(sid) if sid else None
     if not session or session['role'] != 'admin':
-        return JSONResponse({"success": False, "error": "Admin only"}, status_code=403)
-    
-    success = await delete_group(data['name'])
-    return {"success": success}
+        return JSONResponse({"success": False}, status_code=403)
+    return {"success": await delete_group(data['name'])}
 
 @app.post("/admin/delete_message")
 async def admin_delete_message(data: dict, request: Request):
-    session = await get_session_from_request(request)
+    sid = request.cookies.get('abavandimwe_session')
+    session = await get_session(sid) if sid else None
     if not session or session['role'] != 'admin':
-        return JSONResponse({"success": False, "error": "Admin only"}, status_code=403)
-    
+        return JSONResponse({"success": False}, status_code=403)
     conn = await get_db()
     try:
-        await conn.execute('DELETE FROM messages WHERE id = $1', data['id'])
+        await conn.execute('DELETE FROM messages WHERE id=$1', data['id'])
         return {"success": True}
     finally:
         await release_db(conn)
 
 @app.post("/logout")
 async def logout(request: Request):
-    session_id = request.cookies.get("abavandimwe_session")
-    if session_id:
-        await delete_session(session_id)
-    response = JSONResponse({"success": True})
-    response.delete_cookie("abavandimwe_session")
-    return response
+    sid = request.cookies.get('abavandimwe_session')
+    if sid:
+        await delete_session(sid)
+    resp = JSONResponse({"success": True})
+    resp.delete_cookie("abavandimwe_session")
+    return resp
 
 @app.get("/")
 async def root():
@@ -641,86 +529,63 @@ async def root():
 @app.websocket("/ws")
 async def ws_endpoint(websocket: WebSocket):
     await websocket.accept()
-    
-    session_id = None
-    cookie_header = websocket.headers.get("cookie", "")
-    for item in cookie_header.split(";"):
+    sid = None
+    for item in websocket.headers.get("cookie", "").split(";"):
         item = item.strip()
         if item.startswith("abavandimwe_session="):
-            session_id = item.split("=")[1]
+            sid = item.split("=")[1]
             break
-    
-    if not session_id:
+    if not sid:
         await websocket.send_json({'type': 'error', 'message': 'No session'})
         await websocket.close()
         return
-    
-    session = await get_session(session_id)
+    session = await get_session(sid)
     if not session:
         await websocket.send_json({'type': 'error', 'message': 'Invalid session'})
         await websocket.close()
         return
-    
     username = session['username']
-    group_name = session['assigned_group']
-    group_password = session['group_password']
-    
-    if not group_name:
+    group = session['assigned_group']
+    gpass = session['group_password']
+    if not group:
         await websocket.send_json({'type': 'error', 'message': 'No group'})
         await websocket.close()
         return
-    
-    await manager.add(group_name, username, websocket)
-    await manager.broadcast(group_name, {'type': 'user_joined', 'user': username}, exclude=username)
-    
-    # Send history
-    messages = await get_messages(group_name)
-    for msg in messages:
-        msg['ciphertext'] = msg['ciphertext']
-    await websocket.send_json({'type': 'history', 'messages': messages})
-    
-    print(f"[+] {username} joined {group_name}")
-    
+    await manager.add(group, username, websocket)
+    await websocket.send_json({'type': 'history', 'messages': await get_msgs(group)})
+    await manager.broadcast(group, {'type': 'user_joined', 'user': username}, exclude=username)
+    print(f"[+] {username} joined {group}")
     try:
         while True:
             data = await websocket.receive_json()
-            msg_type = data.get('type')
-            
-            if msg_type == 'message':
-                cipher = data.get('ciphertext')
-                salt = data.get('salt')
-                reply_to = data.get('reply_to')
-                voice_url = data.get('voice_url')
-                media_url = data.get('media_url')
-                media_type = data.get('media_type')
-                
-                result = await save_message(cipher, group_name, username, salt, reply_to, voice_url, media_url, media_type)
-                
-                await manager.broadcast(group_name, {
+            if data.get('type') == 'message':
+                result = await save_msg(
+                    data['ciphertext'], group, username, data['salt'],
+                    data.get('reply_to'), data.get('voice_url'),
+                    data.get('media_url'), data.get('media_type')
+                )
+                await manager.broadcast(group, {
                     'type': 'message',
                     'message_id': result['id'],
-                    'ciphertext': cipher,
+                    'ciphertext': data['ciphertext'],
                     'sender': username,
-                    'salt': salt,
+                    'salt': data['salt'],
                     'timestamp': result['created_at'],
-                    'reply_to': reply_to,
-                    'voice_url': voice_url,
-                    'media_url': media_url,
-                    'media_type': media_type
+                    'reply_to': data.get('reply_to'),
+                    'voice_url': data.get('voice_url'),
+                    'media_url': data.get('media_url'),
+                    'media_type': data.get('media_type')
                 }, exclude=username)
-            
-            elif msg_type == 'typing':
-                await manager.broadcast(group_name, {'type': 'typing', 'user': username}, exclude=username)
-            
-            elif msg_type == 'stop_typing':
-                await manager.broadcast(group_name, {'type': 'stop_typing', 'user': username}, exclude=username)
-    
+            elif data.get('type') == 'typing':
+                await manager.broadcast(group, {'type': 'typing', 'user': username}, exclude=username)
+            elif data.get('type') == 'stop_typing':
+                await manager.broadcast(group, {'type': 'stop_typing', 'user': username}, exclude=username)
     except WebSocketDisconnect:
         pass
     finally:
-        manager.remove(group_name, username)
-        await manager.broadcast(group_name, {'type': 'user_left', 'user': username})
-        print(f"[-] {username} left {group_name}")
+        manager.remove(group, username)
+        await manager.broadcast(group, {'type': 'user_left', 'user': username})
+        print(f"[-] {username} left {group}")
 
 # ========== HTML ==========
 HTML = '''<!DOCTYPE html>
@@ -730,14 +595,17 @@ HTML = '''<!DOCTYPE html>
 <meta name="viewport" content="width=device-width,initial-scale=1.0,user-scalable=no">
 <title>ABAVANDIMWE</title>
 <style>
-*{margin:0;padding:0;box-sizing:border-box}
+/* ----- RESET & BASE ----- */
+*{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
 body{font-family:monospace;background:#0a0a0f;color:#0f0;height:100dvh;overflow:hidden}
+
+/* ----- LOGIN ----- */
 .login-container{position:fixed;inset:0;display:flex;justify-content:center;align-items:center;background:#0a0a0f;z-index:1000;padding:20px}
 .login-card{background:#050508;border:2px solid #0f0;border-radius:24px;padding:32px 24px;width:100%;max-width:400px}
 h1{text-align:center;font-size:24px;margin-bottom:4px}
 .sub{text-align:center;font-size:11px;color:#666;margin-bottom:16px}
-input{width:100%;padding:14px;margin:8px 0;background:#111;border:1px solid #0f0;border-radius:12px;color:#0f0;font-size:15px}
-input:focus{outline:none;box-shadow:0 0 20px rgba(0,255,65,0.2)}
+input{width:100%;padding:14px;margin:8px 0;background:#111;border:1px solid #0f0;border-radius:12px;color:#0f0;font-size:15px;outline:none}
+input:focus{box-shadow:0 0 20px rgba(0,255,65,0.2)}
 button{width:100%;padding:14px;margin-top:12px;background:transparent;border:2px solid #0f0;border-radius:12px;color:#0f0;font-size:16px;font-weight:bold;cursor:pointer;transition:all 0.3s}
 button:hover{background:#0f0;color:#000}
 button:disabled{opacity:0.5;cursor:not-allowed}
@@ -749,8 +617,18 @@ button:disabled{opacity:0.5;cursor:not-allowed}
 .separator span{padding:0 10px;color:#666;font-size:10px}
 .footer{text-align:center;margin-top:16px;font-size:8px;color:#333;border-top:1px solid #1a1a2e;padding-top:12px}
 
+/* ----- GATEKEEPER / SETUP ----- */
+.gatekeeper-container,.setup-container{display:none;position:fixed;inset:0;background:#0a0a0f;z-index:900;padding:20px;justify-content:center;align-items:center}
+.gatekeeper-container.active,.setup-container.active{display:flex}
+.gatekeeper-card,.setup-card{background:#050508;border:2px solid #0f0;border-radius:24px;padding:32px 24px;width:100%;max-width:400px}
+.gatekeeper-card h2,.setup-card h2{text-align:center;font-size:22px;margin-bottom:4px}
+.gatekeeper-card .sub,.setup-card .sub{text-align:center;font-size:11px;color:#666;margin-bottom:16px}
+
+/* ----- CHAT LAYOUT (FIXED 3-PART) ----- */
 .chat-container{display:none;flex-direction:column;height:100dvh;background:#0a0a0f}
 .chat-container.active{display:flex}
+
+/* HEADER */
 .header{padding:10px 14px;background:#050508;border-bottom:1px solid #0f0;display:flex;justify-content:space-between;align-items:center;flex-shrink:0;min-height:50px}
 .header h2{font-size:15px;text-align:center;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:0 8px}
 .header-left{display:flex;align-items:center;gap:8px}
@@ -758,8 +636,9 @@ button:disabled{opacity:0.5;cursor:not-allowed}
 .logout-btn{width:auto;padding:4px 12px;font-size:11px;margin:0;border-color:#ff0041;color:#ff0041}
 .logout-btn:hover{background:#ff0041;color:white}
 
-.messages{flex:1;overflow-y:auto;padding:12px;display:flex;flex-direction:column;gap:4px;min-height:0}
-.message{max-width:85%;padding:4px 0}
+/* SCROLLABLE MESSAGES */
+.messages{flex:1;overflow-y:auto;padding:12px;display:flex;flex-direction:column;gap:4px;min-height:0;width:100%;box-sizing:border-box;overscroll-behavior:contain}
+.message{max-width:85%;padding:4px 0;word-break:break-word;overflow-wrap:anywhere}
 .message.sent{align-self:flex-end}
 .message.received{align-self:flex-start}
 .bubble{padding:8px 12px;border-radius:14px;font-size:14px;word-wrap:break-word;line-height:1.4}
@@ -770,21 +649,24 @@ button:disabled{opacity:0.5;cursor:not-allowed}
 .system-msg{text-align:center;font-size:10px;color:#ffaa00;margin:4px 0;font-style:italic}
 .typing-indicator{padding:2px 16px 6px;font-size:10px;color:#0f0;font-style:italic;min-height:22px;flex-shrink:0}
 
+/* COMPOSER (FIXED) */
 .composer{padding:8px;background:#050508;border-top:1px solid #0f0;flex-shrink:0}
 .composer-row{display:flex;gap:6px;align-items:flex-end}
-.composer-row textarea{flex:1;padding:10px 14px;background:#111;border:1px solid #0f0;border-radius:10px;color:#0f0;font-family:monospace;font-size:13px;resize:none;max-height:120px;min-height:40px;line-height:1.4}
-.composer-row textarea:focus{outline:none;box-shadow:0 0 20px rgba(0,255,65,0.2)}
-.composer-row textarea::placeholder{color:#444}
-.composer-row button{width:40px;height:40px;min-width:40px;padding:0;margin:0;border-radius:50%;font-size:16px;display:flex;align-items:center;justify-content:center;flex-shrink:0}
-.send-btn{background:#0f0;color:#000;border:2px solid #0f0}
-.voice-btn{border:2px solid #0f0;font-size:18px;position:relative}
+.composer-row textarea{flex:1;padding:10px 14px;background:#111;border:1px solid #0f0;border-radius:10px;color:#0f0;font-family:monospace;font-size:13px;resize:none;max-height:120px;min-height:40px;line-height:1.4;outline:none}
+.composer-row textarea:focus{box-shadow:0 0 20px rgba(0,255,65,0.2)}
+.composer-row button{width:40px;height:40px;min-width:40px;padding:0;margin:0;border-radius:50%;font-size:16px;display:flex;align-items:center;justify-content:center;flex-shrink:0;border:2px solid #0f0;background:transparent;color:#0f0;cursor:pointer;transition:all 0.2s}
+.composer-row button:hover{background:rgba(0,255,0,0.1)}
+.send-btn{background:#0f0;color:#000;border-color:#0f0}
+.send-btn:hover{background:#00cc00}
+.voice-btn{font-size:18px}
 .voice-btn.recording{border-color:#ff0041;background:rgba(255,0,65,0.15);animation:pulse 1s infinite}
 @keyframes pulse{0%,100%{box-shadow:0 0 0 0 rgba(255,0,65,0.4)}50%{box-shadow:0 0 20px 10px rgba(255,0,65,0.15)}}
-.media-btn{border:2px solid #0f0;font-size:16px}
+.media-btn{font-size:16px}
 
+/* RECORDING STATUS */
 .recording-status{display:none;padding:6px 12px;margin-top:4px;background:#1a1a2e;border:1px solid #ff0041;border-radius:8px;align-items:center;gap:8px}
 .recording-status.active{display:flex}
-#recordingTimer{color:#ff0041;font-size:14px;font-weight:bold;min-width:44px}
+#recTimer{color:#ff0041;font-size:14px;font-weight:bold;min-width:44px}
 .wave{flex:1;display:flex;align-items:center;gap:2px;height:20px}
 .wave .bar{width:3px;background:#ff0041;border-radius:2px;animation:wave 0.6s ease-in-out infinite alternate}
 .wave .bar:nth-child(1){height:6px;animation-delay:0s}
@@ -799,13 +681,18 @@ button:disabled{opacity:0.5;cursor:not-allowed}
 #cancelRec{background:transparent;border:1px solid #555;color:#888;padding:2px 10px;border-radius:4px;cursor:pointer;font-size:11px}
 #cancelRec:hover{border-color:#ff0041;color:#ff0041}
 
+/* VOICE PLAYER */
 .voice-play-btn{background:transparent;border:2px solid #0f0;color:#0f0;padding:4px 12px;border-radius:16px;cursor:pointer;font-size:12px;display:inline-flex;align-items:center;gap:8px}
 .voice-play-btn.playing{border-color:#ffaa00;color:#ffaa00}
 .voice-progress{width:80px;height:3px;background:#1a1a2e;border-radius:2px;overflow:hidden}
-.voice-progress-bar{height:100%;background:#0f0;width:0%}
+.voice-progress-bar{height:100%;background:#0f0;width:0%;transition:width 0.1s}
 .voice-duration{font-size:10px;color:#888;min-width:35px}
-.message-media{max-width:160px;max-height:160px;border-radius:8px;margin-top:4px;cursor:pointer}
 
+/* MEDIA */
+.message-media{max-width:160px;max-height:160px;border-radius:8px;margin-top:4px;cursor:pointer}
+.message-media:hover{opacity:0.8}
+
+/* REACTIONS */
 .reaction-container{display:flex;gap:4px;margin-top:4px;flex-wrap:wrap}
 .reaction-emoji{background:#1a1a2e;padding:1px 6px;border-radius:8px;font-size:11px;cursor:pointer;border:1px solid transparent}
 .reaction-emoji:hover{border-color:#0f0}
@@ -813,19 +700,23 @@ button:disabled{opacity:0.5;cursor:not-allowed}
 .reaction-picker.active{display:flex;flex-wrap:wrap;gap:2px;max-width:160px}
 .reaction-picker span{font-size:16px;cursor:pointer;padding:2px 4px;border-radius:4px}
 .reaction-picker span:hover{background:#1a1a2e}
-.message-actions{display:flex;gap:4px;margin-top:2px}
+.message-actions{display:flex;gap:4px;margin-top:2px;flex-wrap:wrap}
 .message-actions button{background:transparent;border:none;color:#888;font-size:10px;cursor:pointer;padding:1px 4px;width:auto;margin:0}
+.message-actions button:hover{color:#0f0}
 .edit-input{display:none;width:100%;padding:4px;background:#111;border:1px solid #0f0;border-radius:4px;color:#0f0;font-size:12px;margin-top:2px}
 
+/* OFFLINE BAR */
 .offline-bar{display:none;background:#ff0041;color:white;text-align:center;padding:4px;font-size:10px;font-weight:bold;flex-shrink:0}
 .offline-bar.active{display:block}
 
+/* LOADING OVERLAY */
 .loading-overlay{position:fixed;inset:0;background:rgba(10,10,15,0.95);z-index:9999;display:none;justify-content:center;align-items:center;flex-direction:column;gap:16px}
 .loading-overlay.active{display:flex}
 .loader{width:50px;height:50px;border:3px solid rgba(0,255,65,0.1);border-top:3px solid #0f0;border-radius:50%;animation:spin 0.8s linear infinite}
 @keyframes spin{0%{transform:rotate(0)}100%{transform:rotate(360deg)}}
 .loader-text{color:#0f0;font-size:14px}
 
+/* ADMIN PANEL */
 .admin-panel{display:none;position:fixed;inset:0;background:#0a0a0f;z-index:50;padding:16px;overflow-y:auto}
 .admin-panel.active{display:block}
 .admin-header{display:flex;justify-content:space-between;align-items:center;padding:12px;border-bottom:2px solid #0f0;margin-bottom:16px}
@@ -849,20 +740,13 @@ button:disabled{opacity:0.5;cursor:not-allowed}
 .action-btn-green:hover{background:#0f0;color:#000}
 .close-admin{background:#ff0041;border-color:#ff0041;color:white;padding:4px 12px;border-radius:6px;cursor:pointer;font-size:12px;width:auto;margin:0}
 
-.gatekeeper-container,.setup-container{display:none;position:fixed;inset:0;background:#0a0a0f;z-index:900;padding:20px;justify-content:center;align-items:center}
-.gatekeeper-container.active,.setup-container.active{display:flex}
-.gatekeeper-card,.setup-card{background:#050508;border:2px solid #0f0;border-radius:24px;padding:32px 24px;width:100%;max-width:400px}
-.gatekeeper-card h2,.setup-card h2{text-align:center;font-size:22px;margin-bottom:4px}
-.gatekeeper-card .sub,.setup-card .sub{text-align:center;font-size:11px;color:#666;margin-bottom:16px}
-
-.connection-status{position:fixed;bottom:70px;right:12px;padding:3px 8px;background:#050508;border:1px solid #0f0;border-radius:12px;font-size:7px;z-index:40}
-.status-online{color:#0f0}
-.status-offline{color:#ff4444}
-
-@media(max-width:600px){.message{max-width:90%}}
-::-webkit-scrollbar{width:3px}
+/* SCROLLBAR */
+::-webkit-scrollbar{width:4px}
 ::-webkit-scrollbar-track{background:#1a1a2e}
 ::-webkit-scrollbar-thumb{background:#0f0;border-radius:2px}
+
+/* RESPONSIVE */
+@media(max-width:600px){.message{max-width:90%}}
 </style>
 </head>
 <body>
@@ -939,7 +823,6 @@ button:disabled{opacity:0.5;cursor:not-allowed}
             <button id="cancelRec" onclick="cancelRecord()">✕ Cancel</button>
         </div>
     </div>
-    <div class="connection-status status-online" id="connStatus">🟢 Connected</div>
 </div>
 
 <!-- ADMIN -->
@@ -991,6 +874,7 @@ let isRecording = false, isHolding = false, holdTimer = null;
 const loginBtn = document.getElementById('loginBtn');
 const gkBtn = document.getElementById('gkBtn');
 const setupBtn = document.getElementById('setupBtn');
+const msgInput = document.getElementById('msgInput');
 
 // ========== LOADING ==========
 function showLoading() { document.getElementById('loadingOverlay').classList.add('active'); }
@@ -1001,22 +885,16 @@ loginBtn.addEventListener('click', login);
 document.getElementById('loginPass').addEventListener('keypress', e => { if(e.key === 'Enter') login(); });
 
 async function login() {
-    const username = document.getElementById('loginUser').value.trim();
-    const password = document.getElementById('loginPass').value;
-    if(!username || !password) { showError('Please enter username and password'); return; }
-    
-    loginBtn.disabled = true;
-    loginBtn.textContent = '⏳';
-    showLoading();
-    
+    const user = document.getElementById('loginUser').value.trim();
+    const pass = document.getElementById('loginPass').value;
+    if(!user || !pass) { showError('Please enter username and password'); return; }
+    loginBtn.disabled = true; loginBtn.textContent = '⏳'; showLoading();
     try {
         const res = await fetch('/login', {
-            method: 'POST',
-            headers: {'Content-Type':'application/json'},
-            body: JSON.stringify({username, password})
+            method:'POST', headers:{'Content-Type':'application/json'},
+            body:JSON.stringify({username:user, password:pass})
         });
         const data = await res.json();
-        
         if(data.success) {
             if(data.role === 'admin') {
                 document.getElementById('loginScreen').style.display = 'none';
@@ -1029,9 +907,10 @@ async function login() {
                 document.getElementById('gkUser').value = data.username;
                 document.getElementById('gkPass').value = '';
                 if(data.display_name) {
-                    document.getElementById('gkError').textContent = '✅ Welcome back ' + data.display_name;
-                    document.getElementById('gkError').style.color = '#0f0';
-                    document.getElementById('gkError').style.display = 'block';
+                    const el = document.getElementById('gkError');
+                    el.textContent = '✅ Welcome back ' + data.display_name;
+                    el.style.color = '#0f0';
+                    el.style.display = 'block';
                 }
             }
             hideLoading();
@@ -1043,14 +922,12 @@ async function login() {
         showError('Connection error. Please try again.');
         hideLoading();
     }
-    loginBtn.disabled = false;
-    loginBtn.textContent = '▶ Login';
+    loginBtn.disabled = false; loginBtn.textContent = '▶ Login';
 }
 
 function showError(msg) {
     const el = document.getElementById('loginError');
-    el.textContent = msg;
-    el.style.display = 'block';
+    el.textContent = msg; el.style.display = 'block';
     setTimeout(() => el.style.display = 'none', 5000);
 }
 
@@ -1059,22 +936,16 @@ gkBtn.addEventListener('click', gatekeeper);
 document.getElementById('gkPass').addEventListener('keypress', e => { if(e.key === 'Enter') gatekeeper(); });
 
 async function gatekeeper() {
-    const username = document.getElementById('gkUser').value.trim();
-    const password = document.getElementById('gkPass').value;
-    if(!password) { showGkError('Please enter your password'); return; }
-    
-    gkBtn.disabled = true;
-    gkBtn.textContent = '⏳';
-    showLoading();
-    
+    const user = document.getElementById('gkUser').value.trim();
+    const pass = document.getElementById('gkPass').value;
+    if(!pass) { showGkError('Please enter your password'); return; }
+    gkBtn.disabled = true; gkBtn.textContent = '⏳'; showLoading();
     try {
         const res = await fetch('/gatekeeper', {
-            method: 'POST',
-            headers: {'Content-Type':'application/json'},
-            body: JSON.stringify({username, password})
+            method:'POST', headers:{'Content-Type':'application/json'},
+            body:JSON.stringify({username:user, password:pass})
         });
         const data = await res.json();
-        
         if(data.success) {
             document.getElementById('gatekeeperScreen').classList.remove('active');
             document.getElementById('setupScreen').classList.add('active');
@@ -1091,15 +962,12 @@ async function gatekeeper() {
         showGkError('Connection error');
         hideLoading();
     }
-    gkBtn.disabled = false;
-    gkBtn.textContent = '▶ Verify';
+    gkBtn.disabled = false; gkBtn.textContent = '▶ Verify';
 }
 
 function showGkError(msg) {
     const el = document.getElementById('gkError');
-    el.textContent = msg;
-    el.style.color = '#ff4444';
-    el.style.display = 'block';
+    el.textContent = msg; el.style.color = '#ff4444'; el.style.display = 'block';
     setTimeout(() => el.style.display = 'none', 5000);
 }
 
@@ -1108,75 +976,61 @@ setupBtn.addEventListener('click', enterChat);
 document.getElementById('setupDisplay').addEventListener('keypress', e => { if(e.key === 'Enter') enterChat(); });
 
 async function enterChat() {
-    const displayName = document.getElementById('setupDisplay').value.trim();
-    const groupName = document.getElementById('setupGroup').value.trim();
-    if(!displayName) { showSetupError('Please enter your display name'); return; }
-    
-    setupBtn.disabled = true;
-    setupBtn.textContent = '⏳';
-    showLoading();
-    
+    const display = document.getElementById('setupDisplay').value.trim();
+    const group = document.getElementById('setupGroup').value.trim();
+    if(!display) { showSetupError('Please enter your display name'); return; }
+    setupBtn.disabled = true; setupBtn.textContent = '⏳'; showLoading();
     try {
         await fetch('/save_display_name', {
-            method: 'POST',
-            headers: {'Content-Type':'application/json'},
-            body: JSON.stringify({username: document.getElementById('gkUser').value, display_name: displayName})
+            method:'POST', headers:{'Content-Type':'application/json'},
+            body:JSON.stringify({username:document.getElementById('gkUser').value, display_name:display})
         });
-        
-        window.username = displayName;
-        window.groupName = groupName;
+        window.username = display;
+        window.groupName = group;
         window.groupPassword = groupPassword;
-        
         document.getElementById('setupScreen').classList.remove('active');
         document.getElementById('chatScreen').classList.add('active');
         document.getElementById('messages').innerHTML = '';
         messagesData = {};
         hideLoading();
-        connectToChat(displayName, groupName);
+        connectToChat(display, group);
     } catch(e) {
         showSetupError('Error entering chat');
         hideLoading();
     }
-    setupBtn.disabled = false;
-    setupBtn.textContent = '▶ Enter Chat';
+    setupBtn.disabled = false; setupBtn.textContent = '▶ Enter Chat';
 }
 
 function showSetupError(msg) {
     const el = document.getElementById('setupError');
-    el.textContent = msg;
-    el.style.color = '#ff4444';
-    el.style.display = 'block';
+    el.textContent = msg; el.style.color = '#ff4444'; el.style.display = 'block';
     setTimeout(() => el.style.display = 'none', 5000);
 }
 
 // ========== CONNECT TO CHAT ==========
-function connectToChat(username, group) {
+function connectToChat(user, group) {
     document.getElementById('groupTitle').textContent = '# ' + group;
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     ws = new WebSocket(protocol + '//' + window.location.host + '/ws');
-    
     ws.onopen = function() {
         updateStatus(true);
         document.getElementById('offlineBar').classList.remove('active');
-        ws.send(JSON.stringify({type:'join', username:username, group:group}));
+        ws.send(JSON.stringify({type:'join', username:user, group:group}));
     };
-    
     ws.onmessage = async function(e) {
         try {
             const d = JSON.parse(e.data);
             if(d.type === 'history') {
                 document.getElementById('messages').innerHTML = '';
                 messagesData = {};
-                if(d.messages && d.messages.length > 0) {
+                if(d.messages && d.messages.length) {
                     for(let msg of d.messages) {
                         try {
                             const dec = await decrypt(msg.ciphertext, window.groupPassword, msg.salt);
                             const isSent = msg.sender === window.username;
                             messagesData[msg.id] = msg;
                             addMessage(msg.sender, dec, isSent, msg.created_at, msg.id, msg.reply_to, msg.voice_url, msg.media_url, msg.media_type);
-                        } catch(e) {
-                            console.error('Decrypt error:', e);
-                        }
+                        } catch(e) { console.error(e); }
                     }
                 }
             } else if(d.type === 'message') {
@@ -1185,9 +1039,7 @@ function connectToChat(username, group) {
                     const isSent = d.sender === window.username;
                     messagesData[d.message_id] = d;
                     addMessage(d.sender, dec, isSent, d.timestamp, d.message_id, d.reply_to, d.voice_url, d.media_url, d.media_type);
-                } catch(e) {
-                    console.error('Decrypt error:', e);
-                }
+                } catch(e) { console.error(e); }
             } else if(d.type === 'user_joined') {
                 addSystemMessage('👤 ' + d.user + ' joined');
             } else if(d.type === 'user_left') {
@@ -1213,7 +1065,6 @@ function connectToChat(username, group) {
             }
         } catch(e) { console.error('WS error:', e); }
     };
-    
     ws.onclose = function() {
         updateStatus(false);
         document.getElementById('offlineBar').classList.add('active');
@@ -1221,19 +1072,15 @@ function connectToChat(username, group) {
 }
 
 function updateStatus(online) {
-    const status = document.getElementById('connStatus');
     const badge = document.getElementById('onlineBadge');
     if(online) {
-        status.textContent = '🟢 Connected';
-        status.className = 'connection-status status-online';
         badge.textContent = '● Online';
         badge.style.color = '#0f0';
         document.getElementById('offlineBar').classList.remove('active');
     } else {
-        status.textContent = '🔴 Disconnected';
-        status.className = 'connection-status status-offline';
         badge.textContent = '● Offline';
         badge.style.color = '#ff4444';
+        document.getElementById('offlineBar').classList.add('active');
     }
 }
 
@@ -1242,15 +1089,13 @@ function reconnect() {
     setTimeout(() => connectToChat(window.username, window.groupName), 500);
 }
 
-// ========== MESSAGES ==========
+// ========== MESSAGES UI ==========
 function addMessage(sender, text, isSent, timestamp, id, replyTo, voiceUrl, mediaUrl, mediaType) {
     const container = document.getElementById('messages');
     const div = document.createElement('div');
     div.className = 'message ' + (isSent ? 'sent' : 'received');
     div.dataset.id = id;
-    
     const time = timestamp ? new Date(timestamp * 1000).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'}) : '';
-    
     let content = '';
     if(voiceUrl) {
         content = `<div style="display:flex;align-items:center;gap:8px;">
@@ -1269,28 +1114,26 @@ function addMessage(sender, text, isSent, timestamp, id, replyTo, voiceUrl, medi
             content = `<div class="bubble">${escapeHtml(text)}<div><a href="${mediaUrl}" target="_blank" style="color:#0f0;">📎 Download</a></div></div>`;
         }
     } else {
-        content = `<div class="bubble">${escapeHtml(text)}${messagesData[id]?.edited ? ' <span style="font-size:8px;color:#888;">(edited)</span>' : ''}</div>`;
+        const edited = messagesData[id]?.edited ? ' <span style="font-size:8px;color:#888;">(edited)</span>' : '';
+        content = `<div class="bubble">${escapeHtml(text)}${edited}</div>`;
     }
-    
     let replyHtml = '';
     if(replyTo && messagesData[replyTo]) {
         const orig = messagesData[replyTo];
         try {
             const origText = decrypt(orig.ciphertext, window.groupPassword, orig.salt);
-            replyHtml = `<div style="font-size:10px;color:#ffaa00;margin-bottom:3px;cursor:pointer" onclick="scrollToMsg(${replyTo})">↩️ ${orig.sender}: ${escapeHtml(origText.substring(0,50))}${origText.length > 50 ? '...' : ''}</div>`;
+            replyHtml = `<div style="font-size:10px;color:#ffaa00;margin-bottom:3px;cursor:pointer" onclick="scrollToMsg(${replyTo})">↩️ ${orig.sender}: ${escapeHtml(origText.substring(0,50))}${origText.length>50?'...':''}</div>`;
         } catch(e) {}
     }
-    
     let reactionsHtml = '';
     const reactions = messagesData[id]?.reactions || {};
-    if(Object.keys(reactions).length > 0) {
+    if(Object.keys(reactions).length) {
         reactionsHtml = '<div class="reaction-container">';
         for(let [emoji, users] of Object.entries(reactions)) {
             reactionsHtml += `<span class="reaction-emoji" onclick="toggleReaction(${id},'${emoji}')">${emoji} ${users.length}</span>`;
         }
         reactionsHtml += '</div>';
     }
-    
     let actionsHtml = `
         <div class="message-actions">
             <div style="position:relative">
@@ -1306,21 +1149,32 @@ function addMessage(sender, text, isSent, timestamp, id, replyTo, voiceUrl, medi
                     <span onclick="toggleReaction(${id},'🎉')">🎉</span>
                 </div>
             </div>
+            <button onclick="replyToMsg(${id})">↩️ Reply</button>
             ${isSent ? `<button onclick="editMessage(${id})">✏️ Edit</button>` : ''}
-            <button onclick="replyToMessage(${id})">↩️ Reply</button>
         </div>
         ${isSent ? `<div class="edit-input" id="edit-${id}"><input type="text" value="${escapeHtml(text)}" style="width:100%;padding:4px;background:#111;border:1px solid #0f0;border-radius:4px;color:#0f0;font-size:12px;"><div style="display:flex;gap:4px;margin-top:4px;"><button onclick="saveEdit(${id})" style="background:#0f0;color:#000;border:none;padding:2px 10px;border-radius:4px;cursor:pointer;font-size:10px;">Save</button><button onclick="cancelEdit(${id})" style="background:#ff0041;color:white;border:none;padding:2px 10px;border-radius:4px;cursor:pointer;font-size:10px;">Cancel</button></div></div>` : ''}
     `;
-    
     div.innerHTML = `<div class="msg-sender">${isSent ? 'YOU' : escapeHtml(sender)}</div>
         ${replyHtml}
         ${content}
         ${reactionsHtml}
         ${actionsHtml}
         <div class="msg-time">${time}</div>`;
-    
     container.appendChild(div);
     container.scrollTop = container.scrollHeight;
+    // Swipe to reply (touch)
+    let startX = 0, currentX = 0;
+    div.addEventListener('touchstart', e => { startX = e.touches[0].clientX; currentX = startX; }, {passive:true});
+    div.addEventListener('touchmove', e => {
+        currentX = e.touches[0].clientX;
+        const diff = currentX - startX;
+        if(diff > 0 && diff < 60) div.style.transform = 'translateX('+diff+'px)';
+    }, {passive:true});
+    div.addEventListener('touchend', e => {
+        const diff = currentX - startX;
+        div.style.transform = '';
+        if(diff >= 50) replyToMsg(id);
+    }, {passive:true});
 }
 
 function updateMessageDisplay(id, newText) {
@@ -1348,7 +1202,7 @@ function updateReactions(id, reactions) {
                 if(actions) actions.parentNode.insertBefore(container, actions);
             }
             container.innerHTML = '';
-            if(reactions && Object.keys(reactions).length > 0) {
+            if(reactions && Object.keys(reactions).length) {
                 for(let [emoji, users] of Object.entries(reactions)) {
                     container.innerHTML += `<span class="reaction-emoji" onclick="toggleReaction(${id},'${emoji}')">${emoji} ${users.length}</span>`;
                 }
@@ -1386,27 +1240,37 @@ function togglePicker(btn) {
     picker.classList.toggle('active');
 }
 
+function replyToMsg(id) {
+    replyingTo = id;
+    msgInput.placeholder = '↩️ Replying...';
+    msgInput.focus();
+}
+
 // ========== SEND MESSAGE ==========
-document.getElementById('msgInput').addEventListener('keydown', function(e) {
+msgInput.addEventListener('keydown', function(e) {
     if(e.key === 'Enter' && !e.shiftKey) {
-        e.preventDefault();
-        sendMessage();
+        e.preventDefault(); // Enter creates new line only when Shift+Enter
+    }
+});
+msgInput.addEventListener('input', function() {
+    this.style.height = 'auto';
+    this.style.height = Math.min(this.scrollHeight, 120) + 'px';
+    if(ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({type:'typing'}));
+        clearTimeout(window.typingTimeout);
+        window.typingTimeout = setTimeout(() => {
+            if(ws && ws.readyState === WebSocket.OPEN)
+                ws.send(JSON.stringify({type:'stop_typing'}));
+        }, 1000);
     }
 });
 
-document.getElementById('msgInput').addEventListener('input', function() {
-    this.style.height = 'auto';
-    this.style.height = Math.min(this.scrollHeight, 120) + 'px';
-});
-
 async function sendMessage() {
-    const input = document.getElementById('msgInput');
-    const text = input.value.trim();
+    const text = msgInput.value.trim();
     if(!text || !ws || ws.readyState !== WebSocket.OPEN) return;
     if(!window.groupPassword) { alert('Group password not set'); return; }
-    
     try {
-        const salt = generateSalt();
+        const salt = genSalt();
         const encrypted = await encrypt(text, window.groupPassword, salt);
         ws.send(JSON.stringify({
             type:'message',
@@ -1414,8 +1278,9 @@ async function sendMessage() {
             salt:salt,
             reply_to:replyingTo || null
         }));
-        input.value = '';
-        input.style.height = 'auto';
+        msgInput.value = '';
+        msgInput.style.height = 'auto';
+        msgInput.placeholder = 'Type a message...';
         replyingTo = null;
     } catch(e) {
         console.error('Send error:', e);
@@ -1423,14 +1288,8 @@ async function sendMessage() {
     }
 }
 
-function replyToMessage(id) {
-    replyingTo = id;
-    document.getElementById('msgInput').placeholder = '↩️ Replying...';
-    document.getElementById('msgInput').focus();
-}
-
 // ========== ENCRYPTION ==========
-function generateSalt() {
+function genSalt() {
     const arr = new Uint8Array(32);
     crypto.getRandomValues(arr);
     return btoa(String.fromCharCode.apply(null, arr));
@@ -1479,24 +1338,20 @@ function stopRecord() {
     isHolding = false;
     clearTimeout(holdTimer);
     if(isRecording) {
-        if(recSeconds < 1) {
-            cancelRecord();
-        } else {
-            stopRecordingAndSend();
-        }
+        if(recSeconds < 1) cancelRecord();
+        else stopRecordingAndSend();
     }
 }
 
 async function startRecording() {
     try {
-        const stream = await navigator.mediaDevices.getUserMedia({audio: true});
+        const stream = await navigator.mediaDevices.getUserMedia({audio:true});
         mediaRecorder = new MediaRecorder(stream, {audioBitsPerSecond:64000});
         audioChunks = [];
-        
         mediaRecorder.ondataavailable = e => { if(e.data.size > 0) audioChunks.push(e.data); };
         mediaRecorder.onstop = async () => {
             if(audioChunks.length > 0 && recSeconds >= 1) {
-                const blob = new Blob(audioChunks, {type: 'audio/webm'});
+                const blob = new Blob(audioChunks, {type:'audio/webm'});
                 await uploadVoice(blob);
             }
             stream.getTracks().forEach(t => t.stop());
@@ -1506,12 +1361,10 @@ async function startRecording() {
             isRecording = false;
             recSeconds = 0;
         };
-        
         mediaRecorder.start(1000);
         isRecording = true;
         document.getElementById('voiceBtn').classList.add('recording');
         document.getElementById('recStatus').classList.add('active');
-        
         recSeconds = 0;
         document.getElementById('recTimer').textContent = '00:00';
         recTimer = setInterval(() => {
@@ -1520,16 +1373,13 @@ async function startRecording() {
             const secs = String(recSeconds%60).padStart(2,'0');
             document.getElementById('recTimer').textContent = mins + ':' + secs;
         }, 1000);
-        
     } catch(e) {
         alert('Please allow microphone access');
     }
 }
 
 function stopRecordingAndSend() {
-    if(mediaRecorder && isRecording) {
-        mediaRecorder.stop();
-    }
+    if(mediaRecorder && isRecording) mediaRecorder.stop();
 }
 
 function cancelRecord() {
@@ -1558,10 +1408,9 @@ async function uploadVoice(blob) {
 }
 
 async function sendVoiceMessage(url) {
-    const input = document.getElementById('msgInput');
-    const text = input.value.trim() || '🎤 Voice message';
+    const text = msgInput.value.trim() || '🎤 Voice message';
     try {
-        const salt = generateSalt();
+        const salt = genSalt();
         const encrypted = await encrypt(text, window.groupPassword, salt);
         ws.send(JSON.stringify({
             type:'message',
@@ -1570,8 +1419,9 @@ async function sendVoiceMessage(url) {
             reply_to:replyingTo || null,
             voice_url:url
         }));
-        input.value = '';
-        input.style.height = 'auto';
+        msgInput.value = '';
+        msgInput.style.height = 'auto';
+        msgInput.placeholder = 'Type a message...';
         replyingTo = null;
     } catch(e) { console.error('Send voice error:', e); }
 }
@@ -1580,7 +1430,6 @@ function playVoice(btn, url) {
     const audio = new Audio(url);
     const progress = btn.parentElement.querySelector('.voice-progress-bar');
     const duration = btn.parentElement.querySelector('.voice-duration');
-    
     if(btn.classList.contains('playing')) {
         audio.pause();
         audio.currentTime = 0;
@@ -1590,7 +1439,6 @@ function playVoice(btn, url) {
         duration.textContent = '00:00';
         return;
     }
-    
     audio.onloadedmetadata = () => {
         const m = Math.floor(audio.duration/60);
         const s = Math.floor(audio.duration%60);
@@ -1623,7 +1471,6 @@ async function shareMedia() {
         const file = e.target.files[0];
         if(!file) return;
         if(file.size > 10*1024*1024) { alert('Max 10MB'); return; }
-        
         const formData = new FormData();
         formData.append('file', file);
         try {
@@ -1631,7 +1478,7 @@ async function shareMedia() {
             const data = await res.json();
             if(data.success) {
                 const text = '📎 ' + file.name;
-                const salt = generateSalt();
+                const salt = genSalt();
                 const encrypted = await encrypt(text, window.groupPassword, salt);
                 ws.send(JSON.stringify({
                     type:'message',
@@ -1641,6 +1488,9 @@ async function shareMedia() {
                     media_url:data.url,
                     media_type:data.type
                 }));
+                msgInput.value = '';
+                msgInput.style.height = 'auto';
+                replyingTo = null;
             }
         } catch(e) { console.error('Upload error:', e); }
     };
@@ -1652,8 +1502,7 @@ async function toggleReaction(id, emoji) {
     if(!ws || ws.readyState !== WebSocket.OPEN) return;
     try {
         const res = await fetch('/reaction', {
-            method:'POST',
-            headers:{'Content-Type':'application/json'},
+            method:'POST', headers:{'Content-Type':'application/json'},
             body:JSON.stringify({message_id:id, emoji:emoji})
         });
         const data = await res.json();
@@ -1666,32 +1515,26 @@ async function toggleReaction(id, emoji) {
 
 // ========== EDIT MESSAGE ==========
 function editMessage(id) {
-    const el = document.getElementById('edit-' + id);
+    const el = document.getElementById('edit-'+id);
     if(el) el.style.display = 'block';
 }
-
 function cancelEdit(id) {
-    const el = document.getElementById('edit-' + id);
+    const el = document.getElementById('edit-'+id);
     if(el) el.style.display = 'none';
 }
-
 async function saveEdit(id) {
-    const el = document.getElementById('edit-' + id);
+    const el = document.getElementById('edit-'+id);
     if(!el) return;
     const input = el.querySelector('input');
     const text = input.value.trim();
     if(!text) return;
-    
     try {
         const res = await fetch('/edit_message', {
-            method:'POST',
-            headers:{'Content-Type':'application/json'},
+            method:'POST', headers:{'Content-Type':'application/json'},
             body:JSON.stringify({message_id:id, new_text:text})
         });
         const data = await res.json();
-        if(data.success) {
-            el.style.display = 'none';
-        }
+        if(data.success) el.style.display = 'none';
     } catch(e) { console.error('Edit error:', e); }
 }
 
@@ -1700,31 +1543,27 @@ async function loadAdmin() {
     try {
         const res = await fetch('/admin/data');
         const data = await res.json();
-        
         document.getElementById('statUsers').textContent = data.users ? data.users.length : 0;
         document.getElementById('statGroups').textContent = data.groups ? data.groups.length : 0;
         document.getElementById('statMessages').textContent = data.messages ? data.messages.length : 0;
-        
         const usersTbl = document.getElementById('usersTable');
         usersTbl.innerHTML = '';
         if(data.users) {
             data.users.forEach(u => {
                 const tr = document.createElement('tr');
-                tr.innerHTML = `<td>${escapeHtml(u.username)}</td><td>${escapeHtml(u.assigned_group || 'None')}</td><td>${u.username !== 'Mpc' ? `<button class="action-btn" onclick="deleteUser('${u.username}')">Delete</button>` : 'Admin'}</td>`;
+                tr.innerHTML = `<td>${escapeHtml(u.username)}</td><td>${escapeHtml(u.assigned_group||'None')}</td><td>${u.username!=='Mpc'?`<button class="action-btn" onclick="deleteUser('${u.username}')">Delete</button>`:'Admin'}</td>`;
                 usersTbl.appendChild(tr);
             });
         }
-        
         const groupsTbl = document.getElementById('groupsTable');
         groupsTbl.innerHTML = '';
         if(data.groups) {
             data.groups.forEach(g => {
                 const tr = document.createElement('tr');
-                tr.innerHTML = `<td>${escapeHtml(g.group_name)}</td><td>${new Date(g.created_at * 1000).toLocaleDateString()}</td><td><button class="action-btn" onclick="deleteGroup('${g.group_name}')">Delete</button></td>`;
+                tr.innerHTML = `<td>${escapeHtml(g.group_name)}</td><td>${new Date(g.created_at*1000).toLocaleDateString()}</td><td><button class="action-btn" onclick="deleteGroup('${g.group_name}')">Delete</button></td>`;
                 groupsTbl.appendChild(tr);
             });
         }
-        
         const msgsTbl = document.getElementById('messagesTable');
         msgsTbl.innerHTML = '';
         if(data.messages) {
@@ -1741,14 +1580,12 @@ async function createUser() {
     const username = document.getElementById('newUser').value.trim();
     const password = document.getElementById('newPass').value;
     const group = document.getElementById('newGroup').value.trim();
-    const groupPass = document.getElementById('newGroupPass').value;
-    if(!username || !password || !group || !groupPass) { alert('Fill all fields'); return; }
-    
+    const gpass = document.getElementById('newGroupPass').value;
+    if(!username || !password || !group || !gpass) { alert('Fill all fields'); return; }
     try {
         const res = await fetch('/admin/create_user', {
-            method:'POST',
-            headers:{'Content-Type':'application/json'},
-            body:JSON.stringify({username, password, group_name:group, group_password:groupPass})
+            method:'POST', headers:{'Content-Type':'application/json'},
+            body:JSON.stringify({username, password, group_name:group, group_password:gpass})
         });
         const data = await res.json();
         if(data.success) {
@@ -1758,46 +1595,30 @@ async function createUser() {
             document.getElementById('newGroup').value = '';
             document.getElementById('newGroupPass').value = '';
             loadAdmin();
-        } else {
-            alert('❌ ' + (data.error || 'Failed'));
-        }
+        } else alert('❌ ' + (data.error || 'Failed'));
     } catch(e) { alert('Error creating user'); }
 }
 
 async function deleteUser(username) {
-    if(!confirm('Delete "' + username + '"?')) return;
+    if(!confirm('Delete "'+username+'"?')) return;
     try {
-        const res = await fetch('/admin/delete_user', {
-            method:'POST',
-            headers:{'Content-Type':'application/json'},
-            body:JSON.stringify({username})
-        });
+        const res = await fetch('/admin/delete_user', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({username})});
         const data = await res.json();
         if(data.success) { alert('✅ Deleted'); loadAdmin(); }
     } catch(e) { alert('Error'); }
 }
-
 async function deleteGroup(name) {
-    if(!confirm('Delete group "' + name + '"?')) return;
+    if(!confirm('Delete group "'+name+'"?')) return;
     try {
-        const res = await fetch('/admin/delete_group', {
-            method:'POST',
-            headers:{'Content-Type':'application/json'},
-            body:JSON.stringify({name})
-        });
+        const res = await fetch('/admin/delete_group', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({name})});
         const data = await res.json();
         if(data.success) { alert('✅ Deleted'); loadAdmin(); }
     } catch(e) { alert('Error'); }
 }
-
 async function deleteMessage(id) {
     if(!confirm('Delete message?')) return;
     try {
-        const res = await fetch('/admin/delete_message', {
-            method:'POST',
-            headers:{'Content-Type':'application/json'},
-            body:JSON.stringify({id})
-        });
+        const res = await fetch('/admin/delete_message', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({id})});
         const data = await res.json();
         if(data.success) { alert('✅ Deleted'); loadAdmin(); }
     } catch(e) { alert('Error'); }
@@ -1831,15 +1652,14 @@ if __name__ == "__main__":
     port = int(os.getenv('PORT', 8080))
     print("""
 ╔═══════════════════════════════════════════════╗
-║     ABAVANDIMWE SECURE MESSAGING v5.0        ║
-║     Everything stored in Neon PostgreSQL     ║
+║     ABAVANDIMWE SECURE MESSAGING v6.0        ║
+║     Everything in Neon PostgreSQL            ║
 ║     Author: Mugisha Pc                       ║
 ╚═══════════════════════════════════════════════╝
 """)
-    print(f"[✓] Server running on port {port}")
-    print(f"[✓] Admin: Mpc / {os.getenv('ADMIN_PASSWORD', 'Mpc@Secure+_+')}")
-    print(f"[✓] Database: PostgreSQL (Neon)")
-    print(f"[✓] Messages: 24 hours auto-delete")
-    print(f"[✓] Files: 7 days auto-delete")
-    print(f"[✓] Open: http://localhost:{port}")
+    print(f"✅ Server running on port {port}")
+    print(f"✅ Admin: Mpc / {os.getenv('ADMIN_PASSWORD', 'Mpc@Secure+_+')}")
+    print(f"✅ Database: PostgreSQL (Neon)")
+    print(f"✅ Messages: 24h auto-delete")
+    print(f"✅ Files: 7d auto-delete")
     uvicorn.run(app, host="0.0.0.0", port=port)
