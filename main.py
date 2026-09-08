@@ -4,6 +4,7 @@ Author: Mugisha Pc
 Messages stay for 24 hours then auto-delete
 Database: PostgreSQL (Neon) with asyncpg
 All files (voice, media) stored in Neon database for persistence
+Voice: Hold-to-record like WhatsApp, no auto-stop
 """
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request, Depends, HTTPException, UploadFile, File
@@ -450,9 +451,8 @@ async def init_db():
         
         print("[✓] PostgreSQL database ready")
         
-        # Add columns to messages table - FIXED VERSION
+        # Add columns to messages table
         try:
-            # Check if voice_url column exists
             columns = await conn.fetch("""
                 SELECT column_name 
                 FROM information_schema.columns 
@@ -460,7 +460,6 @@ async def init_db():
             """)
             existing_columns = [row['column_name'] for row in columns]
             
-            # Add missing columns one by one
             if 'voice_url' not in existing_columns:
                 await conn.execute('ALTER TABLE messages ADD COLUMN voice_url TEXT')
                 print("[✓] voice_url column added")
@@ -963,9 +962,11 @@ async def upload_voice(request: Request, file: UploadFile = File(...)):
         content = await file.read()
         file_size = len(content)
         
-        if file_size > 5 * 1024 * 1024:
+        # No size limit for voice (users can record 5+ minutes)
+        # Neon can handle large files, but we'll set a reasonable limit
+        if file_size > 50 * 1024 * 1024:  # 50MB max for very long recordings
             return JSONResponse(
-                {"success": False, "error": "File too large (max 5MB)"}, 
+                {"success": False, "error": "File too large (max 50MB)"}, 
                 status_code=400
             )
         
@@ -1572,6 +1573,7 @@ HTML = '''<!DOCTYPE html>
         *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent;}
         body{font-family:monospace;background:#0a0a0f;height:100vh;overflow:hidden;color:#0f0;}
         
+        /* ===== LOGIN ===== */
         .login-container{position:fixed;top:0;left:0;right:0;bottom:0;display:flex;justify-content:center;align-items:center;background:#0a0a0f;z-index:1000;padding:20px;}
         .login-card{background:#050508;border:2px solid #0f0;border-radius:24px;padding:32px 24px;width:100%;max-width:420px;position:relative;overflow:hidden;}
         .login-card::before{content:'';position:absolute;top:-2px;left:-2px;right:-2px;bottom:-2px;background:linear-gradient(45deg,#0f0,transparent,#0f0);background-size:400%;z-index:-1;animation:glow 3s linear infinite;}
@@ -1592,6 +1594,7 @@ HTML = '''<!DOCTYPE html>
         .success-message{color:#0f0;font-size:12px;text-align:center;margin-top:12px;display:none;}
         .login-footer{text-align:center;margin-top:20px;font-size:9px;color:#333;border-top:1px solid #1a1a2e;padding-top:16px;}
         
+        /* ===== CHAT ===== */
         .chat-container{display:none;width:100%;height:100%;flex-direction:column;background:#0a0a0f;position:fixed;top:0;left:0;right:0;bottom:0;}
         .chat-container.active{display:flex;}
         
@@ -1637,22 +1640,202 @@ HTML = '''<!DOCTYPE html>
         .system-message{text-align:center;font-size:11px;color:#ffaa00;margin:8px 0;font-style:italic;animation:fadeIn 0.3s ease;}
         .typing-indicator{padding:8px 16px;color:#0f0;font-style:italic;font-size:11px;min-height:36px;}
         
+        /* ===== INPUT AREA ===== */
         .input-area{padding:12px 16px;background:#050508;border-top:1px solid #0f0;display:flex;flex-direction:column;gap:8px;}
         .reply-preview{display:none;padding:8px 12px;background:rgba(255,170,0,0.1);border-left:3px solid #ffaa00;border-radius:6px;font-size:12px;color:#ffaa00;align-items:center;justify-content:space-between;}
         .reply-preview .reply-cancel{color:#ff4444;cursor:pointer;font-weight:bold;padding:0 8px;}
         .reply-preview .reply-cancel:hover{color:#ff6666;}
-        .input-row{display:flex;gap:10px;align-items:flex-end;}
+        .input-row{display:flex;gap:8px;align-items:flex-end;}
         .input-row textarea{flex:1;margin:0;padding:12px 16px;background:#111;border:1px solid #0f0;border-radius:12px;color:#0f0;font-family:monospace;font-size:14px;resize:vertical;min-height:50px;max-height:80px;line-height:1.5;overflow-y:auto;}
         .input-row textarea:focus{outline:none;box-shadow:0 0 20px rgba(0,255,65,0.2);border-color:#0f0;}
         .input-row textarea::placeholder{color:#444;}
-        .input-row button{width:60px;min-width:60px;margin:0;padding:12px 0;height:50px;align-self:flex-end;position:relative;overflow:hidden;font-size:20px;display:flex;align-items:center;justify-content:center;}
+        .input-row button{width:52px;min-width:52px;margin:0;padding:12px 0;height:50px;align-self:flex-end;position:relative;overflow:hidden;font-size:20px;display:flex;align-items:center;justify-content:center;}
         .input-row button .btn-text{font-size:20px;line-height:1;}
         .footer{text-align:center;padding:6px;font-size:8px;color:#333;border-top:1px solid #0f0;}
         
+        /* ===== VOICE BUTTON - LIKE WHATSAPP ===== */
+        .voice-btn {
+            width:52px;
+            min-width:52px;
+            margin:0;
+            padding:12px 0;
+            height:50px;
+            align-self:flex-end;
+            background:transparent;
+            border:2px solid #0f0;
+            border-radius:50%;
+            color:#0f0;
+            cursor:pointer;
+            font-size:22px;
+            display:flex;
+            align-items:center;
+            justify-content:center;
+            transition:all 0.3s;
+            position:relative;
+            user-select:none;
+            -webkit-user-select:none;
+        }
+        .voice-btn:active {
+            transform:scale(0.92);
+        }
+        .voice-btn.recording {
+            border-color:#ff0041;
+            background:rgba(255,0,65,0.15);
+            transform:scale(1.1);
+            animation:voice-pulse 1s infinite;
+        }
+        .voice-btn.cancelling {
+            border-color:#ffaa00;
+            background:rgba(255,170,0,0.15);
+            transform:translateY(-20px);
+        }
+        .voice-btn .voice-tooltip {
+            position:absolute;
+            bottom:calc(100% + 10px);
+            left:50%;
+            transform:translateX(-50%);
+            background:#1a1a2e;
+            color:#888;
+            padding:6px 12px;
+            border-radius:8px;
+            font-size:10px;
+            white-space:nowrap;
+            border:1px solid #0f0;
+            display:none;
+        }
+        .voice-btn .voice-tooltip.show {
+            display:block;
+        }
+        @keyframes voice-pulse {
+            0%,100% { box-shadow:0 0 0 0 rgba(255,0,65,0.4); }
+            50% { box-shadow:0 0 30px 15px rgba(255,0,65,0.15); }
+        }
+        
+        /* ===== RECORDING STATUS ===== */
+        .recording-status {
+            display:none;
+            align-items:center;
+            gap:12px;
+            padding:10px 16px;
+            background:#1a1a2e;
+            border-radius:12px;
+            margin-top:4px;
+            border:1px solid #ff0041;
+            animation:fadeIn 0.3s ease;
+        }
+        .recording-status.active {
+            display:flex;
+        }
+        #recordingTimer {
+            color:#ff0041;
+            font-size:16px;
+            font-weight:bold;
+            font-family:monospace;
+            min-width:55px;
+        }
+        .recording-wave {
+            flex:1;
+            display:flex;
+            align-items:center;
+            gap:3px;
+            height:30px;
+        }
+        .recording-wave .bar {
+            width:4px;
+            background:#ff0041;
+            border-radius:2px;
+            animation:wave 0.6s ease-in-out infinite alternate;
+        }
+        .recording-wave .bar:nth-child(1) { height:10px; animation-delay:0s; }
+        .recording-wave .bar:nth-child(2) { height:20px; animation-delay:0.1s; }
+        .recording-wave .bar:nth-child(3) { height:28px; animation-delay:0.2s; }
+        .recording-wave .bar:nth-child(4) { height:18px; animation-delay:0.3s; }
+        .recording-wave .bar:nth-child(5) { height:30px; animation-delay:0.4s; }
+        .recording-wave .bar:nth-child(6) { height:22px; animation-delay:0.5s; }
+        .recording-wave .bar:nth-child(7) { height:12px; animation-delay:0.6s; }
+        .recording-wave .bar:nth-child(8) { height:26px; animation-delay:0.7s; }
+        .recording-wave .bar:nth-child(9) { height:16px; animation-delay:0.8s; }
+        .recording-wave .bar:nth-child(10) { height:24px; animation-delay:0.9s; }
+        @keyframes wave {
+            0% { transform:scaleY(0.3); }
+            100% { transform:scaleY(1); }
+        }
+        #recordingStatusText {
+            font-size:11px;
+            color:#ff0041;
+            font-weight:bold;
+            min-width:70px;
+            animation:pulse 1.5s infinite;
+        }
+        #cancelRecordingBtn {
+            background:transparent;
+            border:1px solid #555;
+            color:#888;
+            padding:6px 14px;
+            border-radius:8px;
+            cursor:pointer;
+            font-size:12px;
+            width:auto;
+            margin:0;
+            transition:all 0.3s;
+        }
+        #cancelRecordingBtn:hover {
+            border-color:#ff0041;
+            color:#ff0041;
+        }
+        
+        /* ===== VOICE MESSAGE PLAYER ===== */
+        .message.voice-message .message-bubble {
+            background:rgba(0,255,65,0.08) !important;
+            border:1px solid #0f0;
+        }
+        .voice-play-btn {
+            background:transparent;
+            border:2px solid #0f0;
+            color:#0f0;
+            padding:6px 16px;
+            border-radius:20px;
+            cursor:pointer;
+            font-size:13px;
+            display:inline-flex;
+            align-items:center;
+            gap:10px;
+            transition:all 0.3s;
+            min-width:100px;
+        }
+        .voice-play-btn:hover {
+            background:rgba(0,255,65,0.1);
+        }
+        .voice-play-btn.playing {
+            border-color:#ffaa00;
+            color:#ffaa00;
+        }
+        .voice-progress {
+            width:100px;
+            height:4px;
+            background:#1a1a2e;
+            border-radius:2px;
+            overflow:hidden;
+        }
+        .voice-progress-bar {
+            height:100%;
+            background:#0f0;
+            transition:width 0.1s linear;
+            width:0%;
+        }
+        .voice-duration {
+            font-size:11px;
+            color:#888;
+            min-width:40px;
+            font-family:monospace;
+        }
+        
+        /* ===== SCROLLBAR ===== */
         ::-webkit-scrollbar{width:3px;}
         ::-webkit-scrollbar-track{background:#1a1a2e;}
         ::-webkit-scrollbar-thumb{background:#0f0;}
         
+        /* ===== OTHER ===== */
         .connection-status{position:fixed;bottom:70px;right:16px;padding:6px 12px;background:#050508;border:1px solid #0f0;border-radius:20px;font-size:9px;z-index:10;}
         .status-online{color:#0f0;}
         .status-offline{color:#ff4444;}
@@ -1744,25 +1927,8 @@ HTML = '''<!DOCTYPE html>
         .notification-btn.enabled{background:#0f0;color:#000;}
         .notification-btn.enabled:hover{background:transparent;color:#0f0;}
         
-        .voice-btn{width:50px;min-width:50px;margin:0;padding:12px 0;height:50px;align-self:flex-end;background:transparent;border:2px solid #0f0;border-radius:12px;color:#0f0;cursor:pointer;font-size:20px;display:flex;align-items:center;justify-content:center;transition:all 0.3s;}
-        .voice-btn.recording{border-color:#ff0041;color:#ff0041;animation:pulse-red 1s infinite;}
-        @keyframes pulse-red{0%,100%{box-shadow:0 0 0 0 rgba(255,0,65,0.4);}50%{box-shadow:0 0 20px 10px rgba(255,0,65,0.2);}}
-        
-        .recording-status{display:none;align-items:center;gap:12px;padding:8px 12px;background:#1a1a2e;border-radius:8px;margin-top:4px;}
-        .recording-status.active{display:flex;}
-        #recordingTimer{color:#ff0041;font-size:14px;font-weight:bold;font-family:monospace;min-width:50px;}
-        #stopRecordingBtn{background:#ff0041;border:none;color:white;padding:6px 16px;border-radius:6px;cursor:pointer;font-size:12px;font-weight:bold;}
-        
-        .message.voice-message .message-bubble{background:rgba(0,255,65,0.1) !important;border:1px solid #0f0;}
-        .voice-play-btn{background:transparent;border:2px solid #0f0;color:#0f0;padding:8px 16px;border-radius:20px;cursor:pointer;font-size:14px;display:inline-flex;align-items:center;gap:10px;transition:all 0.3s;min-width:100px;}
-        .voice-play-btn:hover{background:#0f0;color:#000;}
-        .voice-play-btn.playing{border-color:#ffaa00;color:#ffaa00;}
-        .voice-progress{width:100px;height:4px;background:#1a1a2e;border-radius:2px;overflow:hidden;}
-        .voice-progress-bar{height:100%;background:#0f0;transition:width 0.1s linear;width:0%;}
-        .voice-duration{font-size:11px;color:#888;min-width:40px;}
-        
-        .media-btn{width:50px;min-width:50px;margin:0;padding:12px 0;height:50px;align-self:flex-end;background:transparent;border:2px solid #0f0;border-radius:12px;color:#0f0;cursor:pointer;font-size:20px;display:flex;align-items:center;justify-content:center;transition:all 0.3s;}
-        .media-btn:hover{background:#0f0;color:#000;}
+        .media-btn{width:52px;min-width:52px;margin:0;padding:12px 0;height:50px;align-self:flex-end;background:transparent;border:2px solid #0f0;border-radius:50%;color:#0f0;cursor:pointer;font-size:20px;display:flex;align-items:center;justify-content:center;transition:all 0.3s;}
+        .media-btn:hover{background:rgba(0,255,65,0.1);}
         .message-media{max-width:200px;max-height:200px;border-radius:12px;margin-top:6px;cursor:pointer;}
         .message-media:hover{opacity:0.8;}
         
@@ -1790,13 +1956,17 @@ HTML = '''<!DOCTYPE html>
             .voice-progress{width:60px;}
             .message-media{max-width:150px;max-height:150px;}
             .input-row textarea{font-size:13px;padding:10px 12px;}
-            .input-row button{width:50px;min-width:50px;height:44px;font-size:18px;}
-            .voice-btn,.media-btn{width:44px;min-width:44px;height:44px;font-size:18px;}
+            .input-row button{width:46px;min-width:46px;height:44px;font-size:18px;}
+            .voice-btn,.media-btn{width:46px;min-width:46px;height:44px;font-size:18px;}
+            #recordingTimer{font-size:14px;min-width:45px;}
+            .recording-wave{height:24px;}
+            .recording-wave .bar{width:3px;}
         }
     </style>
 </head>
 <body>
 
+<!-- ===== LOADING OVERLAY ===== -->
 <div class="loading-overlay" id="loadingOverlay">
     <div class="loader-container">
         <div class="loader-pulse"></div>
@@ -1808,6 +1978,7 @@ HTML = '''<!DOCTYPE html>
     </div>
 </div>
 
+<!-- ===== OFFLINE OVERLAY ===== -->
 <div class="offline-overlay" id="offlineOverlay">
     <div class="offline-icon">📶</div>
     <h2>No Internet Connection</h2>
@@ -1815,6 +1986,7 @@ HTML = '''<!DOCTYPE html>
     <button class="retry-btn" id="retryOfflineBtn">↻ Retry</button>
 </div>
 
+<!-- ===== LOGIN ===== -->
 <div id="loginScreen" class="login-container">
     <div class="login-card">
         <div class="login-card-inner">
@@ -1833,6 +2005,7 @@ HTML = '''<!DOCTYPE html>
     </div>
 </div>
 
+<!-- ===== ADMIN PANEL ===== -->
 <div id="adminPanel" class="admin-panel">
     <div class="admin-panel-header">
         <h2>⚙️ Admin Dashboard <span class="admin-username">(Logged in as: <span id="adminUsername">Mpc</span>)</span></h2>
@@ -1887,6 +2060,7 @@ HTML = '''<!DOCTYPE html>
     </div>
 </div>
 
+<!-- ===== GATEKEEPER ===== -->
 <div id="gatekeeperScreen" class="gatekeeper-container">
     <div class="gatekeeper-card">
         <h2>🔐 Gatekeeper</h2>
@@ -1899,6 +2073,7 @@ HTML = '''<!DOCTYPE html>
     </div>
 </div>
 
+<!-- ===== USER SETUP ===== -->
 <div id="userSetupScreen" class="user-setup-container">
     <div class="user-setup-card">
         <h2>👤 Setup Profile</h2>
@@ -1913,6 +2088,7 @@ HTML = '''<!DOCTYPE html>
     </div>
 </div>
 
+<!-- ===== CHAT ===== -->
 <div id="chatScreen" class="chat-container">
     <div class="chat-header">
         <div class="chat-header-left">
@@ -1940,13 +2116,31 @@ HTML = '''<!DOCTYPE html>
                 </div>
                 <div class="input-row">
                     <textarea id="messageInput" placeholder="Type a message..." rows="2"></textarea>
-                    <button class="voice-btn" id="voiceBtn" onclick="toggleRecording()"><span id="voiceIcon">🎙️</span></button>
+                    <!-- VOICE BUTTON - Hold to Record like WhatsApp -->
+                    <button class="voice-btn" id="voiceBtn"
+                            onmousedown="startHoldRecording()" 
+                            onmouseup="stopHoldRecording()" 
+                            onmouseleave="stopHoldRecording()"
+                            ontouchstart="startHoldRecording()" 
+                            ontouchend="stopHoldRecording()" 
+                            ontouchcancel="stopHoldRecording()">
+                        <span id="voiceIcon">🎙️</span>
+                        <span class="voice-tooltip" id="voiceTooltip">Hold to record</span>
+                    </button>
                     <button class="media-btn" onclick="shareMedia()">📎</button>
                     <button onclick="sendMessage()"><span class="btn-text">➥</span></button>
                 </div>
+                <!-- RECORDING STATUS -->
                 <div class="recording-status" id="recordingStatus">
                     <span id="recordingTimer">00:00</span>
-                    <button id="stopRecordingBtn" onclick="stopRecording()">⏹️ Stop</button>
+                    <div class="recording-wave">
+                        <span class="bar"></span><span class="bar"></span><span class="bar"></span>
+                        <span class="bar"></span><span class="bar"></span><span class="bar"></span>
+                        <span class="bar"></span><span class="bar"></span><span class="bar"></span>
+                        <span class="bar"></span>
+                    </div>
+                    <span id="recordingStatusText">🔴 Recording</span>
+                    <button id="cancelRecordingBtn" onclick="cancelRecording()">✕ Cancel</button>
                 </div>
             </div>
             <div class="footer">🔐 End-to-End Encrypted | Messages self-destruct after 24 hours</div>
@@ -1955,8 +2149,12 @@ HTML = '''<!DOCTYPE html>
     <div class="connection-status status-online" id="connectionStatus">🟢 Connected</div>
 </div>
 
+<!-- ===== INSTALL BUTTON ===== -->
 <button id="installBtn" class="install-btn">📲 Install ABAVANDIMWE App</button>
 
+<!-- ============================================================ -->
+<!-- ====================== JAVASCRIPT =========================== -->
+<!-- ============================================================ -->
 <script>
 // ========== GLOBALS ==========
 let ws, username, groupName, groupPassword, groupSalt, typingTimeout, reconnectAttempts = 0;
@@ -1976,6 +2174,11 @@ let audioChunks = [];
 let isRecording = false;
 let recordingTimer = null;
 let recordingSeconds = 0;
+let holdTimer = null;
+let isHolding = false;
+let touchStartY = 0;
+let touchCurrentY = 0;
+let isSwipingUp = false;
 
 // ========== LOADING OVERLAY ==========
 function showLoading(text, callback) {
@@ -1995,7 +2198,6 @@ function showLoading(text, callback) {
         }
     }, 300);
 }
-
 function hideLoading() { document.getElementById('loadingOverlay').classList.remove('active'); }
 
 // ========== PWA ==========
@@ -2267,6 +2469,19 @@ document.addEventListener('DOMContentLoaded', function() {
         const btn = document.getElementById('notificationBtn');
         if (btn) btn.style.display = 'none';
     }
+    
+    // Show tooltip on voice button
+    const voiceBtn = document.getElementById('voiceBtn');
+    const tooltip = document.getElementById('voiceTooltip');
+    voiceBtn.addEventListener('mouseenter', () => {
+        if (!isRecording) tooltip.classList.add('show');
+    });
+    voiceBtn.addEventListener('mouseleave', () => {
+        tooltip.classList.remove('show');
+    });
+    voiceBtn.addEventListener('touchstart', () => {
+        tooltip.classList.remove('show');
+    });
 });
 
 function clearMessagesOffline() {
@@ -2877,48 +3092,241 @@ async function decrypt(encrypted, password, salt) {
     return dec.decode(decrypted);
 }
 
-// ========== VOICE RECORDING ==========
-async function toggleRecording() {
-    if (isRecording) { stopRecording(); return; }
-    startRecording();
+// ========== VOICE RECORDING - HOLD TO RECORD (LIKE WHATSAPP) ==========
+let holdTimer = null;
+let isHolding = false;
+let touchStartY = 0;
+let touchCurrentY = 0;
+let isSwipingUp = false;
+
+// Get elements
+const voiceBtn = document.getElementById('voiceBtn');
+const voiceIcon = document.getElementById('voiceIcon');
+const recordingStatus = document.getElementById('recordingStatus');
+const recordingTimer = document.getElementById('recordingTimer');
+const recordingStatusText = document.getElementById('recordingStatusText');
+const cancelRecordingBtn = document.getElementById('cancelRecordingBtn');
+const tooltip = document.getElementById('voiceTooltip');
+
+// Start hold recording (called on mousedown/touchstart)
+function startHoldRecording() {
+    if (isRecording) return;
+    
+    isHolding = true;
+    isSwipingUp = false;
+    touchStartY = 0;
+    touchCurrentY = 0;
+    
+    // Show tooltip
+    tooltip.textContent = 'Release to send • Swipe up to cancel';
+    tooltip.classList.add('show');
+    
+    // Start recording after 300ms delay (prevents accidental triggers)
+    holdTimer = setTimeout(() => {
+        if (isHolding) {
+            startRecording();
+        }
+    }, 300);
 }
 
+// Stop hold recording (called on mouseup/touchend/mouseleave)
+function stopHoldRecording() {
+    isHolding = false;
+    clearTimeout(holdTimer);
+    tooltip.classList.remove('show');
+    tooltip.textContent = 'Hold to record';
+    
+    // If recording and not swiping up, stop and send
+    if (isRecording && !isSwipingUp) {
+        // Check if recording is long enough (min 1 second)
+        if (recordingSeconds < 1) {
+            // Too short - cancel
+            cancelRecording();
+            return;
+        }
+        // Stop and send
+        stopRecordingAndSend();
+    } else if (isRecording && isSwipingUp) {
+        // Cancel recording (swipe up)
+        cancelRecording();
+    }
+    
+    // Reset button state
+    voiceBtn.classList.remove('recording');
+    voiceBtn.classList.remove('cancelling');
+    voiceIcon.textContent = '🎙️';
+}
+
+// Handle swipe up to cancel
+voiceBtn.addEventListener('touchstart', function(e) {
+    touchStartY = e.touches[0].clientY;
+    touchCurrentY = touchStartY;
+}, {passive: true});
+
+voiceBtn.addEventListener('touchmove', function(e) {
+    if (!isRecording) return;
+    touchCurrentY = e.touches[0].clientY;
+    let diffY = touchStartY - touchCurrentY;
+    
+    if (diffY > 50) {
+        // Swipe up detected
+        isSwipingUp = true;
+        voiceBtn.classList.add('cancelling');
+        recordingStatusText.textContent = '⬆️ Release to cancel';
+        recordingStatusText.style.color = '#ffaa00';
+        
+        // Show cancel hint
+        const hint = document.getElementById('swipeHint');
+        if (!hint) {
+            const h = document.createElement('div');
+            h.id = 'swipeHint';
+            h.style.cssText = `
+                position: fixed;
+                top: 50%;
+                left: 50%;
+                transform: translate(-50%, -50%);
+                background: rgba(255,170,0,0.95);
+                color: #000;
+                padding: 20px 30px;
+                border-radius: 16px;
+                font-size: 18px;
+                z-index: 9999;
+                animation: fadeIn 0.3s ease;
+                text-align: center;
+                font-family: monospace;
+            `;
+            h.innerHTML = '⬆️ Release to cancel<br><span style="font-size:12px;opacity:0.7;">Swipe up to cancel voice message</span>';
+            document.body.appendChild(h);
+        }
+    } else {
+        isSwipingUp = false;
+        voiceBtn.classList.remove('cancelling');
+        recordingStatusText.textContent = '🔴 Recording';
+        recordingStatusText.style.color = '#ff0041';
+        const hint = document.getElementById('swipeHint');
+        if (hint) hint.remove();
+    }
+}, {passive: true});
+
+voiceBtn.addEventListener('touchend', function(e) {
+    const hint = document.getElementById('swipeHint');
+    if (hint) hint.remove();
+    voiceBtn.classList.remove('cancelling');
+    recordingStatusText.textContent = '🔴 Recording';
+    recordingStatusText.style.color = '#ff0041';
+}, {passive: true});
+
+// Cancel recording button
+cancelRecordingBtn.addEventListener('click', function() {
+    cancelRecording();
+});
+
+// Cancel recording function
+function cancelRecording() {
+    if (mediaRecorder && isRecording) {
+        mediaRecorder.stop();
+        isRecording = false;
+        audioChunks = [];
+        clearInterval(recordingTimer);
+        recordingTimer = null;
+        recordingSeconds = 0;
+        document.getElementById('recordingTimer').textContent = '00:00';
+    }
+    voiceBtn.classList.remove('recording');
+    voiceBtn.classList.remove('cancelling');
+    voiceIcon.textContent = '🎙️';
+    recordingStatus.classList.remove('active');
+    const hint = document.getElementById('swipeHint');
+    if (hint) hint.remove();
+}
+
+// Start recording
 async function startRecording() {
     try {
-        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-        let mimeType = 'audio/webm';
-        if (!MediaRecorder.isTypeSupported(mimeType)) mimeType = 'audio/ogg';
-        if (!MediaRecorder.isTypeSupported(mimeType)) mimeType = 'audio/mp4';
+        const stream = await navigator.mediaDevices.getUserMedia({ 
+            audio: {
+                echoCancellation: true,
+                noiseSuppression: true,
+                autoGainControl: true
+            }
+        });
         
-        mediaRecorder = new MediaRecorder(stream, { mimeType: mimeType, audioBitsPerSecond: 128000 });
+        // Try different MIME types
+        let mimeType = 'audio/webm;codecs=opus';
+        if (!MediaRecorder.isTypeSupported(mimeType)) {
+            mimeType = 'audio/webm';
+        }
+        if (!MediaRecorder.isTypeSupported(mimeType)) {
+            mimeType = 'audio/ogg;codecs=opus';
+        }
+        if (!MediaRecorder.isTypeSupported(mimeType)) {
+            mimeType = 'audio/ogg';
+        }
+        if (!MediaRecorder.isTypeSupported(mimeType)) {
+            mimeType = 'audio/mp4';
+        }
+        
+        mediaRecorder = new MediaRecorder(stream, { 
+            mimeType: mimeType,
+            audioBitsPerSecond: 64000 // Lower bitrate for smaller files
+        });
+        
         audioChunks = [];
         
-        mediaRecorder.ondataavailable = (event) => { if (event.data.size > 0) audioChunks.push(event.data); };
+        mediaRecorder.ondataavailable = (event) => {
+            if (event.data.size > 0) {
+                audioChunks.push(event.data);
+            }
+        };
+        
         mediaRecorder.onstop = async () => {
-            const audioBlob = new Blob(audioChunks, { type: mediaRecorder.mimeType });
-            await uploadVoice(audioBlob);
+            if (audioChunks.length > 0 && !isSwipingUp && recordingSeconds >= 1) {
+                // Only upload if we have data and not cancelled
+                const audioBlob = new Blob(audioChunks, { type: mediaRecorder.mimeType });
+                await uploadVoice(audioBlob);
+            }
+            
+            // Clean up
             stream.getTracks().forEach(track => track.stop());
-            document.getElementById('voiceBtn').classList.remove('recording');
-            document.getElementById('voiceIcon').textContent = '🎙️';
-            document.getElementById('recordingStatus').classList.remove('active');
+            voiceBtn.classList.remove('recording');
+            voiceBtn.classList.remove('cancelling');
+            voiceIcon.textContent = '🎙️';
+            recordingStatus.classList.remove('active');
             clearInterval(recordingTimer);
             recordingTimer = null;
             isRecording = false;
+            isSwipingUp = false;
+            recordingSeconds = 0;
+            document.getElementById('recordingTimer').textContent = '00:00';
+            const hint = document.getElementById('swipeHint');
+            if (hint) hint.remove();
         };
         
         mediaRecorder.start(1000);
         isRecording = true;
-        document.getElementById('voiceBtn').classList.add('recording');
-        document.getElementById('voiceIcon').textContent = '⏺️';
-        document.getElementById('recordingStatus').classList.add('active');
         
+        // Update UI
+        voiceBtn.classList.add('recording');
+        voiceIcon.textContent = '⏺️';
+        recordingStatus.classList.add('active');
+        recordingStatusText.textContent = '🔴 Recording';
+        recordingStatusText.style.color = '#ff0041';
+        
+        // Start timer
         recordingSeconds = 0;
         updateRecordingTimer();
+        clearInterval(recordingTimer);
         recordingTimer = setInterval(updateRecordingTimer, 1000);
-        setTimeout(() => { if (isRecording) stopRecording(); }, 60000);
+        
+        // NO AUTO-STOP - users can record as long as they want!
+        
     } catch (error) {
         console.error('Error accessing microphone:', error);
         alert('Could not access microphone. Please allow microphone permissions.');
+        isRecording = false;
+        voiceBtn.classList.remove('recording');
+        voiceIcon.textContent = '🎙️';
+        recordingStatus.classList.remove('active');
     }
 }
 
@@ -2926,21 +3334,35 @@ function updateRecordingTimer() {
     recordingSeconds++;
     const mins = Math.floor(recordingSeconds / 60);
     const secs = recordingSeconds % 60;
-    document.getElementById('recordingTimer').textContent = `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+    document.getElementById('recordingTimer').textContent = 
+        `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
 }
 
-function stopRecording() {
-    if (mediaRecorder && isRecording) { mediaRecorder.stop(); isRecording = false; }
+function stopRecordingAndSend() {
+    if (mediaRecorder && isRecording) {
+        mediaRecorder.stop();
+        // The onstop handler will upload and send
+    }
 }
 
 async function uploadVoice(audioBlob) {
     const formData = new FormData();
-    formData.append('file', audioBlob, 'voice.webm');
+    const ext = audioBlob.type.includes('webm') ? 'webm' : 
+                audioBlob.type.includes('ogg') ? 'ogg' : 'mp4';
+    formData.append('file', audioBlob, `voice.${ext}`);
+    
     try {
-        const response = await fetch('/api/upload_voice', { method: 'POST', body: formData });
+        const response = await fetch('/api/upload_voice', {
+            method: 'POST',
+            body: formData
+        });
+        
         const data = await response.json();
-        if (data.success) await sendVoiceMessage(data.url);
-        else alert('Failed to upload voice: ' + (data.error || 'Unknown error'));
+        if (data.success) {
+            await sendVoiceMessage(data.url);
+        } else {
+            alert('Failed to upload voice: ' + (data.error || 'Unknown error'));
+        }
     } catch (error) {
         console.error('Upload error:', error);
         alert('Failed to upload voice message.');
@@ -2954,21 +3376,38 @@ async function sendVoiceMessage(voiceUrl) {
 }
 
 async function sendMessageWithVoice(text, voiceUrl) {
-    if (!ws || ws.readyState !== WebSocket.OPEN) { alert('Not connected to server.'); return; }
-    if (!window.groupPassword) { alert('Group password not set.'); return; }
+    if (!ws || ws.readyState !== WebSocket.OPEN) { 
+        alert('Not connected to server.'); 
+        return; 
+    }
+    if (!window.groupPassword) { 
+        alert('Group password not set.'); 
+        return; 
+    }
+    
     try {
         const salt = generateSalt();
         const encrypted = await encrypt(text, window.groupPassword, salt);
-        ws.send(JSON.stringify({type: 'message', ciphertext: encrypted, salt: salt, reply_to: replyingToMessageId || null, voice_url: voiceUrl}));
+        ws.send(JSON.stringify({
+            type: 'message', 
+            ciphertext: encrypted, 
+            salt: salt, 
+            reply_to: replyingToMessageId || null, 
+            voice_url: voiceUrl
+        }));
         document.getElementById('messageInput').value = '';
         document.getElementById('messageInput').style.height = 'auto';
         cancelReply();
-        document.getElementById('recordingStatus').classList.remove('active');
-        document.getElementById('voiceBtn').classList.remove('recording');
-        document.getElementById('voiceIcon').textContent = '🎙️';
-    } catch (error) { console.error('Error sending voice:', error); alert('Error sending voice message.'); }
+        recordingStatus.classList.remove('active');
+        voiceBtn.classList.remove('recording');
+        voiceIcon.textContent = '🎙️';
+    } catch (error) { 
+        console.error('Error sending voice:', error); 
+        alert('Error sending voice message.'); 
+    }
 }
 
+// Voice player
 function playVoice(button, url) {
     const audio = new Audio(url);
     const progressBar = button.parentElement.querySelector('.voice-progress-bar');
@@ -2991,6 +3430,7 @@ function playVoice(button, url) {
         const secs = Math.floor(audio.duration % 60);
         durationDisplay.textContent = `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
     });
+    
     audio.addEventListener('timeupdate', () => {
         const progress = (audio.currentTime / audio.duration) * 100;
         progressBar.style.width = progress + '%';
@@ -2998,6 +3438,7 @@ function playVoice(button, url) {
         const secs = Math.floor(audio.currentTime % 60);
         durationDisplay.textContent = `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
     });
+    
     audio.addEventListener('ended', () => {
         button.classList.remove('playing');
         playIcon.textContent = '▶️';
@@ -3005,6 +3446,7 @@ function playVoice(button, url) {
         progressBar.style.width = '0%';
         durationDisplay.textContent = '00:00';
     });
+    
     audio.play();
     button.classList.add('playing');
     playIcon.textContent = '⏸️';
@@ -3260,8 +3702,9 @@ function requestAccess() {
     window.open('https://wa.me/250788495861?text=I%20need%20access%20to%20ABAVANDIMWE', '_blank');
 }
 
-console.log('ABAVANDIMWE v3.0 - Secure Messaging System');
-console.log('Features: Voice, Media, Reactions, Read Receipts, Editing');
+console.log('ABAVANDIMWE v4.0 - Secure Messaging System');
+console.log('Features: Voice (Hold-to-Record), Media, Reactions, Read Receipts, Editing');
+console.log('🎙️ Voice: Hold to record, release to send, swipe up to cancel');
 </script>
 </body>
 </html>
@@ -3272,24 +3715,26 @@ if __name__ == "__main__":
     import uvicorn
     port = int(os.getenv('PORT', 8080))
     print("""
-╔════════════════════════════════════════════════════════════╗
-║                                                            ║
-║   █████╗ ██████╗  █████╗ ██╗   ██╗ █████╗ ███╗   ██╗    ║
-║  ██╔══██╗██╔══██╗██╔══██╗██║   ██║██╔══██╗████╗  ██║    ║
-║  ███████║██████╔╝███████║██║   ██║███████║██╔██╗ ██║    ║
-║  ██╔══██║██╔══██╗██╔══██║╚██╗ ██╔╝██╔══██║██║╚██╗██║    ║
-║  ██║  ██║██████╔╝██║  ██║ ╚████╔╝ ██║  ██║██║ ╚████║    ║
-║  ╚═╝  ╚═╝╚═════╝ ╚═╝  ╚═╝  ╚═══╝  ╚═╝  ╚═╝╚═╝  ╚═══╝    ║
-║                                                            ║
-║              ABAVANDIMWE SECURE MESSAGING                  ║
-║           Messages auto-delete after 24 hours              ║
-║                    Author: Mugisha Pc                      ║
-║                                                            ║
-║           ✅ Voice Messages stored in Neon DB              ║
-║           ✅ Media Files stored in Neon DB                 ║
-║           ✅ Survives Render sleep/restarts                ║
-║                                                            ║
-╚════════════════════════════════════════════════════════════╝
+╔═══════════════════════════════════════════════════════════════════════════╗
+║                                                                           ║
+║   █████╗ ██████╗  █████╗ ██╗   ██╗ █████╗ ███╗   ██╗██████╗ ██╗███╗   ███╗
+║  ██╔══██╗██╔══██╗██╔══██╗██║   ██║██╔══██╗████╗  ██║██╔══██╗██║████╗ ████║
+║  ███████║██████╔╝███████║██║   ██║███████║██╔██╗ ██║██║  ██║██║██╔████╔██║
+║  ██╔══██║██╔══██╗██╔══██║╚██╗ ██╔╝██╔══██║██║╚██╗██║██║  ██║██║██║╚██╔╝██║
+║  ██║  ██║██████╔╝██║  ██║ ╚████╔╝ ██║  ██║██║ ╚████║██████╔╝██║██║ ╚═╝ ██║
+║  ╚═╝  ╚═╝╚═════╝ ╚═╝  ╚═╝  ╚═══╝  ╚═╝  ╚═╝╚═╝  ╚═══╝╚═════╝ ╚═╝╚═╝     ╚═╝
+║                                                                           ║
+║              ABAVANDIMWE SECURE MESSAGING v4.0                            ║
+║           Messages auto-delete after 24 hours                             ║
+║                    Author: Mugisha Pc                                     ║
+║                                                                           ║
+║   🎙️ Voice: Hold to record, release to send, swipe up to cancel          ║
+║   ✅ All files stored in Neon PostgreSQL                                 ║
+║   ✅ Survives Render sleep/restarts                                      ║
+║   ✅ Messages stored in database                                         ║
+║   ✅ End-to-End Encrypted                                                 ║
+║                                                                           ║
+╚═══════════════════════════════════════════════════════════════════════════╝
 """)
     print(f"[✓] Server running on port {port}")
     print(f"[✓] Admin: {ADMIN_USERNAME} / {ADMIN_PASSWORD}")
@@ -3297,4 +3742,9 @@ if __name__ == "__main__":
     print(f"[✓] Messages expire after 24 hours")
     print(f"[✓] Files expire after 7 days")
     print(f"[✓] Open: http://localhost:{port}")
+    print(f"\n🎙️ Voice Recording Instructions:")
+    print(f"   📱 Hold 🎙️ to start recording")
+    print(f"   ⬆️ Swipe up to cancel")
+    print(f"   ✋ Release to send")
+    print(f"   ⏰ No auto-stop - record as long as you want!")
     uvicorn.run(app, host="0.0.0.0", port=port)
