@@ -1,5 +1,5 @@
 """
-ABAVANDIMWE - Secure Messaging (FINAL WORKING)
+ABAVANDIMWE - Secure Messaging (FULLY FIXED)
 All data in Neon PostgreSQL
 Author: Mugisha Pc
 """
@@ -417,11 +417,12 @@ async def upload_media(request: Request, file: UploadFile = File(...)):
     if not session:
         return JSONResponse({"success": False, "error": "Auth required"}, status_code=401)
     content = await file.read()
-    # preserve original file extension
     ext = file.filename.split('.')[-1] if '.' in file.filename else 'bin'
     filename = f"{uuid.uuid4()}.{ext}"
-    await save_file(filename, content, file.content_type, session['username'])
-    return {"success": True, "url": f"/api/files/{filename}", "type": file.content_type}
+    # Store the correct mime type
+    mime_type = file.content_type or 'application/octet-stream'
+    await save_file(filename, content, mime_type, session['username'])
+    return {"success": True, "url": f"/api/files/{filename}", "type": mime_type}
 
 @app.get("/api/files/{filename}")
 async def get_file(filename: str):
@@ -573,20 +574,12 @@ async def ws_endpoint(websocket: WebSocket):
         await websocket.close()
         return
 
-    # Add user and broadcast users list
     await manager.add(group, username, websocket)
-
-    # Send history
     await websocket.send_json({'type': 'history', 'messages': await get_msgs(group)})
-
-    # Send current online users list to the new user
     if group in manager.online_users:
         users_list = list(manager.online_users[group])
         await websocket.send_json({'type': 'users', 'users': users_list})
-
-    # Notify others that a user joined
     await manager.broadcast(group, {'type': 'user_joined', 'user': username}, exclude=username)
-
     print(f"[+] {username} joined {group}")
 
     try:
@@ -598,7 +591,6 @@ async def ws_endpoint(websocket: WebSocket):
                     data.get('reply_to'), data.get('voice_url'),
                     data.get('media_url'), data.get('media_type')
                 )
-                # Broadcast to all (including sender) so sender sees their message
                 await manager.broadcast(group, {
                     'type': 'message',
                     'message_id': result['id'],
@@ -610,7 +602,7 @@ async def ws_endpoint(websocket: WebSocket):
                     'voice_url': data.get('voice_url'),
                     'media_url': data.get('media_url'),
                     'media_type': data.get('media_type')
-                })  # No exclude – sender gets it too
+                })
             elif data.get('type') == 'typing':
                 await manager.broadcast(group, {'type': 'typing', 'user': username}, exclude=username)
             elif data.get('type') == 'stop_typing':
@@ -633,7 +625,6 @@ HTML = '''<!DOCTYPE html>
 *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
 body{font-family:monospace;background:#0a0a0f;color:#0f0;height:100dvh;overflow:hidden}
 
-/* ----- LOGIN ----- */
 .login-container{position:fixed;inset:0;display:flex;justify-content:center;align-items:center;background:#0a0a0f;z-index:1000;padding:20px}
 .login-card{background:#050508;border:2px solid #0f0;border-radius:24px;padding:32px 24px;width:100%;max-width:400px}
 h1{text-align:center;font-size:24px;margin-bottom:4px}
@@ -651,18 +642,15 @@ button:disabled{opacity:0.5;cursor:not-allowed}
 .separator span{padding:0 10px;color:#666;font-size:10px}
 .footer{text-align:center;margin-top:16px;font-size:8px;color:#333;border-top:1px solid #1a1a2e;padding-top:12px}
 
-/* ----- GATEKEEPER / SETUP ----- */
 .gatekeeper-container,.setup-container{display:none;position:fixed;inset:0;background:#0a0a0f;z-index:900;padding:20px;justify-content:center;align-items:center}
 .gatekeeper-container.active,.setup-container.active{display:flex}
 .gatekeeper-card,.setup-card{background:#050508;border:2px solid #0f0;border-radius:24px;padding:32px 24px;width:100%;max-width:400px}
 .gatekeeper-card h2,.setup-card h2{text-align:center;font-size:22px;margin-bottom:4px}
 .gatekeeper-card .sub,.setup-card .sub{text-align:center;font-size:11px;color:#666;margin-bottom:16px}
 
-/* ----- CHAT LAYOUT ----- */
 .chat-container{display:none;flex-direction:column;height:100dvh;background:#0a0a0f}
 .chat-container.active{display:flex}
 
-/* HEADER */
 .header{padding:10px 14px;background:#050508;border-bottom:1px solid #0f0;display:flex;justify-content:space-between;align-items:center;flex-shrink:0;min-height:50px}
 .header h2{font-size:15px;text-align:center;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:0 8px}
 .header-left{display:flex;align-items:center;gap:8px}
@@ -670,7 +658,6 @@ button:disabled{opacity:0.5;cursor:not-allowed}
 .logout-btn{width:auto;padding:4px 12px;font-size:11px;margin:0;border-color:#ff0041;color:#ff0041}
 .logout-btn:hover{background:#ff0041;color:white}
 
-/* MAIN CONTENT (sidebar + messages) */
 .main-content{display:flex;flex:1;min-height:0}
 .sidebar{width:200px;background:#050508;border-right:1px solid #0f0;display:flex;flex-direction:column;flex-shrink:0;overflow:hidden}
 .sidebar-header{padding:10px;border-bottom:1px solid #0f0;font-size:12px;font-weight:bold}
@@ -691,7 +678,6 @@ button:disabled{opacity:0.5;cursor:not-allowed}
 .system-msg{text-align:center;font-size:10px;color:#ffaa00;margin:4px 0;font-style:italic}
 .typing-indicator{padding:2px 16px 6px;font-size:10px;color:#0f0;font-style:italic;min-height:22px;flex-shrink:0}
 
-/* COMPOSER */
 .composer{padding:8px;background:#050508;border-top:1px solid #0f0;flex-shrink:0}
 .composer-row{display:flex;gap:6px;align-items:flex-end}
 .composer-row textarea{flex:1;padding:10px 14px;background:#111;border:1px solid #0f0;border-radius:10px;color:#0f0;font-family:monospace;font-size:13px;resize:none;max-height:120px;min-height:40px;line-height:1.4;outline:none}
@@ -705,7 +691,6 @@ button:disabled{opacity:0.5;cursor:not-allowed}
 @keyframes pulse{0%,100%{box-shadow:0 0 0 0 rgba(255,0,65,0.4)}50%{box-shadow:0 0 20px 10px rgba(255,0,65,0.15)}}
 .media-btn{font-size:16px}
 
-/* RECORDING STATUS */
 .recording-status{display:none;padding:6px 12px;margin-top:4px;background:#1a1a2e;border:1px solid #ff0041;border-radius:8px;align-items:center;gap:8px}
 .recording-status.active{display:flex}
 #recTimer{color:#ff0041;font-size:14px;font-weight:bold;min-width:44px}
@@ -723,18 +708,15 @@ button:disabled{opacity:0.5;cursor:not-allowed}
 #cancelRec{background:transparent;border:1px solid #555;color:#888;padding:2px 10px;border-radius:4px;cursor:pointer;font-size:11px}
 #cancelRec:hover{border-color:#ff0041;color:#ff0041}
 
-/* VOICE PLAYER */
 .voice-play-btn{background:transparent;border:2px solid #0f0;color:#0f0;padding:4px 12px;border-radius:16px;cursor:pointer;font-size:12px;display:inline-flex;align-items:center;gap:8px}
 .voice-play-btn.playing{border-color:#ffaa00;color:#ffaa00}
 .voice-progress{width:80px;height:3px;background:#1a1a2e;border-radius:2px;overflow:hidden}
 .voice-progress-bar{height:100%;background:#0f0;width:0%;transition:width 0.1s}
 .voice-duration{font-size:10px;color:#888;min-width:35px}
 
-/* MEDIA */
 .message-media{max-width:160px;max-height:160px;border-radius:8px;margin-top:4px;cursor:pointer}
 .message-media:hover{opacity:0.8}
 
-/* REACTIONS */
 .reaction-container{display:flex;gap:4px;margin-top:4px;flex-wrap:wrap}
 .reaction-emoji{background:#1a1a2e;padding:1px 6px;border-radius:8px;font-size:11px;cursor:pointer;border:1px solid transparent}
 .reaction-emoji:hover{border-color:#0f0}
@@ -747,18 +729,15 @@ button:disabled{opacity:0.5;cursor:not-allowed}
 .message-actions button:hover{color:#0f0}
 .edit-input{display:none;width:100%;padding:4px;background:#111;border:1px solid #0f0;border-radius:4px;color:#0f0;font-size:12px;margin-top:2px}
 
-/* OFFLINE BAR */
 .offline-bar{display:none;background:#ff0041;color:white;text-align:center;padding:4px;font-size:10px;font-weight:bold;flex-shrink:0}
 .offline-bar.active{display:block}
 
-/* LOADING */
 .loading-overlay{position:fixed;inset:0;background:rgba(10,10,15,0.95);z-index:9999;display:none;justify-content:center;align-items:center;flex-direction:column;gap:16px}
 .loading-overlay.active{display:flex}
 .loader{width:50px;height:50px;border:3px solid rgba(0,255,65,0.1);border-top:3px solid #0f0;border-radius:50%;animation:spin 0.8s linear infinite}
 @keyframes spin{0%{transform:rotate(0)}100%{transform:rotate(360deg)}}
 .loader-text{color:#0f0;font-size:14px}
 
-/* ADMIN */
 .admin-panel{display:none;position:fixed;inset:0;background:#0a0a0f;z-index:50;padding:16px;overflow-y:auto}
 .admin-panel.active{display:block}
 .admin-header{display:flex;justify-content:space-between;align-items:center;padding:12px;border-bottom:2px solid #0f0;margin-bottom:16px}
@@ -782,18 +761,14 @@ button:disabled{opacity:0.5;cursor:not-allowed}
 .action-btn-green:hover{background:#0f0;color:#000}
 .close-admin{background:#ff0041;border-color:#ff0041;color:white;padding:4px 12px;border-radius:6px;cursor:pointer;font-size:12px;width:auto;margin:0}
 
-/* SCROLLBAR */
 ::-webkit-scrollbar{width:4px}
 ::-webkit-scrollbar-track{background:#1a1a2e}
 ::-webkit-scrollbar-thumb{background:#0f0;border-radius:2px}
-
-/* RESPONSIVE */
 @media(max-width:600px){.message{max-width:90%}}
 </style>
 </head>
 <body>
 
-<!-- LOADING -->
 <div class="loading-overlay" id="loadingOverlay">
     <div class="loader"></div>
     <div class="loader-text">Loading...</div>
@@ -1173,26 +1148,39 @@ function addMessage(sender, text, isSent, timestamp, id, replyTo, voiceUrl, medi
             <div class="voice-progress"><div class="voice-progress-bar"></div></div>
             <span class="voice-duration">00:00</span>
         </div>`;
-        if(text !== '🎤 Voice message') content += `<div style="font-size:11px;color:#888;margin-top:4px;">${escapeHtml(text)}</div>`;
-        div.classList.add('voice-message');
+        if(text && text !== '🎤 Voice message') {
+            content += `<div style="font-size:11px;color:#888;margin-top:4px;">${escapeHtml(text)}</div>`;
+        }
     } else if(mediaUrl) {
         if(mediaType && mediaType.startsWith('image/')) {
-            content = `<div class="bubble">${escapeHtml(text)}<div><img src="${mediaUrl}" class="message-media" onclick="window.open('${mediaUrl}')"></div></div>`;
+            content = `<div class="bubble">${escapeHtml(text)}<div><img src="${mediaUrl}" class="message-media" onclick="window.open('${mediaUrl}')" loading="lazy"></div></div>`;
         } else {
-            content = `<div class="bubble">${escapeHtml(text)}<div><a href="${mediaUrl}" target="_blank" style="color:#0f0;">📎 Download</a></div></div>`;
+            content = `<div class="bubble">${escapeHtml(text)}<div><a href="${mediaUrl}" target="_blank" style="color:#0f0;text-decoration:underline;">📎 Download ${mediaUrl.split('/').pop()}</a></div></div>`;
         }
     } else {
         const edited = messagesData[id]?.edited ? ' <span style="font-size:8px;color:#888;">(edited)</span>' : '';
         content = `<div class="bubble">${escapeHtml(text)}${edited}</div>`;
     }
+    
+    // Fix: Show replied message preview
     let replyHtml = '';
     if(replyTo && messagesData[replyTo]) {
         const orig = messagesData[replyTo];
         try {
-            const origText = decrypt(orig.ciphertext, window.groupPassword, orig.salt);
-            replyHtml = `<div style="font-size:10px;color:#ffaa00;margin-bottom:3px;cursor:pointer" onclick="scrollToMsg(${replyTo})">↩️ ${orig.sender}: ${escapeHtml(origText.substring(0,50))}${origText.length>50?'...':''}</div>`;
-        } catch(e) {}
+            let origText = '🔒 Encrypted';
+            if(orig.ciphertext) {
+                try {
+                    origText = await decrypt(orig.ciphertext, window.groupPassword, orig.salt);
+                } catch(e) {}
+            }
+            replyHtml = `<div style="font-size:10px;color:#ffaa00;margin-bottom:3px;cursor:pointer;padding:4px 8px;background:rgba(255,170,0,0.08);border-left:2px solid #ffaa00;border-radius:4px;" onclick="scrollToMsg(${replyTo})">
+                ↩️ <span style="color:#ffaa00;font-weight:bold;">${escapeHtml(orig.sender)}</span>: ${escapeHtml(origText.substring(0,60))}${origText.length>60?'...':''}
+            </div>`;
+        } catch(e) {
+            console.error('Reply preview error:', e);
+        }
     }
+    
     let reactionsHtml = '';
     const reactions = messagesData[id]?.reactions || {};
     if(Object.keys(reactions).length) {
@@ -1230,6 +1218,7 @@ function addMessage(sender, text, isSent, timestamp, id, replyTo, voiceUrl, medi
         <div class="msg-time">${time}</div>`;
     container.appendChild(div);
     container.scrollTop = container.scrollHeight;
+    
     // Swipe to reply (touch)
     let startX = 0, currentX = 0;
     div.addEventListener('touchstart', e => { startX = e.touches[0].clientX; currentX = startX; }, {passive:true});
@@ -1310,14 +1299,14 @@ function togglePicker(btn) {
 
 function replyToMsg(id) {
     replyingTo = id;
-    msgInput.placeholder = '↩️ Replying...';
+    msgInput.placeholder = '↩️ Replying to ' + (messagesData[id]?.sender || 'message');
     msgInput.focus();
 }
 
 // ========== SEND MESSAGE ==========
 msgInput.addEventListener('keydown', function(e) {
     if(e.key === 'Enter' && !e.shiftKey) {
-        e.preventDefault(); // Enter creates new line only when Shift+Enter
+        e.preventDefault();
     }
 });
 msgInput.addEventListener('input', function() {
@@ -1346,7 +1335,6 @@ async function sendMessage() {
             salt:salt,
             reply_to:replyingTo || null
         }));
-        // Clear input immediately (optimistic update will come from server broadcast)
         msgInput.value = '';
         msgInput.style.height = 'auto';
         msgInput.placeholder = 'Type a message...';
@@ -1415,12 +1403,23 @@ function stopRecord() {
 async function startRecording() {
     try {
         const stream = await navigator.mediaDevices.getUserMedia({audio:true});
-        mediaRecorder = new MediaRecorder(stream, {audioBitsPerSecond:64000});
+        // Try to use webm with opus codec for better compatibility
+        let mimeType = 'audio/webm;codecs=opus';
+        if(!MediaRecorder.isTypeSupported(mimeType)) {
+            mimeType = 'audio/webm';
+        }
+        if(!MediaRecorder.isTypeSupported(mimeType)) {
+            mimeType = 'audio/mp4';
+        }
+        mediaRecorder = new MediaRecorder(stream, { 
+            mimeType: mimeType,
+            audioBitsPerSecond: 64000 
+        });
         audioChunks = [];
         mediaRecorder.ondataavailable = e => { if(e.data.size > 0) audioChunks.push(e.data); };
         mediaRecorder.onstop = async () => {
             if(audioChunks.length > 0 && recSeconds >= 1) {
-                const blob = new Blob(audioChunks, {type:'audio/webm'});
+                const blob = new Blob(audioChunks, {type: mediaRecorder.mimeType || 'audio/webm'});
                 await uploadVoice(blob);
             }
             stream.getTracks().forEach(t => t.stop());
@@ -1443,6 +1442,7 @@ async function startRecording() {
             document.getElementById('recTimer').textContent = mins + ':' + secs;
         }, 1000);
     } catch(e) {
+        console.error('Microphone error:', e);
         alert('Please allow microphone access');
     }
 }
@@ -1466,6 +1466,7 @@ function cancelRecord() {
 
 async function uploadVoice(blob) {
     const formData = new FormData();
+    // Use webm extension for compatibility
     formData.append('file', blob, 'voice.webm');
     try {
         const res = await fetch('/api/upload_voice', {method:'POST', body:formData});
@@ -1508,24 +1509,24 @@ function playVoice(btn, url) {
         duration.textContent = '00:00';
         return;
     }
-    audio.onloadedmetadata = () => {
-        const m = Math.floor(audio.duration/60);
-        const s = Math.floor(audio.duration%60);
+    audio.addEventListener('loadedmetadata', function() {
+        const m = Math.floor(this.duration/60);
+        const s = Math.floor(this.duration%60);
         duration.textContent = String(m).padStart(2,'0') + ':' + String(s).padStart(2,'0');
-    };
-    audio.ontimeupdate = () => {
-        const pct = (audio.currentTime / audio.duration) * 100;
+    });
+    audio.addEventListener('timeupdate', function() {
+        const pct = (this.currentTime / this.duration) * 100;
         progress.style.width = pct + '%';
-        const m = Math.floor(audio.currentTime/60);
-        const s = Math.floor(audio.currentTime%60);
+        const m = Math.floor(this.currentTime/60);
+        const s = Math.floor(this.currentTime%60);
         duration.textContent = String(m).padStart(2,'0') + ':' + String(s).padStart(2,'0');
-    };
-    audio.onended = () => {
+    });
+    audio.addEventListener('ended', function() {
         btn.classList.remove('playing');
         btn.innerHTML = '<span>▶️</span><span>Play</span>';
         progress.style.width = '0%';
         duration.textContent = '00:00';
-    };
+    });
     audio.play();
     btn.classList.add('playing');
     btn.innerHTML = '<span>⏸️</span><span>Pause</span>';
@@ -1555,7 +1556,7 @@ async function shareMedia() {
                     salt:salt,
                     reply_to:replyingTo || null,
                     media_url:data.url,
-                    media_type:data.type
+                    media_type:data.type || file.type
                 }));
                 msgInput.value = '';
                 msgInput.style.height = 'auto';
