@@ -1,5 +1,5 @@
 """
-ABAVANDIMWE - Secure Messaging (Final)
+ABAVANDIMWE - Secure Messaging (Final with Online Users)
 All data in Neon PostgreSQL
 Author: Mugisha Pc
 """
@@ -21,7 +21,7 @@ from argon2 import PasswordHasher
 import asyncpg
 from asyncpg import create_pool
 
-# ========== LIFESPAN (no deprecation warnings) ==========
+# ========== LIFESPAN ==========
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     print("🚀 Starting ABAVANDIMWE...")
@@ -56,7 +56,7 @@ async def get_db():
 async def release_db(conn):
     await db_pool.release(conn)
 
-# ========== INIT TABLES ==========
+# ========== TABLES ==========
 async def init_db():
     conn = await get_db()
     try:
@@ -315,21 +315,41 @@ async def get_all_msgs():
 class Manager:
     def __init__(self):
         self.connections: Dict[str, Dict[str, WebSocket]] = {}
+        self.online_users: Dict[str, set] = {}  # group -> set of usernames
+
     async def add(self, group, user, ws):
         if group not in self.connections:
             self.connections[group] = {}
+            self.online_users[group] = set()
         self.connections[group][user] = ws
+        self.online_users[group].add(user)
+        await self.broadcast_users(group)
+
     def remove(self, group, user):
         if group in self.connections:
             self.connections[group].pop(user, None)
+            if group in self.online_users:
+                self.online_users[group].discard(user)
             if not self.connections[group]:
                 del self.connections[group]
+                del self.online_users[group]
+            else:
+                asyncio.create_task(self.broadcast_users(group))
+
+    async def broadcast_users(self, group):
+        if group in self.online_users:
+            users = list(self.online_users[group])
+            await self.broadcast(group, {'type': 'users', 'users': users})
+
     async def broadcast(self, group, msg, exclude=None):
-        if group not in self.connections: return
+        if group not in self.connections:
+            return
         for user, ws in self.connections[group].items():
             if user != exclude:
-                try: await ws.send_json(msg)
-                except: pass
+                try:
+                    await ws.send_json(msg)
+                except:
+                    pass
 
 manager = Manager()
 
@@ -551,10 +571,12 @@ async def ws_endpoint(websocket: WebSocket):
         await websocket.send_json({'type': 'error', 'message': 'No group'})
         await websocket.close()
         return
+
     await manager.add(group, username, websocket)
     await websocket.send_json({'type': 'history', 'messages': await get_msgs(group)})
     await manager.broadcast(group, {'type': 'user_joined', 'user': username}, exclude=username)
     print(f"[+] {username} joined {group}")
+
     try:
         while True:
             data = await websocket.receive_json()
@@ -595,7 +617,6 @@ HTML = '''<!DOCTYPE html>
 <meta name="viewport" content="width=device-width,initial-scale=1.0,user-scalable=no">
 <title>ABAVANDIMWE</title>
 <style>
-/* ----- RESET & BASE ----- */
 *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
 body{font-family:monospace;background:#0a0a0f;color:#0f0;height:100dvh;overflow:hidden}
 
@@ -624,7 +645,7 @@ button:disabled{opacity:0.5;cursor:not-allowed}
 .gatekeeper-card h2,.setup-card h2{text-align:center;font-size:22px;margin-bottom:4px}
 .gatekeeper-card .sub,.setup-card .sub{text-align:center;font-size:11px;color:#666;margin-bottom:16px}
 
-/* ----- CHAT LAYOUT (FIXED 3-PART) ----- */
+/* ----- CHAT LAYOUT ----- */
 .chat-container{display:none;flex-direction:column;height:100dvh;background:#0a0a0f}
 .chat-container.active{display:flex}
 
@@ -636,8 +657,16 @@ button:disabled{opacity:0.5;cursor:not-allowed}
 .logout-btn{width:auto;padding:4px 12px;font-size:11px;margin:0;border-color:#ff0041;color:#ff0041}
 .logout-btn:hover{background:#ff0041;color:white}
 
-/* SCROLLABLE MESSAGES */
-.messages{flex:1;overflow-y:auto;padding:12px;display:flex;flex-direction:column;gap:4px;min-height:0;width:100%;box-sizing:border-box;overscroll-behavior:contain}
+/* MAIN CONTENT (sidebar + messages) */
+.main-content{display:flex;flex:1;min-height:0}
+.sidebar{width:200px;background:#050508;border-right:1px solid #0f0;display:flex;flex-direction:column;flex-shrink:0;overflow:hidden}
+.sidebar-header{padding:10px;border-bottom:1px solid #0f0;font-size:12px;font-weight:bold}
+.online-users{flex:1;overflow-y:auto;padding:8px}
+.online-user{padding:6px 10px;margin:4px 0;border:1px solid #0f0;border-radius:6px;font-size:12px;display:flex;align-items:center;gap:6px}
+.online-user::before{content:"●";color:#0f0;font-size:8px}
+@media(max-width:600px){.sidebar{position:fixed;left:-200px;top:0;bottom:0;z-index:20;transition:left 0.3s;width:200px}.sidebar.open{left:0}.overlay{position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:10;display:none}.overlay.active{display:block}}
+.messages-area{flex:1;display:flex;flex-direction:column;min-width:0}
+.messages{flex:1;overflow-y:auto;padding:12px;display:flex;flex-direction:column;gap:4px}
 .message{max-width:85%;padding:4px 0;word-break:break-word;overflow-wrap:anywhere}
 .message.sent{align-self:flex-end}
 .message.received{align-self:flex-start}
@@ -649,7 +678,7 @@ button:disabled{opacity:0.5;cursor:not-allowed}
 .system-msg{text-align:center;font-size:10px;color:#ffaa00;margin:4px 0;font-style:italic}
 .typing-indicator{padding:2px 16px 6px;font-size:10px;color:#0f0;font-style:italic;min-height:22px;flex-shrink:0}
 
-/* COMPOSER (FIXED) */
+/* COMPOSER */
 .composer{padding:8px;background:#050508;border-top:1px solid #0f0;flex-shrink:0}
 .composer-row{display:flex;gap:6px;align-items:flex-end}
 .composer-row textarea{flex:1;padding:10px 14px;background:#111;border:1px solid #0f0;border-radius:10px;color:#0f0;font-family:monospace;font-size:13px;resize:none;max-height:120px;min-height:40px;line-height:1.4;outline:none}
@@ -709,14 +738,14 @@ button:disabled{opacity:0.5;cursor:not-allowed}
 .offline-bar{display:none;background:#ff0041;color:white;text-align:center;padding:4px;font-size:10px;font-weight:bold;flex-shrink:0}
 .offline-bar.active{display:block}
 
-/* LOADING OVERLAY */
+/* LOADING */
 .loading-overlay{position:fixed;inset:0;background:rgba(10,10,15,0.95);z-index:9999;display:none;justify-content:center;align-items:center;flex-direction:column;gap:16px}
 .loading-overlay.active{display:flex}
 .loader{width:50px;height:50px;border:3px solid rgba(0,255,65,0.1);border-top:3px solid #0f0;border-radius:50%;animation:spin 0.8s linear infinite}
 @keyframes spin{0%{transform:rotate(0)}100%{transform:rotate(360deg)}}
 .loader-text{color:#0f0;font-size:14px}
 
-/* ADMIN PANEL */
+/* ADMIN */
 .admin-panel{display:none;position:fixed;inset:0;background:#0a0a0f;z-index:50;padding:16px;overflow-y:auto}
 .admin-panel.active{display:block}
 .admin-header{display:flex;justify-content:space-between;align-items:center;padding:12px;border-bottom:2px solid #0f0;margin-bottom:16px}
@@ -802,25 +831,35 @@ button:disabled{opacity:0.5;cursor:not-allowed}
     <div class="header">
         <div class="header-left">
             <span class="online-badge" id="onlineBadge">● Online</span>
+            <button class="menu-btn" onclick="toggleSidebar()" style="background:transparent;border:1px solid #0f0;color:#0f0;padding:2px 8px;border-radius:4px;cursor:pointer;font-size:14px;display:none">☰</button>
         </div>
         <h2 id="groupTitle"># LOADING</h2>
         <button class="logout-btn" onclick="logout()">Leave</button>
     </div>
     <div class="offline-bar" id="offlineBar">⚠️ Offline <button onclick="reconnect()">↻ Retry</button></div>
-    <div class="messages" id="messages"><div style="text-align:center;color:#666;padding:40px 0;">Connecting...</div></div>
-    <div class="typing-indicator" id="typingIndicator"></div>
-    <div class="composer">
-        <div class="composer-row">
-            <textarea id="msgInput" placeholder="Type a message..." rows="1"></textarea>
-            <button class="voice-btn" id="voiceBtn" onmousedown="startRecord()" onmouseup="stopRecord()" onmouseleave="stopRecord()" ontouchstart="startRecord()" ontouchend="stopRecord()" ontouchcancel="stopRecord()">🎙️</button>
-            <button class="media-btn" onclick="shareMedia()">📎</button>
-            <button class="send-btn" onclick="sendMessage()">➤</button>
+    <div class="main-content">
+        <div class="sidebar" id="sidebar">
+            <div class="sidebar-header">● Online Users</div>
+            <div class="online-users" id="onlineUsers"><div style="color:#666;padding:8px;font-size:12px;">Loading...</div></div>
         </div>
-        <div class="recording-status" id="recStatus">
-            <span id="recTimer">00:00</span>
-            <div class="wave"><span class="bar"></span><span class="bar"></span><span class="bar"></span><span class="bar"></span><span class="bar"></span><span class="bar"></span><span class="bar"></span><span class="bar"></span></div>
-            <span id="recText">🔴 Recording</span>
-            <button id="cancelRec" onclick="cancelRecord()">✕ Cancel</button>
+        <div class="overlay" id="overlay" onclick="toggleSidebar()"></div>
+        <div class="messages-area">
+            <div class="messages" id="messages"><div style="text-align:center;color:#666;padding:40px 0;">Connecting...</div></div>
+            <div class="typing-indicator" id="typingIndicator"></div>
+            <div class="composer">
+                <div class="composer-row">
+                    <textarea id="msgInput" placeholder="Type a message..." rows="1"></textarea>
+                    <button class="voice-btn" id="voiceBtn" onmousedown="startRecord()" onmouseup="stopRecord()" onmouseleave="stopRecord()" ontouchstart="startRecord()" ontouchend="stopRecord()" ontouchcancel="stopRecord()">🎙️</button>
+                    <button class="media-btn" onclick="shareMedia()">📎</button>
+                    <button class="send-btn" onclick="sendMessage()">➤</button>
+                </div>
+                <div class="recording-status" id="recStatus">
+                    <span id="recTimer">00:00</span>
+                    <div class="wave"><span class="bar"></span><span class="bar"></span><span class="bar"></span><span class="bar"></span><span class="bar"></span><span class="bar"></span><span class="bar"></span><span class="bar"></span></div>
+                    <span id="recText">🔴 Recording</span>
+                    <button id="cancelRec" onclick="cancelRecord()">✕ Cancel</button>
+                </div>
+            </div>
         </div>
     </div>
 </div>
@@ -1040,6 +1079,8 @@ function connectToChat(user, group) {
                     messagesData[d.message_id] = d;
                     addMessage(d.sender, dec, isSent, d.timestamp, d.message_id, d.reply_to, d.voice_url, d.media_url, d.media_type);
                 } catch(e) { console.error(e); }
+            } else if(d.type === 'users') {
+                updateOnlineUsers(d.users);
             } else if(d.type === 'user_joined') {
                 addSystemMessage('👤 ' + d.user + ' joined');
             } else if(d.type === 'user_left') {
@@ -1082,6 +1123,20 @@ function updateStatus(online) {
         badge.style.color = '#ff4444';
         document.getElementById('offlineBar').classList.add('active');
     }
+}
+
+function updateOnlineUsers(users) {
+    const container = document.getElementById('onlineUsers');
+    if(!users || users.length === 0) {
+        container.innerHTML = '<div style="color:#666;padding:8px;font-size:12px;">No one online</div>';
+    } else {
+        container.innerHTML = users.map(u => `<div class="online-user">${escapeHtml(u)}</div>`).join('');
+    }
+}
+
+function toggleSidebar() {
+    document.getElementById('sidebar').classList.toggle('open');
+    document.getElementById('overlay').classList.toggle('active');
 }
 
 function reconnect() {
@@ -1662,4 +1717,5 @@ if __name__ == "__main__":
     print(f"✅ Database: PostgreSQL (Neon)")
     print(f"✅ Messages: 24h auto-delete")
     print(f"✅ Files: 7d auto-delete")
+    print(f"✅ Online users list: enabled")
     uvicorn.run(app, host="0.0.0.0", port=port)
