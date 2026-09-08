@@ -1190,13 +1190,12 @@ function reconnect() {
 // ========== ADD MESSAGE ==========
 function addMessage(sender, text, isSent, timestamp, id, replyTo, voiceUrl, mediaUrl, mediaType) {
     const div = document.createElement('div');
-    // Use 'mine' for sent, 'theirs' for received
     div.className = 'message ' + (isSent ? 'mine' : 'theirs');
     div.dataset.id = id;
 
     const time = timestamp ? new Date(timestamp * 1000).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'}) : '';
 
-    // REPLY PREVIEW (Original structure from parts 1-8)
+    // REPLY PREVIEW
     let replyHtml = '';
     if(replyTo && messagesData[replyTo]) {
         const orig = messagesData[replyTo];
@@ -1243,7 +1242,7 @@ function addMessage(sender, text, isSent, timestamp, id, replyTo, voiceUrl, medi
         contentHtml = `<div class="text-bubble">${escapeHtml(text)}</div>`;
     }
 
-    // ACTIONS (reply, reactions – from original structure)
+    // ACTIONS
     const actionsHtml = `
         <div class="message-actions">
             <div style="position:relative;display:inline-block;">
@@ -1274,7 +1273,7 @@ function addMessage(sender, text, isSent, timestamp, id, replyTo, voiceUrl, medi
     messagesContainer.appendChild(div);
     messagesContainer.scrollTop = messagesContainer.scrollHeight;
 
-    // SWIPE TO REPLY (from original)
+    // SWIPE TO REPLY
     let startX = 0, currentX = 0;
     div.addEventListener('touchstart', e => { startX = e.touches[0].clientX; currentX = startX; }, {passive:true});
     div.addEventListener('touchmove', e => {
@@ -1507,11 +1506,11 @@ async function sendVoiceMessage(url) {
     } catch(e) { console.error('Send voice error:', e); }
 }
 
-// ========== MEDIA SHARING ==========
+// ========== MEDIA SHARING – ONLY IMAGES (GALLERY) ==========
 async function shareMedia() {
     const input = document.createElement('input');
     input.type = 'file';
-    input.accept = 'image/*,application/pdf,text/plain';
+    input.accept = 'image/*';  // Only images → mobile opens gallery
     input.onchange = async (e) => {
         const file = e.target.files[0];
         if(!file) return;
@@ -1670,6 +1669,7 @@ if __name__ == "__main__":
 ║     ABAVANDIMWE SECURE MESSAGING             ║
 ║     FINAL PROFESSIONAL VERSION               ║
 ║     Incoming left · Outgoing right           ║
+║     Gallery opens for images                 ║
 ║     Author: Mugisha Pc                       ║
 ╚═══════════════════════════════════════════════╝
 """)
