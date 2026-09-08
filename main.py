@@ -1,10 +1,10 @@
 """
-ABAVANDIMWE - Secure Messaging System
+ABAVANDIMWE - Secure Messaging System v5.0
 Author: Mugisha Pc
 Messages stay for 24 hours then auto-delete
 Database: PostgreSQL (Neon) with asyncpg
-All files (voice, media) stored in Neon database for persistence
-Voice: Hold-to-record like WhatsApp, no auto-stop
+All files stored in Neon database for persistence
+Fixed: Login, Layout, Voice Messages, Responsive Design
 """
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request, Depends, HTTPException, UploadFile, File
@@ -19,7 +19,6 @@ import base64
 import hashlib
 import time
 import uuid
-import io
 from datetime import datetime
 from typing import Dict, Optional, List
 from collections import defaultdict
@@ -487,7 +486,7 @@ async def init_db():
         except Exception as e:
             print(f"[!] Column migration warning: {e}")
         
-        # Add indexes for performance
+        # Add indexes
         try:
             await conn.execute('CREATE INDEX IF NOT EXISTS idx_messages_group_name ON messages(group_name)')
             await conn.execute('CREATE INDEX IF NOT EXISTS idx_messages_created_at ON messages(created_at)')
@@ -497,17 +496,8 @@ async def init_db():
         except Exception as e:
             print(f"[!] Index creation warning: {e}")
         
-        # Clean up corrupt data
-        try:
-            await conn.execute("DELETE FROM groups WHERE group_name = 'admin' AND created_by != 'Mpc'")
-            print("[🧹] Cleaned up corrupt groups")
-        except Exception as e:
-            pass
-        
-        try:
-            await conn.execute("DELETE FROM messages WHERE group_name = 'admin'")
-        except Exception as e:
-            pass
+        # Clean up old files
+        await conn.execute("DELETE FROM files WHERE expires_at < $1", time.time())
         
         # Create admin if not exists
         row = await conn.fetchrow("SELECT username FROM users WHERE username = $1", ADMIN_USERNAME)
@@ -523,9 +513,6 @@ async def init_db():
         else:
             row = await conn.fetchrow("SELECT password_hash FROM users WHERE username = $1", ADMIN_USERNAME)
             ADMIN_PASSWORD_HASH = row[0]
-        
-        # Clean up old files
-        await conn.execute("DELETE FROM files WHERE expires_at < $1", time.time())
         
     finally:
         await return_db_connection(conn)
@@ -567,7 +554,6 @@ async def cleanup_old_messages():
         await return_db_connection(conn)
 
 async def cleanup_old_files():
-    """Delete files older than 7 days from Neon database"""
     conn = await get_db_connection()
     try:
         result = await conn.execute("DELETE FROM files WHERE expires_at < $1", time.time())
@@ -580,7 +566,7 @@ async def cleanup_old_files():
 def start_cleanup():
     async def cleanup_loop():
         while True:
-            await asyncio.sleep(3600)  # Every hour
+            await asyncio.sleep(3600)
             await cleanup_old_messages()
             await cleanup_old_files()
     asyncio.create_task(cleanup_loop())
@@ -679,14 +665,6 @@ async def delete_user(username):
     finally:
         await return_db_connection(conn)
 
-async def delete_users_by_group(group_name):
-    conn = await get_db_connection()
-    try:
-        result = await conn.execute("DELETE FROM users WHERE assigned_group = $1", group_name)
-        return result != "DELETE 0"
-    finally:
-        await return_db_connection(conn)
-
 async def get_all_users():
     conn = await get_db_connection()
     try:
@@ -704,14 +682,6 @@ async def get_user_role(username):
     conn = await get_db_connection()
     try:
         row = await conn.fetchrow("SELECT role FROM users WHERE username = $1", username)
-        return row[0] if row else None
-    finally:
-        await return_db_connection(conn)
-
-async def get_user_assigned_group(username):
-    conn = await get_db_connection()
-    try:
-        row = await conn.fetchrow("SELECT assigned_group FROM users WHERE username = $1", username)
         return row[0] if row else None
     finally:
         await return_db_connection(conn)
@@ -821,7 +791,7 @@ async def edit_message(message_id, new_ciphertext, username):
         )
         if not row or row['sender'] != username:
             return False
-        if time.time() - row['created_at'] > 300:  # 5 minutes
+        if time.time() - row['created_at'] > 300:
             return False
         await conn.execute(
             "UPDATE messages SET ciphertext = $1, edited = TRUE WHERE id = $2",
@@ -949,7 +919,7 @@ async def subscribe_to_push(request: Request):
 async def get_vapid_public_key():
     return {"publicKey": VAPID_PUBLIC_KEY}
 
-# ========== FILE UPLOAD ENDPOINTS (NEON DATABASE) ==========
+# ========== FILE UPLOAD ENDPOINTS ==========
 @app.post("/api/upload_voice")
 async def upload_voice(request: Request, file: UploadFile = File(...)):
     try:
@@ -962,9 +932,7 @@ async def upload_voice(request: Request, file: UploadFile = File(...)):
         content = await file.read()
         file_size = len(content)
         
-        # No size limit for voice (users can record 5+ minutes)
-        # Neon can handle large files, but we'll set a reasonable limit
-        if file_size > 50 * 1024 * 1024:  # 50MB max for very long recordings
+        if file_size > 50 * 1024 * 1024:
             return JSONResponse(
                 {"success": False, "error": "File too large (max 50MB)"}, 
                 status_code=400
@@ -1058,7 +1026,6 @@ async def upload_media(request: Request, file: UploadFile = File(...)):
 
 @app.get("/api/files/{filename}")
 async def get_file_from_db(filename: str):
-    """Serve files stored in Neon database"""
     conn = await get_db_connection()
     try:
         row = await conn.fetchrow(
@@ -1083,35 +1050,6 @@ async def get_file_from_db(filename: str):
         )
     finally:
         await return_db_connection(conn)
-
-@app.delete("/api/files/{filename}")
-async def delete_file_from_db(filename: str, request: Request):
-    try:
-        session = await get_session_from_cookie(request)
-        username = session["username"]
-        
-        conn = await get_db_connection()
-        try:
-            row = await conn.fetchrow(
-                "SELECT username FROM files WHERE filename = $1",
-                filename
-            )
-            if not row:
-                raise HTTPException(status_code=404, detail="File not found")
-            
-            if row['username'] != username:
-                user_role = await get_user_role(username)
-                if user_role != 'admin':
-                    raise HTTPException(status_code=403, detail="Not your file")
-            
-            await conn.execute("DELETE FROM files WHERE filename = $1", filename)
-            return {"success": True}
-        finally:
-            await return_db_connection(conn)
-    except HTTPException:
-        raise
-    except Exception as e:
-        return JSONResponse({"success": False, "error": str(e)}, status_code=500)
 
 # ========== API ENDPOINTS ==========
 @app.get("/")
@@ -1250,7 +1188,7 @@ async def edit_message_endpoint(data: EditMessageRequest, request: Request):
     conn = await get_db_connection()
     try:
         row = await conn.fetchrow(
-            "SELECT sender, group_name, salt FROM messages WHERE id = $1",
+            "SELECT sender, group_name FROM messages WHERE id = $1",
             data.message_id
         )
         if not row:
@@ -1555,23 +1493,14 @@ HTML = '''<!DOCTYPE html>
     <meta name="apple-mobile-web-app-title" content="ABAVANDIMWE">
     <meta name="mobile-web-app-capable" content="yes">
     <meta name="theme-color" content="#0a0a0f">
-    <meta name="msapplication-TileColor" content="#0a0a0f">
-    <meta name="msapplication-TileImage" content="/icons/icon-144x144.png">
     
-    <link rel="icon" type="image/png" sizes="72x72" href="/icons/icon-72x72.png">
-    <link rel="icon" type="image/png" sizes="96x96" href="/icons/icon-96x96.png">
-    <link rel="icon" type="image/png" sizes="128x128" href="/icons/icon-128x128.png">
-    <link rel="icon" type="image/png" sizes="144x144" href="/icons/icon-144x144.png">
-    <link rel="icon" type="image/png" sizes="152x152" href="/icons/icon-152x152.png">
     <link rel="icon" type="image/png" sizes="192x192" href="/icons/icon-192x192.png">
-    <link rel="icon" type="image/png" sizes="384x384" href="/icons/icon-384x384.png">
-    <link rel="icon" type="image/png" sizes="512x512" href="/icons/icon-512x512.png">
-    
     <link rel="apple-touch-icon" href="/icons/icon-192x192.png">
     
     <style>
+        /* ===== RESET ===== */
         *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent;}
-        body{font-family:monospace;background:#0a0a0f;height:100vh;overflow:hidden;color:#0f0;}
+        html,body{margin:0;padding:0;width:100%;height:100%;overflow:hidden;background:#0a0a0f;font-family:monospace;color:#0f0;}
         
         /* ===== LOGIN ===== */
         .login-container{position:fixed;top:0;left:0;right:0;bottom:0;display:flex;justify-content:center;align-items:center;background:#0a0a0f;z-index:1000;padding:20px;}
@@ -1581,302 +1510,31 @@ HTML = '''<!DOCTYPE html>
         .login-card-inner{background:#050508;padding:32px 24px;border-radius:22px;position:relative;}
         h1{text-align:center;margin-bottom:4px;font-size:28px;letter-spacing:2px;}
         .sub{text-align:center;margin-bottom:12px;font-size:11px;color:#666;}
-        .admin-badge{text-align:center;margin-bottom:20px;font-size:10px;color:#0f0;border:1px solid #0f0;padding:4px 12px;display:inline-block;border-radius:20px;background:rgba(0,255,0,0.05);}
-        input{width:100%;padding:14px;margin:10px 0;background:#111;border:1px solid #0f0;border-radius:12px;color:#0f0;font-family:monospace;font-size:15px;transition:all 0.3s;}
+        .admin-badge{display:block;text-align:center;margin-bottom:20px;font-size:10px;color:#0f0;border:1px solid #0f0;padding:4px 12px;border-radius:20px;background:rgba(0,255,0,0.05);width:fit-content;margin-left:auto;margin-right:auto;}
+        input{width:100%;padding:14px;margin:10px 0;background:#111;border:1px solid #0f0;border-radius:12px;color:#0f0;font-family:monospace;font-size:15px;transition:all 0.3s;box-sizing:border-box;}
         input:focus{outline:none;box-shadow:0 0 20px rgba(0,255,65,0.2);border-color:#0f0;}
         input::placeholder{color:#444;}
-        button{width:100%;padding:14px;margin-top:20px;background:transparent;border:2px solid #0f0;border-radius:12px;color:#0f0;font-size:16px;font-weight:bold;cursor:pointer;transition:all 0.3s;position:relative;overflow:hidden;}
-        button:hover{background:#0f0;color:#000;transform:translateY(-2px);box-shadow:0 5px 20px rgba(0,255,65,0.3);}
-        button:active{transform:scale(0.98);}
+        button{width:100%;padding:14px;margin-top:16px;background:transparent;border:2px solid #0f0;border-radius:12px;color:#0f0;font-size:16px;font-weight:bold;cursor:pointer;transition:all 0.3s;position:relative;overflow:hidden;}
+        button:hover:not(:disabled){background:#0f0;color:#000;transform:translateY(-2px);box-shadow:0 5px 20px rgba(0,255,65,0.3);}
+        button:active:not(:disabled){transform:scale(0.98);}
+        button:disabled{opacity:0.5;cursor:not-allowed;}
         .btn-whatsapp{background:#25D366;border-color:#25D366;color:white;margin-top:12px;}
-        .btn-whatsapp:hover{background:#128C7E;border-color:#128C7E;color:white;box-shadow:0 5px 20px rgba(37,211,102,0.3);}
+        .btn-whatsapp:hover:not(:disabled){background:#128C7E;border-color:#128C7E;color:white;box-shadow:0 5px 20px rgba(37,211,102,0.3);}
         .error-message{color:#ff4444;font-size:12px;text-align:center;margin-top:12px;display:none;}
         .success-message{color:#0f0;font-size:12px;text-align:center;margin-top:12px;display:none;}
         .login-footer{text-align:center;margin-top:20px;font-size:9px;color:#333;border-top:1px solid #1a1a2e;padding-top:16px;}
-        
-        /* ===== CHAT ===== */
-        .chat-container{display:none;width:100%;height:100%;flex-direction:column;background:#0a0a0f;position:fixed;top:0;left:0;right:0;bottom:0;}
-        .chat-container.active{display:flex;}
-        
-        .chat-header{padding:12px 16px;background:#050508;border-bottom:1px solid #0f0;display:flex;justify-content:space-between;align-items:center;gap:8px;}
-        .chat-header-left{display:flex;align-items:center;gap:10px;}
-        .chat-header h2{font-size:16px;flex:1;text-align:center;overflow:hidden;text-overflow:ellipsis;}
-        .online-badge{font-size:10px;padding:3px 10px;border:1px solid #0f0;border-radius:20px;background:rgba(0,255,0,0.05);}
-        .menu-btn,.logout-btn{background:transparent;border:1px solid #0f0;color:#0f0;padding:6px 12px;border-radius:8px;cursor:pointer;width:auto;margin:0;font-size:12px;transition:all 0.3s;}
-        .logout-btn:hover{border-color:#ff0041;color:#ff0041;}
-        .logout-btn:active{background:#ff0041;border-color:#ff0041;color:white;}
-        
-        .main-content{flex:1;display:flex;overflow:hidden;position:relative;}
-        .sidebar{width:260px;background:#050508;border-right:1px solid #0f0;display:flex;flex-direction:column;flex-shrink:0;}
-        .sidebar-header{padding:16px;border-bottom:1px solid #0f0;}
-        .sidebar-header h3{font-size:14px;}
-        .users-list{flex:1;padding:12px;overflow-y:auto;}
-        .user-item{padding:10px 12px;margin:6px 0;border:1px solid #0f0;border-radius:10px;display:flex;align-items:center;gap:8px;animation:fadeIn 0.3s ease;}
-        .user-item::before{content:"●";color:#0f0;font-size:10px;animation:pulse 2s infinite;}
-        @keyframes pulse{0%,100%{opacity:1;}50%{opacity:0.5;}}
-        @keyframes fadeIn{from{opacity:0;transform:translateY(10px);}to{opacity:1;transform:translateY(0);}}
-        
-        @media (max-width:768px){
-            .sidebar{position:fixed;left:-260px;top:0;bottom:0;z-index:20;transition:left 0.3s ease;}
-            .sidebar.open{left:0;}
-            .overlay{position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.7);z-index:15;display:none;}
-            .overlay.active{display:block;}
-        }
-        @media (min-width:769px){.menu-btn,.overlay{display:none;}}
-        
-        .chat-area{flex:1;display:flex;flex-direction:column;}
-        .messages-container{flex:1;padding:16px;overflow-y:auto;display:flex;flex-direction:column;gap:12px;}
-        .message{max-width:85%;display:flex;flex-direction:column;animation:fadeIn 0.2s ease;position:relative;padding:8px 0;transition:transform 0.2s ease;}
-        .message.sent{align-self:flex-end;}
-        .message.received{align-self:flex-start;}
-        .message-bubble{padding:10px 14px;border-radius:18px;font-size:14px;word-wrap:break-word;overflow-wrap:break-word;word-break:break-word;max-width:100%;position:relative;}
-        .message.sent .message-bubble{background:#0f0;color:#000;border-bottom-right-radius:4px;}
-        .message.received .message-bubble{background:#1a1a2e;border:1px solid #0f0;border-bottom-left-radius:4px;}
-        .message-sender{font-size:10px;margin-bottom:4px;opacity:0.7;padding-left:4px;}
-        .message-time{font-size:9px;margin-top:4px;opacity:0.5;}
-        .message-reply-preview{font-size:11px;color:#ffaa00;margin-bottom:6px;padding:6px 10px;background:rgba(255,170,0,0.08);border-left:3px solid #ffaa00;border-radius:4px;opacity:0.8;cursor:pointer;}
-        .message-reply-preview .reply-sender{color:#ffaa00;font-weight:bold;}
-        .message-reply-preview .reply-text{color:#888;}
-        .system-message{text-align:center;font-size:11px;color:#ffaa00;margin:8px 0;font-style:italic;animation:fadeIn 0.3s ease;}
-        .typing-indicator{padding:8px 16px;color:#0f0;font-style:italic;font-size:11px;min-height:36px;}
-        
-        /* ===== INPUT AREA ===== */
-        .input-area{padding:12px 16px;background:#050508;border-top:1px solid #0f0;display:flex;flex-direction:column;gap:8px;}
-        .reply-preview{display:none;padding:8px 12px;background:rgba(255,170,0,0.1);border-left:3px solid #ffaa00;border-radius:6px;font-size:12px;color:#ffaa00;align-items:center;justify-content:space-between;}
-        .reply-preview .reply-cancel{color:#ff4444;cursor:pointer;font-weight:bold;padding:0 8px;}
-        .reply-preview .reply-cancel:hover{color:#ff6666;}
-        .input-row{display:flex;gap:8px;align-items:flex-end;}
-        .input-row textarea{flex:1;margin:0;padding:12px 16px;background:#111;border:1px solid #0f0;border-radius:12px;color:#0f0;font-family:monospace;font-size:14px;resize:vertical;min-height:50px;max-height:80px;line-height:1.5;overflow-y:auto;}
-        .input-row textarea:focus{outline:none;box-shadow:0 0 20px rgba(0,255,65,0.2);border-color:#0f0;}
-        .input-row textarea::placeholder{color:#444;}
-        .input-row button{width:52px;min-width:52px;margin:0;padding:12px 0;height:50px;align-self:flex-end;position:relative;overflow:hidden;font-size:20px;display:flex;align-items:center;justify-content:center;}
-        .input-row button .btn-text{font-size:20px;line-height:1;}
-        .footer{text-align:center;padding:6px;font-size:8px;color:#333;border-top:1px solid #0f0;}
-        
-        /* ===== VOICE BUTTON - LIKE WHATSAPP ===== */
-        .voice-btn {
-            width:52px;
-            min-width:52px;
-            margin:0;
-            padding:12px 0;
-            height:50px;
-            align-self:flex-end;
-            background:transparent;
-            border:2px solid #0f0;
-            border-radius:50%;
-            color:#0f0;
-            cursor:pointer;
-            font-size:22px;
-            display:flex;
-            align-items:center;
-            justify-content:center;
-            transition:all 0.3s;
-            position:relative;
-            user-select:none;
-            -webkit-user-select:none;
-        }
-        .voice-btn:active {
-            transform:scale(0.92);
-        }
-        .voice-btn.recording {
-            border-color:#ff0041;
-            background:rgba(255,0,65,0.15);
-            transform:scale(1.1);
-            animation:voice-pulse 1s infinite;
-        }
-        .voice-btn.cancelling {
-            border-color:#ffaa00;
-            background:rgba(255,170,0,0.15);
-            transform:translateY(-20px);
-        }
-        .voice-btn .voice-tooltip {
-            position:absolute;
-            bottom:calc(100% + 10px);
-            left:50%;
-            transform:translateX(-50%);
-            background:#1a1a2e;
-            color:#888;
-            padding:6px 12px;
-            border-radius:8px;
-            font-size:10px;
-            white-space:nowrap;
-            border:1px solid #0f0;
-            display:none;
-        }
-        .voice-btn .voice-tooltip.show {
-            display:block;
-        }
-        @keyframes voice-pulse {
-            0%,100% { box-shadow:0 0 0 0 rgba(255,0,65,0.4); }
-            50% { box-shadow:0 0 30px 15px rgba(255,0,65,0.15); }
-        }
-        
-        /* ===== RECORDING STATUS ===== */
-        .recording-status {
-            display:none;
-            align-items:center;
-            gap:12px;
-            padding:10px 16px;
-            background:#1a1a2e;
-            border-radius:12px;
-            margin-top:4px;
-            border:1px solid #ff0041;
-            animation:fadeIn 0.3s ease;
-        }
-        .recording-status.active {
-            display:flex;
-        }
-        #recordingTimer {
-            color:#ff0041;
-            font-size:16px;
-            font-weight:bold;
-            font-family:monospace;
-            min-width:55px;
-        }
-        .recording-wave {
-            flex:1;
-            display:flex;
-            align-items:center;
-            gap:3px;
-            height:30px;
-        }
-        .recording-wave .bar {
-            width:4px;
-            background:#ff0041;
-            border-radius:2px;
-            animation:wave 0.6s ease-in-out infinite alternate;
-        }
-        .recording-wave .bar:nth-child(1) { height:10px; animation-delay:0s; }
-        .recording-wave .bar:nth-child(2) { height:20px; animation-delay:0.1s; }
-        .recording-wave .bar:nth-child(3) { height:28px; animation-delay:0.2s; }
-        .recording-wave .bar:nth-child(4) { height:18px; animation-delay:0.3s; }
-        .recording-wave .bar:nth-child(5) { height:30px; animation-delay:0.4s; }
-        .recording-wave .bar:nth-child(6) { height:22px; animation-delay:0.5s; }
-        .recording-wave .bar:nth-child(7) { height:12px; animation-delay:0.6s; }
-        .recording-wave .bar:nth-child(8) { height:26px; animation-delay:0.7s; }
-        .recording-wave .bar:nth-child(9) { height:16px; animation-delay:0.8s; }
-        .recording-wave .bar:nth-child(10) { height:24px; animation-delay:0.9s; }
-        @keyframes wave {
-            0% { transform:scaleY(0.3); }
-            100% { transform:scaleY(1); }
-        }
-        #recordingStatusText {
-            font-size:11px;
-            color:#ff0041;
-            font-weight:bold;
-            min-width:70px;
-            animation:pulse 1.5s infinite;
-        }
-        #cancelRecordingBtn {
-            background:transparent;
-            border:1px solid #555;
-            color:#888;
-            padding:6px 14px;
-            border-radius:8px;
-            cursor:pointer;
-            font-size:12px;
-            width:auto;
-            margin:0;
-            transition:all 0.3s;
-        }
-        #cancelRecordingBtn:hover {
-            border-color:#ff0041;
-            color:#ff0041;
-        }
-        
-        /* ===== VOICE MESSAGE PLAYER ===== */
-        .message.voice-message .message-bubble {
-            background:rgba(0,255,65,0.08) !important;
-            border:1px solid #0f0;
-        }
-        .voice-play-btn {
-            background:transparent;
-            border:2px solid #0f0;
-            color:#0f0;
-            padding:6px 16px;
-            border-radius:20px;
-            cursor:pointer;
-            font-size:13px;
-            display:inline-flex;
-            align-items:center;
-            gap:10px;
-            transition:all 0.3s;
-            min-width:100px;
-        }
-        .voice-play-btn:hover {
-            background:rgba(0,255,65,0.1);
-        }
-        .voice-play-btn.playing {
-            border-color:#ffaa00;
-            color:#ffaa00;
-        }
-        .voice-progress {
-            width:100px;
-            height:4px;
-            background:#1a1a2e;
-            border-radius:2px;
-            overflow:hidden;
-        }
-        .voice-progress-bar {
-            height:100%;
-            background:#0f0;
-            transition:width 0.1s linear;
-            width:0%;
-        }
-        .voice-duration {
-            font-size:11px;
-            color:#888;
-            min-width:40px;
-            font-family:monospace;
-        }
-        
-        /* ===== SCROLLBAR ===== */
-        ::-webkit-scrollbar{width:3px;}
-        ::-webkit-scrollbar-track{background:#1a1a2e;}
-        ::-webkit-scrollbar-thumb{background:#0f0;}
-        
-        /* ===== OTHER ===== */
-        .connection-status{position:fixed;bottom:70px;right:16px;padding:6px 12px;background:#050508;border:1px solid #0f0;border-radius:20px;font-size:9px;z-index:10;}
-        .status-online{color:#0f0;}
-        .status-offline{color:#ff4444;}
-        
         .separator{display:flex;align-items:center;text-align:center;margin:16px 0;}
         .separator::before,.separator::after{content:'';flex:1;border-bottom:1px solid #1a1a2e;}
         .separator span{padding:0 10px;color:#666;font-size:10px;}
         
-        .admin-panel{display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:#0a0a0f;z-index:50;padding:20px;overflow-y:auto;}
-        .admin-panel.active{display:block;}
-        .admin-panel-header{display:flex;justify-content:space-between;align-items:center;padding:16px;border-bottom:2px solid #0f0;margin-bottom:20px;}
-        .admin-panel-header h2{color:#ffaa00;}
-        .admin-content{display:grid;grid-template-columns:repeat(auto-fit, minmax(300px, 1fr));gap:20px;}
-        .admin-card{background:#050508;border:1px solid #0f0;border-radius:12px;padding:20px;}
-        .admin-card h3{color:#0f0;margin-bottom:12px;font-size:14px;}
-        .admin-card table{width:100%;font-size:11px;border-collapse:collapse;}
-        .admin-card table th{text-align:left;padding:6px;border-bottom:1px solid #1a1a2e;color:#666;}
-        .admin-card table td{padding:6px;border-bottom:1px solid #1a1a2e;}
-        .admin-card input{width:100%;padding:8px;margin:5px 0;background:#111;border:1px solid #0f0;border-radius:6px;color:#0f0;font-size:12px;}
-        .admin-card select{width:100%;padding:8px;margin:5px 0;background:#111;border:1px solid #0f0;border-radius:6px;color:#0f0;font-size:12px;}
-        .admin-card button{width:auto;padding:8px 16px;margin:5px;font-size:12px;position:relative;overflow:hidden;}
-        .close-admin{background:#ff0041;border-color:#ff0041;color:white;padding:8px 16px;border-radius:8px;cursor:pointer;}
-        .close-admin:hover{background:#cc0033;}
-        .admin-stats{display:grid;grid-template-columns:repeat(auto-fit, minmax(150px, 1fr));gap:12px;margin-bottom:20px;}
-        .stat-box{background:#050508;border:1px solid #0f0;border-radius:10px;padding:16px;text-align:center;}
-        .stat-number{font-size:24px;color:#0f0;}
-        .stat-label{font-size:10px;color:#666;margin-top:4px;}
-        .admin-table-wrap{max-height:200px;overflow-y:auto;}
-        .action-btn{background:transparent;border:1px solid #ff0041;color:#ff0041;padding:4px 8px;border-radius:4px;cursor:pointer;font-size:10px;margin:0 2px;position:relative;overflow:hidden;}
-        .action-btn:hover{background:#ff0041;color:white;}
-        .action-btn-green{background:transparent;border:1px solid #0f0;color:#0f0;padding:4px 8px;border-radius:4px;cursor:pointer;font-size:10px;margin:0 2px;position:relative;overflow:hidden;}
-        .action-btn-green:hover{background:#0f0;color:#000;}
-        .admin-close-area{display:flex;justify-content:flex-end;gap:10px;}
-        .admin-username{color:#ffaa00;font-size:12px;margin-left:10px;}
-        
+        /* ===== GATEKEEPER ===== */
         .gatekeeper-container{display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:#0a0a0f;z-index:900;padding:20px;justify-content:center;align-items:center;}
         .gatekeeper-container.active{display:flex;}
         .gatekeeper-card{background:#050508;border:2px solid #0f0;border-radius:24px;padding:32px 24px;width:100%;max-width:420px;}
         .gatekeeper-card h2{text-align:center;margin-bottom:8px;font-size:24px;}
         .gatekeeper-card .sub{text-align:center;margin-bottom:24px;font-size:11px;color:#666;}
         
+        /* ===== USER SETUP ===== */
         .user-setup-container{display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:#0a0a0f;z-index:800;padding:20px;justify-content:center;align-items:center;}
         .user-setup-container.active{display:flex;}
         .user-setup-card{background:#050508;border:2px solid #0f0;border-radius:24px;padding:32px 24px;width:100%;max-width:420px;}
@@ -1884,83 +1542,234 @@ HTML = '''<!DOCTYPE html>
         .user-setup-card .sub{text-align:center;margin-bottom:24px;font-size:11px;color:#666;}
         .user-setup-card input[readonly]{opacity:0.7;cursor:not-allowed;}
         
-        .install-btn{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);z-index:100;padding:14px 28px;background:#0f0;color:#000;border:none;border-radius:14px;font-size:15px;font-weight:bold;cursor:pointer;display:none;box-shadow:0 4px 30px rgba(0,255,65,0.4);transition:all 0.3s;font-family:monospace;letter-spacing:0.5px;position:relative;overflow:hidden;}
-        .install-btn:hover{transform:translateX(-50%) scale(1.05);box-shadow:0 6px 40px rgba(0,255,65,0.6);}
-        .install-btn:active{transform:translateX(-50%) scale(0.95);}
-        .install-btn.show{display:block;}
+        /* ===== CHAT CONTAINER - 3-PART LAYOUT ===== */
+        .chat-container{display:none;width:100%;height:100dvh;min-height:100dvh;flex-direction:column;overflow:hidden;background:#0a0a0f;position:fixed;top:0;left:0;right:0;bottom:0;}
+        .chat-container.active{display:flex;}
         
-        .loading-overlay{position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(10,10,15,0.92);z-index:9999;display:none;justify-content:center;align-items:center;flex-direction:column;gap:30px;}
-        .loading-overlay.active{display:flex;}
-        .loader{width:80px;height:80px;border:3px solid rgba(0,255,65,0.1);border-top:3px solid #0f0;border-radius:50%;animation:spin 0.8s cubic-bezier(0.4,0.0,0.2,1) infinite;box-shadow:0 0 30px rgba(0,255,65,0.15);}
-        .loader-pulse{position:absolute;width:80px;height:80px;border-radius:50%;border:1px solid rgba(0,255,65,0.3);animation:pulse-ring 1.5s cubic-bezier(0.4,0.0,0.2,1) infinite;}
-        .loader-container{position:relative;display:flex;justify-content:center;align-items:center;}
-        .loader-text{color:#0f0;font-size:16px;font-family:monospace;letter-spacing:2px;animation:text-pulse 1.5s ease-in-out infinite;}
-        .loader-dots{display:inline-block;}
-        .loader-dots span{display:inline-block;animation:dot-bounce 1.4s ease-in-out infinite;}
-        .loader-dots span:nth-child(1){animation-delay:0s;}
-        .loader-dots span:nth-child(2){animation-delay:0.2s;}
-        .loader-dots span:nth-child(3){animation-delay:0.4s;}
-        
-        @keyframes spin{0%{transform:rotate(0deg);}100%{transform:rotate(360deg);}}
-        @keyframes pulse-ring{0%{transform:scale(1);opacity:1;}100%{transform:scale(1.6);opacity:0;}}
-        @keyframes text-pulse{0%,100%{opacity:0.6;}50%{opacity:1;}}
-        @keyframes dot-bounce{0%,80%,100%{transform:scale(0);opacity:0.3;}40%{transform:scale(1);opacity:1;}}
-        
-        .group-info{font-size:10px;color:#ffaa00;padding:8px;background:rgba(255,170,0,0.08);border-radius:6px;margin-top:8px;border-left:2px solid #ffaa00;}
-        
-        .offline-overlay{position:fixed;top:0;left:0;right:0;bottom:0;background:#0a0a0f;z-index:99999;display:none;justify-content:center;align-items:center;flex-direction:column;gap:20px;padding:30px;}
-        .offline-overlay.active{display:flex;}
-        .offline-overlay .offline-icon{font-size:60px;margin-bottom:10px;}
-        .offline-overlay h2{color:#ff4444;font-size:24px;text-align:center;}
-        .offline-overlay p{color:#888;font-size:14px;text-align:center;max-width:300px;}
-        .offline-overlay .retry-btn{background:transparent;border:2px solid #0f0;color:#0f0;padding:14px 40px;border-radius:12px;font-size:16px;font-weight:bold;cursor:pointer;transition:all 0.3s;margin-top:10px;}
-        .offline-overlay .retry-btn:hover{background:#0f0;color:#000;}
-        .offline-overlay .retry-btn:active{transform:scale(0.95);}
-        
-        .offline-bar{display:none;background:#ff0041;color:white;text-align:center;padding:6px;font-size:11px;font-weight:bold;position:sticky;top:0;z-index:5;}
-        .offline-bar.active{display:block;}
-        .offline-bar .reconnect-btn{background:white;color:#ff0041;border:none;padding:2px 12px;border-radius:4px;cursor:pointer;margin-left:10px;font-weight:bold;font-size:11px;}
-        .offline-message{text-align:center;color:#ff4444;padding:20px;font-size:14px;}
-        
-        .notification-btn{background:transparent;border:1px solid #0f0;color:#0f0;padding:4px 12px;border-radius:20px;cursor:pointer;font-size:10px;font-family:monospace;transition:all 0.3s;margin-left:8px;}
-        .notification-btn:hover{background:#0f0;color:#000;}
+        /* ===== 1. FIXED HEADER ===== */
+        .chat-header{flex:0 0 auto;position:relative;z-index:20;padding:10px 14px;background:#050508;border-bottom:1px solid #0f0;display:flex;justify-content:space-between;align-items:center;gap:6px;min-height:52px;}
+        .chat-header-left{display:flex;align-items:center;gap:8px;flex:1 1 auto;min-width:0;}
+        .chat-header h2{font-size:15px;flex:1 1 auto;text-align:center;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;}
+        .online-badge{font-size:9px;padding:2px 8px;border:1px solid #0f0;border-radius:20px;background:rgba(0,255,0,0.05);white-space:nowrap;flex-shrink:0;}
+        .menu-btn,.logout-btn{background:transparent;border:1px solid #0f0;color:#0f0;padding:4px 10px;border-radius:6px;cursor:pointer;width:auto;margin:0;font-size:11px;transition:all 0.3s;flex-shrink:0;}
+        .logout-btn:hover{border-color:#ff0041;color:#ff0041;}
+        .notification-btn{background:transparent;border:1px solid #0f0;color:#0f0;padding:2px 8px;border-radius:16px;cursor:pointer;font-size:9px;font-family:monospace;transition:all 0.3s;white-space:nowrap;flex-shrink:0;}
         .notification-btn.enabled{background:#0f0;color:#000;}
-        .notification-btn.enabled:hover{background:transparent;color:#0f0;}
         
-        .media-btn{width:52px;min-width:52px;margin:0;padding:12px 0;height:50px;align-self:flex-end;background:transparent;border:2px solid #0f0;border-radius:50%;color:#0f0;cursor:pointer;font-size:20px;display:flex;align-items:center;justify-content:center;transition:all 0.3s;}
-        .media-btn:hover{background:rgba(0,255,65,0.1);}
-        .message-media{max-width:200px;max-height:200px;border-radius:12px;margin-top:6px;cursor:pointer;}
+        /* ===== OFFLINE BAR ===== */
+        .offline-bar{display:none;background:#ff0041;color:white;text-align:center;padding:4px;font-size:10px;font-weight:bold;flex:0 0 auto;z-index:15;}
+        .offline-bar.active{display:block;}
+        .offline-bar .reconnect-btn{background:white;color:#ff0041;border:none;padding:1px 10px;border-radius:4px;cursor:pointer;margin-left:8px;font-weight:bold;font-size:10px;}
+        
+        /* ===== 2. SCROLLABLE MESSAGES AREA ===== */
+        .main-content{flex:1 1 auto;min-height:0;display:flex;overflow:hidden;position:relative;width:100%;}
+        
+        /* Sidebar */
+        .sidebar{width:240px;background:#050508;border-right:1px solid #0f0;display:flex;flex-direction:column;flex-shrink:0;overflow:hidden;z-index:10;}
+        .sidebar-header{padding:12px;border-bottom:1px solid #0f0;flex:0 0 auto;}
+        .sidebar-header h3{font-size:13px;}
+        .users-list{flex:1 1 auto;min-height:0;padding:10px;overflow-y:auto;overflow-x:hidden;}
+        .user-item{padding:8px 10px;margin:4px 0;border:1px solid #0f0;border-radius:8px;display:flex;align-items:center;gap:6px;animation:fadeIn 0.3s ease;word-break:break-word;font-size:13px;}
+        .user-item::before{content:"●";color:#0f0;font-size:8px;animation:pulse 2s infinite;flex-shrink:0;}
+        @keyframes pulse{0%,100%{opacity:1;}50%{opacity:0.5;}}
+        @keyframes fadeIn{from{opacity:0;transform:translateY(10px);}to{opacity:1;transform:translateY(0);}}
+        
+        /* Overlay for mobile */
+        .overlay{display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.7);z-index:5;}
+        .overlay.active{display:block;}
+        
+        /* Chat Area - THE SCROLLABLE PART */
+        .chat-area{flex:1 1 auto;min-height:0;display:flex;flex-direction:column;overflow:hidden;width:100%;position:relative;}
+        
+        /* Messages Container - THIS SCROLLS */
+        .messages-container{flex:1 1 auto;min-height:0;overflow-y:auto;overflow-x:hidden;padding:12px;padding-bottom:6px;width:100%;box-sizing:border-box;overscroll-behavior:contain;display:flex;flex-direction:column;gap:4px;}
+        
+        /* Typing Indicator */
+        .typing-indicator{flex:0 0 auto;padding:2px 16px 6px 16px;color:#0f0;font-style:italic;font-size:10px;min-height:24px;width:100%;box-sizing:border-box;}
+        
+        /* ===== MESSAGES ===== */
+        .message{max-width:min(85%,700px);display:flex;flex-direction:column;animation:fadeIn 0.2s ease;padding:3px 0;transition:transform 0.2s ease;word-break:break-word;overflow-wrap:anywhere;white-space:pre-wrap;}
+        .message.sent{align-self:flex-end;}
+        .message.received{align-self:flex-start;}
+        .message-bubble{padding:8px 12px;border-radius:16px;font-size:14px;word-wrap:break-word;overflow-wrap:anywhere;word-break:break-word;max-width:100%;position:relative;line-height:1.5;}
+        .message.sent .message-bubble{background:#0f0;color:#000;border-bottom-right-radius:4px;}
+        .message.received .message-bubble{background:#1a1a2e;border:1px solid #0f0;border-bottom-left-radius:4px;}
+        .message-sender{font-size:9px;margin-bottom:3px;opacity:0.7;padding-left:4px;}
+        .message-time{font-size:8px;margin-top:3px;opacity:0.5;}
+        .message-reply-preview{font-size:10px;color:#ffaa00;margin-bottom:4px;padding:4px 8px;background:rgba(255,170,0,0.08);border-left:3px solid #ffaa00;border-radius:4px;opacity:0.8;cursor:pointer;}
+        .message-reply-preview .reply-sender{color:#ffaa00;font-weight:bold;}
+        .system-message{text-align:center;font-size:10px;color:#ffaa00;margin:6px 0;font-style:italic;animation:fadeIn 0.3s ease;}
+        .offline-message{text-align:center;color:#ff4444;padding:20px;font-size:13px;}
+        
+        /* Voice message */
+        .message.voice-message .message-bubble{background:rgba(0,255,65,0.08) !important;border:1px solid #0f0;}
+        .voice-play-btn{background:transparent;border:2px solid #0f0;color:#0f0;padding:4px 12px;border-radius:16px;cursor:pointer;font-size:12px;display:inline-flex;align-items:center;gap:8px;transition:all 0.3s;min-width:80px;}
+        .voice-play-btn:hover{background:rgba(0,255,65,0.1);}
+        .voice-play-btn.playing{border-color:#ffaa00;color:#ffaa00;}
+        .voice-progress{width:80px;height:3px;background:#1a1a2e;border-radius:2px;overflow:hidden;}
+        .voice-progress-bar{height:100%;background:#0f0;transition:width 0.1s linear;width:0%;}
+        .voice-duration{font-size:10px;color:#888;min-width:35px;font-family:monospace;}
+        
+        /* Media */
+        .message-media{max-width:180px;max-height:180px;border-radius:10px;margin-top:4px;cursor:pointer;}
         .message-media:hover{opacity:0.8;}
         
-        .reaction-container{display:flex;gap:6px;margin-top:6px;flex-wrap:wrap;}
-        .reaction-emoji{background:#1a1a2e;padding:2px 8px;border-radius:12px;font-size:12px;cursor:pointer;border:1px solid transparent;transition:all 0.2s;}
+        /* Reactions */
+        .reaction-container{display:flex;gap:4px;margin-top:4px;flex-wrap:wrap;}
+        .reaction-emoji{background:#1a1a2e;padding:1px 6px;border-radius:10px;font-size:11px;cursor:pointer;border:1px solid transparent;transition:all 0.2s;}
         .reaction-emoji:hover{border-color:#0f0;background:#2a2a3e;}
-        .reaction-emoji.active{border-color:#ffaa00;background:rgba(255,170,0,0.1);}
-        .reaction-picker{display:none;position:absolute;bottom:100%;left:0;background:#050508;border:1px solid #0f0;border-radius:12px;padding:8px;z-index:100;box-shadow:0 4px 20px rgba(0,0,0,0.8);}
-        .reaction-picker.active{display:flex;flex-wrap:wrap;gap:4px;max-width:200px;}
-        .reaction-picker span{font-size:20px;cursor:pointer;padding:4px 6px;border-radius:4px;transition:all 0.2s;}
+        .reaction-picker{display:none;position:absolute;bottom:100%;left:0;background:#050508;border:1px solid #0f0;border-radius:10px;padding:6px;z-index:100;box-shadow:0 4px 20px rgba(0,0,0,0.8);}
+        .reaction-picker.active{display:flex;flex-wrap:wrap;gap:3px;max-width:180px;}
+        .reaction-picker span{font-size:18px;cursor:pointer;padding:3px 5px;border-radius:4px;transition:all 0.2s;}
         .reaction-picker span:hover{background:#1a1a2e;}
-        .message-actions{display:flex;gap:6px;margin-top:4px;}
-        .message-actions button{background:transparent;border:none;color:#888;font-size:12px;cursor:pointer;padding:2px 6px;border-radius:4px;}
+        .message-actions{display:flex;gap:4px;margin-top:3px;}
+        .message-actions button{background:transparent;border:none;color:#888;font-size:11px;cursor:pointer;padding:1px 4px;border-radius:4px;}
         .message-actions button:hover{color:#0f0;background:#1a1a2e;}
-        .edit-input{display:none;width:100%;padding:8px;background:#111;border:1px solid #0f0;border-radius:8px;color:#0f0;font-family:monospace;font-size:14px;margin-top:4px;}
-        .edit-input.active{display:block;}
-        .edit-actions{display:none;gap:6px;margin-top:4px;}
-        .edit-actions.active{display:flex;}
-        .edit-actions button{width:auto;padding:4px 12px;font-size:11px;margin:0;}
+        .edit-input{display:none;width:100%;padding:6px;background:#111;border:1px solid #0f0;border-radius:6px;color:#0f0;font-family:monospace;font-size:13px;margin-top:3px;}
+        .read-receipt{font-size:8px;color:#666;margin-top:2px;}
         
-        .read-receipt{font-size:9px;color:#666;margin-top:2px;}
-        .read-receipt .read{color:#0f0;}
+        /* ===== 3. FIXED COMPOSER ===== */
+        .composer{flex:0 0 auto;position:relative;z-index:30;width:100%;box-sizing:border-box;padding:8px;padding-bottom:calc(8px + env(safe-area-inset-bottom,0px));background:#050508;border-top:1px solid #0f0;}
+        .reply-preview{display:none;padding:4px 8px;background:rgba(255,170,0,0.1);border-left:3px solid #ffaa00;border-radius:4px;font-size:11px;color:#ffaa00;align-items:center;justify-content:space-between;margin-bottom:4px;}
+        .reply-preview .reply-cancel{color:#ff4444;cursor:pointer;font-weight:bold;padding:0 6px;}
+        .composer-row{display:flex;align-items:flex-end;gap:6px;width:100%;box-sizing:border-box;}
+        .message-input{flex:1 1 auto;min-width:0;margin:0;padding:10px 14px;background:#111;border:1px solid #0f0;border-radius:10px;color:#0f0;font-family:monospace;font-size:13px;resize:none;max-height:120px;min-height:42px;line-height:1.5;overflow-y:auto;box-sizing:border-box;}
+        .message-input:focus{outline:none;box-shadow:0 0 20px rgba(0,255,65,0.2);border-color:#0f0;}
+        .message-input::placeholder{color:#444;}
         
-        @media (max-width:480px){
+        .voice-btn,.media-btn,.send-btn{flex:0 0 42px;width:42px;min-width:42px;height:42px;margin:0;padding:0;align-self:flex-end;background:transparent;border:2px solid #0f0;border-radius:50%;color:#0f0;cursor:pointer;font-size:16px;display:flex;align-items:center;justify-content:center;transition:all 0.3s;position:relative;user-select:none;-webkit-user-select:none;}
+        .voice-btn:active,.media-btn:active,.send-btn:active{transform:scale(0.92);}
+        .voice-btn{font-size:18px;}
+        .voice-btn.recording{border-color:#ff0041;background:rgba(255,0,65,0.15);transform:scale(1.1);animation:voice-pulse 1s infinite;}
+        .voice-btn.cancelling{border-color:#ffaa00;background:rgba(255,170,0,0.15);transform:translateY(-16px);}
+        .send-btn{background:#0f0;color:#000;font-size:18px;font-weight:bold;}
+        .send-btn:hover{background:#00cc00;}
+        .media-btn:hover{background:rgba(0,255,65,0.1);}
+        @keyframes voice-pulse{0%,100%{box-shadow:0 0 0 0 rgba(255,0,65,0.4);}50%{box-shadow:0 0 20px 10px rgba(255,0,65,0.15);}}
+        
+        /* Recording Status */
+        .recording-status{display:none;align-items:center;gap:8px;padding:6px 12px;margin-top:4px;background:#1a1a2e;border-radius:10px;border:1px solid #ff0041;animation:fadeIn 0.3s ease;}
+        .recording-status.active{display:flex;}
+        #recordingTimer{color:#ff0041;font-size:14px;font-weight:bold;font-family:monospace;min-width:44px;}
+        .recording-wave{flex:1;display:flex;align-items:center;gap:2px;height:24px;}
+        .recording-wave .bar{width:3px;background:#ff0041;border-radius:2px;animation:wave 0.6s ease-in-out infinite alternate;}
+        .recording-wave .bar:nth-child(1){height:6px;animation-delay:0s;}
+        .recording-wave .bar:nth-child(2){height:14px;animation-delay:0.1s;}
+        .recording-wave .bar:nth-child(3){height:20px;animation-delay:0.2s;}
+        .recording-wave .bar:nth-child(4){height:12px;animation-delay:0.3s;}
+        .recording-wave .bar:nth-child(5){height:24px;animation-delay:0.4s;}
+        .recording-wave .bar:nth-child(6){height:18px;animation-delay:0.5s;}
+        .recording-wave .bar:nth-child(7){height:8px;animation-delay:0.6s;}
+        .recording-wave .bar:nth-child(8){height:16px;animation-delay:0.7s;}
+        .recording-wave .bar:nth-child(9){height:10px;animation-delay:0.8s;}
+        .recording-wave .bar:nth-child(10){height:22px;animation-delay:0.9s;}
+        @keyframes wave{0%{transform:scaleY(0.3);}100%{transform:scaleY(1);}}
+        #recordingStatusText{font-size:10px;color:#ff0041;font-weight:bold;min-width:60px;animation:pulse 1.5s infinite;}
+        #cancelRecordingBtn{background:transparent;border:1px solid #555;color:#888;padding:2px 10px;border-radius:4px;cursor:pointer;font-size:11px;width:auto;margin:0;transition:all 0.3s;}
+        #cancelRecordingBtn:hover{border-color:#ff0041;color:#ff0041;}
+        
+        .footer{text-align:center;padding:4px 0 0 0;font-size:7px;color:#333;border-top:1px solid #1a1a2e;margin-top:4px;}
+        
+        /* ===== CONNECTION STATUS ===== */
+        .connection-status{position:fixed;bottom:70px;right:12px;padding:4px 10px;background:#050508;border:1px solid #0f0;border-radius:16px;font-size:8px;z-index:40;}
+        .status-online{color:#0f0;}
+        .status-offline{color:#ff4444;}
+        
+        /* ===== ADMIN PANEL ===== */
+        .admin-panel{display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:#0a0a0f;z-index:50;padding:16px;overflow-y:auto;}
+        .admin-panel.active{display:block;}
+        .admin-panel-header{display:flex;justify-content:space-between;align-items:center;padding:12px;border-bottom:2px solid #0f0;margin-bottom:16px;}
+        .admin-panel-header h2{color:#ffaa00;font-size:18px;}
+        .admin-content{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:16px;}
+        .admin-card{background:#050508;border:1px solid #0f0;border-radius:10px;padding:16px;}
+        .admin-card h3{color:#0f0;margin-bottom:10px;font-size:13px;}
+        .admin-card table{width:100%;font-size:10px;border-collapse:collapse;}
+        .admin-card table th{text-align:left;padding:4px;border-bottom:1px solid #1a1a2e;color:#666;}
+        .admin-card table td{padding:4px;border-bottom:1px solid #1a1a2e;}
+        .admin-card input{width:100%;padding:6px;margin:4px 0;background:#111;border:1px solid #0f0;border-radius:4px;color:#0f0;font-size:11px;box-sizing:border-box;}
+        .admin-card button{width:auto;padding:6px 14px;margin:4px;font-size:11px;}
+        .close-admin{background:#ff0041;border-color:#ff0041;color:white;padding:6px 14px;border-radius:6px;cursor:pointer;}
+        .close-admin:hover{background:#cc0033;}
+        .admin-stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:10px;margin-bottom:16px;}
+        .stat-box{background:#050508;border:1px solid #0f0;border-radius:8px;padding:12px;text-align:center;}
+        .stat-number{font-size:20px;color:#0f0;}
+        .stat-label{font-size:9px;color:#666;margin-top:2px;}
+        .admin-table-wrap{max-height:160px;overflow-y:auto;}
+        .action-btn{background:transparent;border:1px solid #ff0041;color:#ff0041;padding:2px 6px;border-radius:3px;cursor:pointer;font-size:9px;margin:0 1px;}
+        .action-btn:hover{background:#ff0041;color:white;}
+        .action-btn-green{background:transparent;border:1px solid #0f0;color:#0f0;padding:2px 6px;border-radius:3px;cursor:pointer;font-size:9px;margin:0 1px;}
+        .action-btn-green:hover{background:#0f0;color:#000;}
+        .admin-username{color:#ffaa00;font-size:11px;margin-left:8px;}
+        .group-info{font-size:9px;color:#ffaa00;padding:6px;background:rgba(255,170,0,0.08);border-radius:4px;margin-top:6px;border-left:2px solid #ffaa00;}
+        
+        /* ===== LOADING ===== */
+        .loading-overlay{position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(10,10,15,0.95);z-index:9999;display:none;justify-content:center;align-items:center;flex-direction:column;gap:20px;}
+        .loading-overlay.active{display:flex;}
+        .loader{width:60px;height:60px;border:3px solid rgba(0,255,65,0.1);border-top:3px solid #0f0;border-radius:50%;animation:spin 0.8s cubic-bezier(0.4,0.0,0.2,1) infinite;box-shadow:0 0 20px rgba(0,255,65,0.15);}
+        .loader-pulse{position:absolute;width:60px;height:60px;border-radius:50%;border:1px solid rgba(0,255,65,0.3);animation:pulse-ring 1.5s cubic-bezier(0.4,0.0,0.2,1) infinite;}
+        .loader-container{position:relative;display:flex;justify-content:center;align-items:center;}
+        .loader-text{color:#0f0;font-size:14px;font-family:monospace;letter-spacing:2px;animation:text-pulse 1.5s ease-in-out infinite;}
+        @keyframes spin{0%{transform:rotate(0deg);}100%{transform:rotate(360deg);}}
+        @keyframes pulse-ring{0%{transform:scale(1);opacity:1;}100%{transform:scale(1.5);opacity:0;}}
+        @keyframes text-pulse{0%,100%{opacity:0.6;}50%{opacity:1;}}
+        
+        /* ===== OFFLINE OVERLAY ===== */
+        .offline-overlay{position:fixed;top:0;left:0;right:0;bottom:0;background:#0a0a0f;z-index:99999;display:none;justify-content:center;align-items:center;flex-direction:column;gap:16px;padding:30px;}
+        .offline-overlay.active{display:flex;}
+        .offline-overlay .offline-icon{font-size:48px;margin-bottom:8px;}
+        .offline-overlay h2{color:#ff4444;font-size:22px;text-align:center;}
+        .offline-overlay p{color:#888;font-size:13px;text-align:center;max-width:280px;}
+        .offline-overlay .retry-btn{background:transparent;border:2px solid #0f0;color:#0f0;padding:12px 32px;border-radius:10px;font-size:14px;font-weight:bold;cursor:pointer;transition:all 0.3s;margin-top:8px;}
+        .offline-overlay .retry-btn:hover{background:#0f0;color:#000;}
+        
+        /* ===== INSTALL BUTTON ===== */
+        .install-btn{position:fixed;bottom:16px;left:50%;transform:translateX(-50%);z-index:100;padding:10px 24px;background:#0f0;color:#000;border:none;border-radius:12px;font-size:13px;font-weight:bold;cursor:pointer;display:none;box-shadow:0 4px 20px rgba(0,255,65,0.3);transition:all 0.3s;font-family:monospace;}
+        .install-btn:hover{transform:translateX(-50%) scale(1.05);}
+        .install-btn.show{display:block;}
+        
+        /* ===== SCROLLBAR ===== */
+        .messages-container::-webkit-scrollbar,.users-list::-webkit-scrollbar{width:3px;}
+        .messages-container::-webkit-scrollbar-track,.users-list::-webkit-scrollbar-track{background:#1a1a2e;}
+        .messages-container::-webkit-scrollbar-thumb,.users-list::-webkit-scrollbar-thumb{background:#0f0;border-radius:2px;}
+        .messages-container{scrollbar-width:thin;scrollbar-color:#0f0 #1a1a2e;}
+        
+        /* ===== RESPONSIVE ===== */
+        @media (max-width:768px){
+            .sidebar{position:fixed;left:-240px;top:0;bottom:0;z-index:20;transition:left 0.3s ease;width:240px;}
+            .sidebar.open{left:0;}
+            .overlay.active{display:block;}
+            .chat-header h2{font-size:13px;}
+            .voice-btn,.media-btn,.send-btn{flex:0 0 38px;width:38px;min-width:38px;height:38px;font-size:14px;}
+            .voice-btn{font-size:16px;}
+            .message-input{font-size:12px;padding:8px 12px;min-height:38px;}
+            .message{max-width:88%;}
+            .message-bubble{font-size:13px;padding:6px 10px;}
+            .composer{padding:6px;padding-bottom:calc(6px + env(safe-area-inset-bottom,0px));}
+            .connection-status{bottom:62px;right:10px;font-size:7px;padding:3px 8px;}
             .voice-progress{width:60px;}
-            .message-media{max-width:150px;max-height:150px;}
-            .input-row textarea{font-size:13px;padding:10px 12px;}
-            .input-row button{width:46px;min-width:46px;height:44px;font-size:18px;}
-            .voice-btn,.media-btn{width:46px;min-width:46px;height:44px;font-size:18px;}
-            #recordingTimer{font-size:14px;min-width:45px;}
-            .recording-wave{height:24px;}
-            .recording-wave .bar{width:3px;}
+            .message-media{max-width:140px;max-height:140px;}
+            .recording-wave{height:20px;}
+            .recording-wave .bar{width:2px;}
+            #recordingTimer{font-size:12px;min-width:38px;}
+            .admin-panel{padding:12px;}
+            .admin-content{grid-template-columns:1fr;}
+            .login-card{padding:24px 16px;}
+            h1{font-size:24px;}
+        }
+        @media (max-width:480px){
+            .chat-header{padding:6px 10px;min-height:44px;}
+            .online-badge{font-size:8px;padding:1px 6px;}
+            .menu-btn,.logout-btn{font-size:9px;padding:3px 8px;}
+            .message{max-width:92%;}
+            .message-bubble{font-size:12px;padding:6px 10px;}
+            .message-input{font-size:12px;padding:6px 10px;min-height:36px;}
+            .voice-btn,.media-btn,.send-btn{flex:0 0 34px;width:34px;min-width:34px;height:34px;font-size:13px;}
+            .voice-btn{font-size:15px;}
+            .voice-play-btn{font-size:11px;padding:3px 10px;min-width:70px;}
+            .voice-progress{width:50px;}
+            .reaction-emoji{font-size:10px;padding:0 4px;}
+            .admin-panel-header h2{font-size:16px;}
+            .stat-number{font-size:18px;}
         }
     </style>
 </head>
@@ -1972,10 +1781,7 @@ HTML = '''<!DOCTYPE html>
         <div class="loader-pulse"></div>
         <div class="loader"></div>
     </div>
-    <div class="loader-text">
-        <span id="loadingText">Loading</span>
-        <span class="loader-dots"><span>.</span><span>.</span><span>.</span></span>
-    </div>
+    <div class="loader-text">Loading<span class="loader-dots"><span>.</span><span>.</span><span>.</span></span></div>
 </div>
 
 <!-- ===== OFFLINE OVERLAY ===== -->
@@ -1992,12 +1798,12 @@ HTML = '''<!DOCTYPE html>
         <div class="login-card-inner">
             <h1># ABAVANDIMWE</h1>
             <div class="sub">Secure Messaging System</div>
-            <div style="text-align:center;"><span class="admin-badge">🔐 Gatekeeper</span></div>
+            <span class="admin-badge">🔐 Gatekeeper</span>
             <input type="text" id="loginUsername" placeholder="Username" autocomplete="username">
             <input type="password" id="loginPassword" placeholder="Password" autocomplete="current-password">
             <button id="loginBtn">▶ Login</button>
             <div class="separator"><span>OR</span></div>
-            <button class="btn-whatsapp" onclick="requestAccess()">💬 Request Access on WhatsApp</button>
+            <button id="whatsappBtn" class="btn-whatsapp">💬 Request Access on WhatsApp</button>
             <div id="loginError" class="error-message"></div>
             <div id="loginSuccess" class="success-message"></div>
             <div class="login-footer">🔒 AES-256 | ⏰ Messages auto-delete after 24 hours<br><span style="color:#1a1a2e;">Developed by Mugisha Pc</span></div>
@@ -2009,7 +1815,7 @@ HTML = '''<!DOCTYPE html>
 <div id="adminPanel" class="admin-panel">
     <div class="admin-panel-header">
         <h2>⚙️ Admin Dashboard <span class="admin-username">(Logged in as: <span id="adminUsername">Mpc</span>)</span></h2>
-        <div><button class="close-admin" onclick="logout()">🚪 Logout</button></div>
+        <button class="close-admin" onclick="logout()">🚪 Logout</button>
     </div>
     <div class="admin-stats" id="adminStats">
         <div class="stat-box"><div class="stat-number" id="statUsers">0</div><div class="stat-label">Total Users</div></div>
@@ -2020,42 +1826,32 @@ HTML = '''<!DOCTYPE html>
     <div class="admin-content">
         <div class="admin-card">
             <h3>👤 Create User</h3>
-            <div style="margin-bottom:12px;">
-                <input type="text" id="newUsername" placeholder="Username" style="width:100%;">
-                <input type="text" id="newPassword" placeholder="Password" style="width:100%;">
-                <input type="text" id="newGroupName" placeholder="Group Name" style="width:100%;">
-                <input type="text" id="newGroupPassword" placeholder="Group Password" style="width:100%;">
-                <button onclick="createUser()" class="action-btn-green">➕ Create User</button>
-            </div>
-            <div class="group-info">⚠️ If the group already exists, the Group Password you enter MUST match the existing group password!</div>
+            <input type="text" id="newUsername" placeholder="Username">
+            <input type="text" id="newPassword" placeholder="Password">
+            <input type="text" id="newGroupName" placeholder="Group Name">
+            <input type="text" id="newGroupPassword" placeholder="Group Password">
+            <button onclick="createUser()" class="action-btn-green">➕ Create User</button>
+            <div class="group-info">⚠️ Group password must match existing group if it already exists</div>
         </div>
         <div class="admin-card">
             <h3>📋 Users</h3>
-            <div class="admin-table-wrap">
-                <table><thead><tr><th>Username</th><th>Group</th><th>Display Name</th><th>Status</th><th>Action</th></tr></thead>
-                <tbody id="usersTableBody"></tbody></table>
-            </div>
+            <div class="admin-table-wrap"><table><thead><tr><th>Username</th><th>Group</th><th>Status</th><th>Action</th></tr></thead>
+            <tbody id="usersTableBody"></tbody></table></div>
         </div>
         <div class="admin-card">
             <h3>📁 Groups</h3>
-            <div class="admin-table-wrap">
-                <table><thead><tr><th>Group Name</th><th>Created By</th><th>Action</th></tr></thead>
-                <tbody id="groupsTableBody"></tbody></table>
-            </div>
+            <div class="admin-table-wrap"><table><thead><tr><th>Group Name</th><th>Created By</th><th>Action</th></tr></thead>
+            <tbody id="groupsTableBody"></tbody></table></div>
         </div>
         <div class="admin-card">
             <h3>📨 Recent Messages</h3>
-            <div class="admin-table-wrap">
-                <table><thead><tr><th>Sender</th><th>Group</th><th>Time</th><th>Action</th></tr></thead>
-                <tbody id="messagesTableBody"></tbody></table>
-            </div>
+            <div class="admin-table-wrap"><table><thead><tr><th>Sender</th><th>Group</th><th>Action</th></tr></thead>
+            <tbody id="messagesTableBody"></tbody></table></div>
         </div>
         <div class="admin-card">
             <h3>📋 Admin Logs</h3>
-            <div class="admin-table-wrap">
-                <table><thead><tr><th>Admin</th><th>Action</th><th>Target</th><th>Time</th></tr></thead>
-                <tbody id="logsTableBody"></tbody></table>
-            </div>
+            <div class="admin-table-wrap"><table><thead><tr><th>Admin</th><th>Action</th><th>Target</th></tr></thead>
+            <tbody id="logsTableBody"></tbody></table></div>
         </div>
     </div>
 </div>
@@ -2069,7 +1865,7 @@ HTML = '''<!DOCTYPE html>
         <input type="password" id="gatekeeperPassword" placeholder="Password">
         <button id="gatekeeperBtn">▶ Verify</button>
         <div id="gatekeeperError" class="error-message"></div>
-        <div class="login-footer" style="margin-top:20px;padding-top:16px;border-top:1px solid #1a1a2e;">🔒 Credentials provided by admin</div>
+        <div class="login-footer" style="margin-top:16px;padding-top:12px;">🔒 Credentials provided by admin</div>
     </div>
 </div>
 
@@ -2078,18 +1874,19 @@ HTML = '''<!DOCTYPE html>
     <div class="user-setup-card">
         <h2>👤 Setup Profile</h2>
         <div class="sub">Enter your display name to start chatting</div>
-        <input type="text" id="userDisplayName" placeholder="Your Display Name (e.g., John Doe)">
+        <input type="text" id="userDisplayName" placeholder="Your Display Name">
         <input type="text" id="userGroupName" placeholder="Group Name" readonly>
         <input type="password" id="userGroupPassword" placeholder="Group Password" readonly>
         <button id="enterChatBtn">▶ Enter Chat</button>
         <div id="setupError" class="error-message"></div>
         <div id="setupSuccess" class="success-message"></div>
-        <div class="login-footer" style="margin-top:20px;padding-top:16px;border-top:1px solid #1a1a2e;">🔐 You'll be able to see messages from others in your group</div>
+        <div class="login-footer" style="margin-top:16px;padding-top:12px;">🔐 You'll be able to see messages from others in your group</div>
     </div>
 </div>
 
 <!-- ===== CHAT ===== -->
 <div id="chatScreen" class="chat-container">
+    <!-- 1. HEADER -->
     <div class="chat-header">
         <div class="chat-header-left">
             <button class="menu-btn" onclick="toggleSidebar()">☰</button>
@@ -2099,53 +1896,47 @@ HTML = '''<!DOCTYPE html>
         <h2 id="groupTitle"># LOADING</h2>
         <button class="logout-btn" onclick="logout()">Leave</button>
     </div>
+    
+    <!-- Offline Bar -->
     <div class="offline-bar" id="offlineBar">⚠️ No internet connection <button class="reconnect-btn" onclick="reconnectManually()">↻ Retry</button></div>
+    
+    <!-- 2. MESSAGES AREA -->
     <div class="main-content">
         <div class="sidebar" id="sidebar">
             <div class="sidebar-header"><h3>● Online Users</h3></div>
             <div class="users-list" id="usersList"><div class="user-item">Loading...</div></div>
         </div>
         <div class="overlay" id="overlay" onclick="toggleSidebar()"></div>
+        
         <div class="chat-area">
             <div class="messages-container" id="messages"><div style="text-align:center;color:#666;padding:40px 0;">Connecting...</div></div>
             <div class="typing-indicator" id="typingIndicator"></div>
-            <div class="input-area">
-                <div class="reply-preview" id="replyPreview">
-                    <span>↩️ Replying to <span id="replyPreviewSender" style="color:#ffaa00;font-weight:bold;"></span>: <span id="replyPreviewText" style="color:#888;"></span></span>
-                    <span class="reply-cancel" onclick="cancelReply()">✕</span>
-                </div>
-                <div class="input-row">
-                    <textarea id="messageInput" placeholder="Type a message..." rows="2"></textarea>
-                    <!-- VOICE BUTTON - Hold to Record like WhatsApp -->
-                    <button class="voice-btn" id="voiceBtn"
-                            onmousedown="startHoldRecording()" 
-                            onmouseup="stopHoldRecording()" 
-                            onmouseleave="stopHoldRecording()"
-                            ontouchstart="startHoldRecording()" 
-                            ontouchend="stopHoldRecording()" 
-                            ontouchcancel="stopHoldRecording()">
-                        <span id="voiceIcon">🎙️</span>
-                        <span class="voice-tooltip" id="voiceTooltip">Hold to record</span>
-                    </button>
-                    <button class="media-btn" onclick="shareMedia()">📎</button>
-                    <button onclick="sendMessage()"><span class="btn-text">➥</span></button>
-                </div>
-                <!-- RECORDING STATUS -->
-                <div class="recording-status" id="recordingStatus">
-                    <span id="recordingTimer">00:00</span>
-                    <div class="recording-wave">
-                        <span class="bar"></span><span class="bar"></span><span class="bar"></span>
-                        <span class="bar"></span><span class="bar"></span><span class="bar"></span>
-                        <span class="bar"></span><span class="bar"></span><span class="bar"></span>
-                        <span class="bar"></span>
-                    </div>
-                    <span id="recordingStatusText">🔴 Recording</span>
-                    <button id="cancelRecordingBtn" onclick="cancelRecording()">✕ Cancel</button>
-                </div>
-            </div>
-            <div class="footer">🔐 End-to-End Encrypted | Messages self-destruct after 24 hours</div>
         </div>
     </div>
+    
+    <!-- 3. COMPOSER -->
+    <div class="composer">
+        <div class="reply-preview" id="replyPreview">
+            <span>↩️ Replying to <span id="replyPreviewSender" style="color:#ffaa00;font-weight:bold;"></span>: <span id="replyPreviewText" style="color:#888;"></span></span>
+            <span class="reply-cancel" onclick="cancelReply()">✕</span>
+        </div>
+        <div class="composer-row">
+            <textarea class="message-input" id="messageInput" placeholder="Type a message..." rows="1"></textarea>
+            <button class="voice-btn" id="voiceBtn" onmousedown="startHoldRecording()" onmouseup="stopHoldRecording()" onmouseleave="stopHoldRecording()" ontouchstart="startHoldRecording()" ontouchend="stopHoldRecording()" ontouchcancel="stopHoldRecording()">
+                <span id="voiceIcon">🎙️</span>
+            </button>
+            <button class="media-btn" onclick="shareMedia()">📎</button>
+            <button class="send-btn" onclick="sendMessage()">➤</button>
+        </div>
+        <div class="recording-status" id="recordingStatus">
+            <span id="recordingTimer">00:00</span>
+            <div class="recording-wave"><span class="bar"></span><span class="bar"></span><span class="bar"></span><span class="bar"></span><span class="bar"></span><span class="bar"></span><span class="bar"></span><span class="bar"></span><span class="bar"></span><span class="bar"></span></div>
+            <span id="recordingStatusText">🔴 Recording</span>
+            <button id="cancelRecordingBtn" onclick="cancelRecording()">✕ Cancel</button>
+        </div>
+        <div class="footer">🔐 End-to-End Encrypted | Messages self-destruct after 24 hours</div>
+    </div>
+    
     <div class="connection-status status-online" id="connectionStatus">🟢 Connected</div>
 </div>
 
@@ -2180,11 +1971,23 @@ let touchStartY = 0;
 let touchCurrentY = 0;
 let isSwipingUp = false;
 
+// ========== DOM REFS ==========
+const loginBtn = document.getElementById('loginBtn');
+const whatsappBtn = document.getElementById('whatsappBtn');
+const gatekeeperBtn = document.getElementById('gatekeeperBtn');
+const enterChatBtn = document.getElementById('enterChatBtn');
+const voiceBtn = document.getElementById('voiceBtn');
+const voiceIcon = document.getElementById('voiceIcon');
+const recordingStatus = document.getElementById('recordingStatus');
+const recordingTimerEl = document.getElementById('recordingTimer');
+const recordingStatusText = document.getElementById('recordingStatusText');
+const cancelRecordingBtn = document.getElementById('cancelRecordingBtn');
+
 // ========== LOADING OVERLAY ==========
 function showLoading(text, callback) {
     const overlay = document.getElementById('loadingOverlay');
-    const loadingText = document.getElementById('loadingText');
-    loadingText.textContent = text;
+    const loadingText = overlay.querySelector('.loader-text');
+    loadingText.innerHTML = text + '<span class="loader-dots"><span>.</span><span>.</span><span>.</span></span>';
     overlay.classList.add('active');
     setTimeout(async () => {
         try { await callback(); } catch(e) { console.error(e); }
@@ -2225,7 +2028,7 @@ async function installApp() {
         deferredPrompt = null;
     }
 }
-document.getElementById('installBtn').addEventListener('click', installApp);
+installBtn.addEventListener('click', installApp);
 window.addEventListener('appinstalled', () => installBtn.classList.remove('show'));
 if (window.matchMedia('(display-mode: standalone)').matches || navigator.standalone) {
     installBtn.classList.remove('show');
@@ -2382,32 +2185,67 @@ document.getElementById('retryOfflineBtn').addEventListener('click', function() 
 document.addEventListener('DOMContentLoaded', function() {
     if (!navigator.onLine) showOfflineOverlay();
 
-    document.getElementById('loginBtn').addEventListener('click', function(e) {
-        if (this.classList.contains('btn-loading')) return;
-        showLoading('Logging in', login);
+    // ===== LOGIN BUTTON =====
+    loginBtn.addEventListener('click', function(e) {
+        e.preventDefault();
+        if (this.disabled) return;
+        showLoading('Logging in', handleLogin);
     });
-    document.getElementById('gatekeeperBtn').addEventListener('click', function(e) {
-        if (this.classList.contains('btn-loading')) return;
-        showLoading('Verifying', gatekeeperLogin);
+
+    // ===== WHATSAPP BUTTON =====
+    whatsappBtn.addEventListener('click', function(e) {
+        e.preventDefault();
+        requestAccess();
     });
-    document.getElementById('enterChatBtn').addEventListener('click', function(e) {
-        if (this.classList.contains('btn-loading')) return;
-        showLoading('Entering Chat', enterChat);
+
+    // ===== GATEKEEPER BUTTON =====
+    gatekeeperBtn.addEventListener('click', function(e) {
+        e.preventDefault();
+        if (this.disabled) return;
+        showLoading('Verifying', handleGatekeeperLogin);
     });
-    
+
+    // ===== ENTER CHAT BUTTON =====
+    enterChatBtn.addEventListener('click', function(e) {
+        e.preventDefault();
+        if (this.disabled) return;
+        showLoading('Entering Chat', handleEnterChat);
+    });
+
+    // ===== ENTER KEY FOR LOGIN =====
     document.getElementById('loginPassword').addEventListener('keypress', function(e) {
-        if(e.key === 'Enter') showLoading('Logging in', login);
+        if(e.key === 'Enter') {
+            e.preventDefault();
+            loginBtn.click();
+        }
     });
+    document.getElementById('loginUsername').addEventListener('keypress', function(e) {
+        if(e.key === 'Enter') {
+            e.preventDefault();
+            loginBtn.click();
+        }
+    });
+
+    // ===== ENTER KEY FOR GATEKEEPER =====
     document.getElementById('gatekeeperPassword').addEventListener('keypress', function(e) {
-        if(e.key === 'Enter') showLoading('Verifying', gatekeeperLogin);
+        if(e.key === 'Enter') {
+            e.preventDefault();
+            gatekeeperBtn.click();
+        }
     });
+
+    // ===== ENTER KEY FOR USER SETUP =====
     document.getElementById('userDisplayName').addEventListener('keypress', function(e) {
-        if(e.key === 'Enter') showLoading('Entering Chat', enterChat);
+        if(e.key === 'Enter') {
+            e.preventDefault();
+            enterChatBtn.click();
+        }
     });
-    
+
+    // ===== MESSAGE INPUT =====
     document.getElementById('messageInput').addEventListener('input', function() {
         this.style.height = 'auto';
-        this.style.height = Math.min(this.scrollHeight, 80) + 'px';
+        this.style.height = Math.min(this.scrollHeight, 120) + 'px';
         if(ws && ws.readyState === WebSocket.OPEN) {
             ws.send(JSON.stringify({type:'typing'}));
             clearTimeout(typingTimeout);
@@ -2418,6 +2256,15 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     });
 
+    // ===== ENTER KEY FOR MESSAGE (Shift+Enter = new line) =====
+    document.getElementById('messageInput').addEventListener('keydown', function(e) {
+        if(e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault();
+            sendMessage();
+        }
+    });
+
+    // ===== VISIBILITY CHANGE =====
     document.addEventListener('visibilitychange', function() {
         if (document.visibilityState === 'visible' && document.getElementById('chatScreen').classList.contains('active')) {
             if (!navigator.onLine) clearMessagesOffline();
@@ -2427,6 +2274,7 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     });
 
+    // ===== ONLINE/OFFLINE EVENTS =====
     window.addEventListener('online', function() {
         if (offlineOverlay.classList.contains('active')) {
             if (lastActiveScreen === 'chat' && window.chatUsername && window.chatGroup) {
@@ -2453,6 +2301,7 @@ document.addEventListener('DOMContentLoaded', function() {
         if (document.getElementById('chatScreen').classList.contains('active')) clearMessagesOffline();
     });
     
+    // ===== PUSH NOTIFICATIONS =====
     if (isPushSupported()) {
         getVapidPublicKey();
         if (window.swRegistration) {
@@ -2469,19 +2318,6 @@ document.addEventListener('DOMContentLoaded', function() {
         const btn = document.getElementById('notificationBtn');
         if (btn) btn.style.display = 'none';
     }
-    
-    // Show tooltip on voice button
-    const voiceBtn = document.getElementById('voiceBtn');
-    const tooltip = document.getElementById('voiceTooltip');
-    voiceBtn.addEventListener('mouseenter', () => {
-        if (!isRecording) tooltip.classList.add('show');
-    });
-    voiceBtn.addEventListener('mouseleave', () => {
-        tooltip.classList.remove('show');
-    });
-    voiceBtn.addEventListener('touchstart', () => {
-        tooltip.classList.remove('show');
-    });
 });
 
 function clearMessagesOffline() {
@@ -2494,24 +2330,32 @@ function clearMessagesOffline() {
 }
 
 // ========== LOGIN ==========
-async function login() {
+async function handleLogin() {
     const username = document.getElementById('loginUsername').value.trim();
     const password = document.getElementById('loginPassword').value;
+    
     if(!username || !password) {
         showError('Please enter username and password');
         hideLoading();
         return;
     }
+    
+    loginBtn.textContent = '⏳';
+    loginBtn.disabled = true;
+    
     try {
         const response = await fetch('/login', {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
             body: JSON.stringify({username, password})
         });
+        
         const data = await response.json();
+        
         if(data.success) {
             currentUser = {username: data.username, role: data.role};
             hideLoading();
+            
             if(data.role === 'admin') {
                 document.getElementById('loginScreen').style.display = 'none';
                 document.getElementById('adminPanel').classList.add('active');
@@ -2522,6 +2366,7 @@ async function login() {
                 document.getElementById('gatekeeperScreen').classList.add('active');
                 document.getElementById('gatekeeperUsername').value = data.username;
                 document.getElementById('gatekeeperPassword').value = '';
+                
                 if(data.display_name) {
                     const successDiv = document.createElement('div');
                     successDiv.id = 'gatekeeperSuccess';
@@ -2539,34 +2384,46 @@ async function login() {
         }
     } catch(e) {
         console.error('Login error:', e);
-        showError('Connection error. Please try again.');
+        showError('Connection error. Please check your internet and try again.');
         hideLoading();
+    } finally {
+        loginBtn.textContent = '▶ Login';
+        loginBtn.disabled = false;
     }
 }
 
 // ========== GATEKEEPER ==========
-async function gatekeeperLogin() {
+async function handleGatekeeperLogin() {
     const username = document.getElementById('gatekeeperUsername').value.trim();
     const password = document.getElementById('gatekeeperPassword').value;
+    
     if(!username || !password) {
         showGatekeeperError('Please enter your password');
         hideLoading();
         return;
     }
+    
+    gatekeeperBtn.textContent = '⏳';
+    gatekeeperBtn.disabled = true;
+    
     try {
         const response = await fetch('/gatekeeper', {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
             body: JSON.stringify({username, password})
         });
+        
         const data = await response.json();
+        
         if(data.success) {
             gatekeeperData = data;
             document.getElementById('gatekeeperScreen').classList.remove('active');
             document.getElementById('userSetupScreen').classList.add('active');
+            
             document.getElementById('userGroupName').value = data.assigned_group;
             document.getElementById('userGroupPassword').value = data.assigned_group_password;
             groupPassword = data.assigned_group_password;
+            
             if(data.display_name) {
                 document.getElementById('userDisplayName').value = data.display_name;
                 showSetupSuccess('✅ Welcome back! Your display name is saved.');
@@ -2583,15 +2440,22 @@ async function gatekeeperLogin() {
         console.error('Gatekeeper error:', e);
         showGatekeeperError('Connection error. Please try again.');
         hideLoading();
+    } finally {
+        gatekeeperBtn.textContent = '▶ Verify';
+        gatekeeperBtn.disabled = false;
     }
 }
 
 // ========== ENTER CHAT ==========
-async function enterChat() {
+async function handleEnterChat() {
     const displayName = document.getElementById('userDisplayName').value.trim();
     const groupName = document.getElementById('userGroupName').value.trim();
+    
     if(!displayName) { showSetupError('Please enter your display name'); hideLoading(); return; }
     if(!groupName) { showSetupError('Group missing. Please contact admin.'); hideLoading(); return; }
+    
+    enterChatBtn.textContent = '⏳';
+    enterChatBtn.disabled = true;
     
     try {
         await fetch('/save_display_name', {
@@ -2611,6 +2475,9 @@ async function enterChat() {
     messagesData = {};
     hideLoading();
     connectToChat(displayName, groupName);
+    
+    enterChatBtn.textContent = '▶ Enter Chat';
+    enterChatBtn.disabled = false;
 }
 
 // ========== CONNECT TO CHAT ==========
@@ -2813,28 +2680,28 @@ function addMessage(sender, text, isSent, timestamp, messageId, replyTo, voiceUr
     
     let messageContent = '';
     if (voiceUrl) {
-        messageContent = `<div style="display:flex; align-items:center; gap:10px;">
+        messageContent = `<div style="display:flex; align-items:center; gap:8px;">
             <button class="voice-play-btn" onclick="playVoice(this, '${voiceUrl}')">
                 <span class="play-icon">▶️</span><span>Play</span>
             </button>
             <div class="voice-progress"><div class="voice-progress-bar" style="width:0%"></div></div>
             <span class="voice-duration">00:00</span>
-        </div>${text !== '🎤 Voice message' ? '<div style="margin-top:6px;font-size:12px;color:#888;">' + escapeHtml(text) + '</div>' : ''}`;
+        </div>${text !== '🎤 Voice message' ? '<div style="margin-top:4px;font-size:11px;color:#888;">' + escapeHtml(text) + '</div>' : ''}`;
     } else if (mediaUrl) {
         let mediaHtml = '';
         if (mediaType && mediaType.startsWith('image/')) {
             mediaHtml = `<img src="${mediaUrl}" class="message-media" onclick="window.open('${mediaUrl}','_blank')" loading="lazy">`;
         } else {
-            mediaHtml = `<a href="${mediaUrl}" target="_blank" style="color:#0f0;text-decoration:underline;">📎 Download ${mediaUrl.split('/').pop()}</a>`;
+            mediaHtml = `<a href="${mediaUrl}" target="_blank" style="color:#0f0;text-decoration:underline;">📎 Download</a>`;
         }
-        messageContent = `<div class="message-bubble">${escapeHtml(text)}<div style="margin-top:6px;">${mediaHtml}</div></div>`;
+        messageContent = `<div class="message-bubble">${escapeHtml(text)}<div style="margin-top:4px;">${mediaHtml}</div></div>`;
     } else {
-        messageContent = '<div class="message-bubble">' + escapeHtml(text) + (edited ? ' <span style="font-size:9px;color:#888;">(edited)</span>' : '') + '</div>';
+        messageContent = '<div class="message-bubble">' + escapeHtml(text) + (edited ? ' <span style="font-size:8px;color:#888;">(edited)</span>' : '') + '</div>';
     }
     
     let readReceiptHtml = '';
     if (isSent && readBy && readBy.length > 0) {
-        readReceiptHtml = `<div class="read-receipt">✓ Read by ${readBy.length} ${readBy.length === 1 ? 'person' : 'people'}</div>`;
+        readReceiptHtml = `<div class="read-receipt">✓ Read by ${readBy.length}</div>`;
     }
     
     let reactionsHtml = '';
@@ -2849,8 +2716,8 @@ function addMessage(sender, text, isSent, timestamp, messageId, replyTo, voiceUr
     
     let reactionPickerHtml = `
         <div style="position:relative;">
-            <button class="reaction-picker-btn" onclick="toggleReactionPicker(this)" style="background:transparent;border:none;color:#888;font-size:14px;cursor:pointer;padding:2px 6px;">😊</button>
-            <div class="reaction-picker" style="display:none;position:absolute;bottom:100%;left:0;background:#050508;border:1px solid #0f0;border-radius:12px;padding:8px;z-index:100;box-shadow:0 4px 20px rgba(0,0,0,0.8);flex-wrap:wrap;gap:4px;max-width:200px;">
+            <button class="reaction-picker-btn" onclick="toggleReactionPicker(this)" style="background:transparent;border:none;color:#888;font-size:13px;cursor:pointer;padding:1px 4px;">😊</button>
+            <div class="reaction-picker">
                 <span onclick="toggleReaction(${messageId}, '👍')">👍</span>
                 <span onclick="toggleReaction(${messageId}, '❤️')">❤️</span>
                 <span onclick="toggleReaction(${messageId}, '😂')">😂</span>
@@ -2866,13 +2733,13 @@ function addMessage(sender, text, isSent, timestamp, messageId, replyTo, voiceUr
     let editActions = '';
     if (isSent) {
         editActions = `
-            <div style="display:flex;gap:4px;margin-top:4px;">
-                <button onclick="editMessage(${messageId})" style="background:transparent;border:none;color:#888;font-size:10px;cursor:pointer;">✏️ Edit</button>
+            <div style="display:flex;gap:3px;margin-top:3px;">
+                <button onclick="editMessage(${messageId})" style="background:transparent;border:none;color:#888;font-size:9px;cursor:pointer;">✏️ Edit</button>
                 <div class="edit-input" id="edit-input-${messageId}">
-                    <input type="text" value="${escapeHtml(text)}" style="width:100%;padding:6px;background:#111;border:1px solid #0f0;border-radius:4px;color:#0f0;font-size:12px;">
-                    <div style="display:flex;gap:4px;margin-top:4px;">
-                        <button onclick="saveEdit(${messageId})" style="background:#0f0;color:#000;border:none;padding:4px 12px;border-radius:4px;cursor:pointer;font-size:10px;">Save</button>
-                        <button onclick="cancelEdit(${messageId})" style="background:#ff0041;color:white;border:none;padding:4px 12px;border-radius:4px;cursor:pointer;font-size:10px;">Cancel</button>
+                    <input type="text" value="${escapeHtml(text)}" style="width:100%;padding:4px;background:#111;border:1px solid #0f0;border-radius:4px;color:#0f0;font-size:12px;">
+                    <div style="display:flex;gap:3px;margin-top:3px;">
+                        <button onclick="saveEdit(${messageId})" style="background:#0f0;color:#000;border:none;padding:2px 10px;border-radius:4px;cursor:pointer;font-size:9px;">Save</button>
+                        <button onclick="cancelEdit(${messageId})" style="background:#ff0041;color:white;border:none;padding:2px 10px;border-radius:4px;cursor:pointer;font-size:9px;">Cancel</button>
                     </div>
                 </div>
             </div>
@@ -2895,14 +2762,14 @@ function addMessage(sender, text, isSent, timestamp, messageId, replyTo, voiceUr
         touchCurrentX = e.touches[0].clientX;
         let diffX = touchCurrentX - touchStartX;
         let diffY = e.touches[0].clientY - touchStartY;
-        if (diffX > 0 && diffX < 80 && Math.abs(diffY) < 30) {
+        if (diffX > 0 && diffX < 60 && Math.abs(diffY) < 30) {
             div.style.transform = 'translateX(' + diffX + 'px)';
         }
     }, {passive: true});
     div.addEventListener('touchend', function(e) {
         let diffX = touchCurrentX - touchStartX;
         div.style.transform = '';
-        if (diffX >= 60) startReply(messageId);
+        if (diffX >= 50) startReply(messageId);
         touchStartX = 0; touchCurrentX = 0; touchStartY = 0;
     }, {passive: true});
     
@@ -2918,7 +2785,7 @@ function addMessage(sender, text, isSent, timestamp, messageId, replyTo, voiceUr
         mouseCurrentX = e.clientX;
         let diffX = mouseCurrentX - mouseStartX;
         let diffY = e.clientY - mouseStartY;
-        if (diffX > 0 && diffX < 80 && Math.abs(diffY) < 30) {
+        if (diffX > 0 && diffX < 60 && Math.abs(diffY) < 30) {
             div.style.transform = 'translateX(' + diffX + 'px)';
         }
     });
@@ -2926,7 +2793,7 @@ function addMessage(sender, text, isSent, timestamp, messageId, replyTo, voiceUr
         if (!isMouseDown) return;
         let diffX = mouseCurrentX - mouseStartX;
         div.style.transform = '';
-        if (diffX >= 60) startReply(messageId);
+        if (diffX >= 50) startReply(messageId);
         isMouseDown = false;
     });
     div.addEventListener('mouseleave', function() {
@@ -2936,7 +2803,6 @@ function addMessage(sender, text, isSent, timestamp, messageId, replyTo, voiceUr
     msgs.appendChild(div);
     msgs.scrollTop = msgs.scrollHeight;
     
-    // Mark message as read if received
     if (!isSent && ws && ws.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify({type: 'mark_read', message_id: messageId}));
     }
@@ -2948,7 +2814,7 @@ function updateMessageDisplay(messageId, newText, edited) {
         if (msg.dataset.messageId == messageId) {
             const bubble = msg.querySelector('.message-bubble');
             if (bubble) {
-                bubble.innerHTML = escapeHtml(newText) + (edited ? ' <span style="font-size:9px;color:#888;">(edited)</span>' : '');
+                bubble.innerHTML = escapeHtml(newText) + (edited ? ' <span style="font-size:8px;color:#888;">(edited)</span>' : '');
                 msg.dataset.text = newText;
                 const replyPreviews = document.querySelectorAll(`.message-reply-preview[onclick*="${messageId}"]`);
                 for (let preview of replyPreviews) {
@@ -2993,7 +2859,7 @@ function updateReadReceipt(messageId, readBy) {
         messageDiv.appendChild(receiptDiv);
     }
     if (readBy && readBy.length > 0) {
-        receiptDiv.innerHTML = `✓ Read by ${readBy.length} ${readBy.length === 1 ? 'person' : 'people'}`;
+        receiptDiv.innerHTML = `✓ Read by ${readBy.length}`;
         receiptDiv.style.display = 'block';
     } else {
         receiptDiv.style.display = 'none';
@@ -3092,36 +2958,14 @@ async function decrypt(encrypted, password, salt) {
     return dec.decode(decrypted);
 }
 
-// ========== VOICE RECORDING - HOLD TO RECORD (LIKE WHATSAPP) ==========
-let holdTimer = null;
-let isHolding = false;
-let touchStartY = 0;
-let touchCurrentY = 0;
-let isSwipingUp = false;
-
-// Get elements
-const voiceBtn = document.getElementById('voiceBtn');
-const voiceIcon = document.getElementById('voiceIcon');
-const recordingStatus = document.getElementById('recordingStatus');
-const recordingTimer = document.getElementById('recordingTimer');
-const recordingStatusText = document.getElementById('recordingStatusText');
-const cancelRecordingBtn = document.getElementById('cancelRecordingBtn');
-const tooltip = document.getElementById('voiceTooltip');
-
-// Start hold recording (called on mousedown/touchstart)
+// ========== VOICE RECORDING - HOLD TO RECORD ==========
 function startHoldRecording() {
     if (isRecording) return;
-    
     isHolding = true;
     isSwipingUp = false;
     touchStartY = 0;
     touchCurrentY = 0;
     
-    // Show tooltip
-    tooltip.textContent = 'Release to send • Swipe up to cancel';
-    tooltip.classList.add('show');
-    
-    // Start recording after 300ms delay (prevents accidental triggers)
     holdTimer = setTimeout(() => {
         if (isHolding) {
             startRecording();
@@ -3129,35 +2973,25 @@ function startHoldRecording() {
     }, 300);
 }
 
-// Stop hold recording (called on mouseup/touchend/mouseleave)
 function stopHoldRecording() {
     isHolding = false;
     clearTimeout(holdTimer);
-    tooltip.classList.remove('show');
-    tooltip.textContent = 'Hold to record';
     
-    // If recording and not swiping up, stop and send
     if (isRecording && !isSwipingUp) {
-        // Check if recording is long enough (min 1 second)
         if (recordingSeconds < 1) {
-            // Too short - cancel
             cancelRecording();
             return;
         }
-        // Stop and send
         stopRecordingAndSend();
     } else if (isRecording && isSwipingUp) {
-        // Cancel recording (swipe up)
         cancelRecording();
     }
     
-    // Reset button state
     voiceBtn.classList.remove('recording');
     voiceBtn.classList.remove('cancelling');
     voiceIcon.textContent = '🎙️';
 }
 
-// Handle swipe up to cancel
 voiceBtn.addEventListener('touchstart', function(e) {
     touchStartY = e.touches[0].clientY;
     touchCurrentY = touchStartY;
@@ -3168,60 +3002,29 @@ voiceBtn.addEventListener('touchmove', function(e) {
     touchCurrentY = e.touches[0].clientY;
     let diffY = touchStartY - touchCurrentY;
     
-    if (diffY > 50) {
-        // Swipe up detected
+    if (diffY > 40) {
         isSwipingUp = true;
         voiceBtn.classList.add('cancelling');
         recordingStatusText.textContent = '⬆️ Release to cancel';
         recordingStatusText.style.color = '#ffaa00';
-        
-        // Show cancel hint
-        const hint = document.getElementById('swipeHint');
-        if (!hint) {
-            const h = document.createElement('div');
-            h.id = 'swipeHint';
-            h.style.cssText = `
-                position: fixed;
-                top: 50%;
-                left: 50%;
-                transform: translate(-50%, -50%);
-                background: rgba(255,170,0,0.95);
-                color: #000;
-                padding: 20px 30px;
-                border-radius: 16px;
-                font-size: 18px;
-                z-index: 9999;
-                animation: fadeIn 0.3s ease;
-                text-align: center;
-                font-family: monospace;
-            `;
-            h.innerHTML = '⬆️ Release to cancel<br><span style="font-size:12px;opacity:0.7;">Swipe up to cancel voice message</span>';
-            document.body.appendChild(h);
-        }
     } else {
         isSwipingUp = false;
         voiceBtn.classList.remove('cancelling');
         recordingStatusText.textContent = '🔴 Recording';
         recordingStatusText.style.color = '#ff0041';
-        const hint = document.getElementById('swipeHint');
-        if (hint) hint.remove();
     }
 }, {passive: true});
 
-voiceBtn.addEventListener('touchend', function(e) {
-    const hint = document.getElementById('swipeHint');
-    if (hint) hint.remove();
+voiceBtn.addEventListener('touchend', function() {
     voiceBtn.classList.remove('cancelling');
     recordingStatusText.textContent = '🔴 Recording';
     recordingStatusText.style.color = '#ff0041';
 }, {passive: true});
 
-// Cancel recording button
 cancelRecordingBtn.addEventListener('click', function() {
     cancelRecording();
 });
 
-// Cancel recording function
 function cancelRecording() {
     if (mediaRecorder && isRecording) {
         mediaRecorder.stop();
@@ -3230,28 +3033,20 @@ function cancelRecording() {
         clearInterval(recordingTimer);
         recordingTimer = null;
         recordingSeconds = 0;
-        document.getElementById('recordingTimer').textContent = '00:00';
+        recordingTimerEl.textContent = '00:00';
     }
     voiceBtn.classList.remove('recording');
     voiceBtn.classList.remove('cancelling');
     voiceIcon.textContent = '🎙️';
     recordingStatus.classList.remove('active');
-    const hint = document.getElementById('swipeHint');
-    if (hint) hint.remove();
 }
 
-// Start recording
 async function startRecording() {
     try {
         const stream = await navigator.mediaDevices.getUserMedia({ 
-            audio: {
-                echoCancellation: true,
-                noiseSuppression: true,
-                autoGainControl: true
-            }
+            audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }
         });
         
-        // Try different MIME types
         let mimeType = 'audio/webm;codecs=opus';
         if (!MediaRecorder.isTypeSupported(mimeType)) {
             mimeType = 'audio/webm';
@@ -3268,7 +3063,7 @@ async function startRecording() {
         
         mediaRecorder = new MediaRecorder(stream, { 
             mimeType: mimeType,
-            audioBitsPerSecond: 64000 // Lower bitrate for smaller files
+            audioBitsPerSecond: 64000
         });
         
         audioChunks = [];
@@ -3281,12 +3076,10 @@ async function startRecording() {
         
         mediaRecorder.onstop = async () => {
             if (audioChunks.length > 0 && !isSwipingUp && recordingSeconds >= 1) {
-                // Only upload if we have data and not cancelled
                 const audioBlob = new Blob(audioChunks, { type: mediaRecorder.mimeType });
                 await uploadVoice(audioBlob);
             }
             
-            // Clean up
             stream.getTracks().forEach(track => track.stop());
             voiceBtn.classList.remove('recording');
             voiceBtn.classList.remove('cancelling');
@@ -3297,28 +3090,24 @@ async function startRecording() {
             isRecording = false;
             isSwipingUp = false;
             recordingSeconds = 0;
-            document.getElementById('recordingTimer').textContent = '00:00';
-            const hint = document.getElementById('swipeHint');
-            if (hint) hint.remove();
+            recordingTimerEl.textContent = '00:00';
         };
         
         mediaRecorder.start(1000);
         isRecording = true;
         
-        // Update UI
         voiceBtn.classList.add('recording');
         voiceIcon.textContent = '⏺️';
         recordingStatus.classList.add('active');
         recordingStatusText.textContent = '🔴 Recording';
         recordingStatusText.style.color = '#ff0041';
         
-        // Start timer
         recordingSeconds = 0;
         updateRecordingTimer();
         clearInterval(recordingTimer);
         recordingTimer = setInterval(updateRecordingTimer, 1000);
         
-        // NO AUTO-STOP - users can record as long as they want!
+        // NO AUTO-STOP - record as long as user wants!
         
     } catch (error) {
         console.error('Error accessing microphone:', error);
@@ -3334,14 +3123,12 @@ function updateRecordingTimer() {
     recordingSeconds++;
     const mins = Math.floor(recordingSeconds / 60);
     const secs = recordingSeconds % 60;
-    document.getElementById('recordingTimer').textContent = 
-        `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+    recordingTimerEl.textContent = `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
 }
 
 function stopRecordingAndSend() {
     if (mediaRecorder && isRecording) {
         mediaRecorder.stop();
-        // The onstop handler will upload and send
     }
 }
 
@@ -3376,14 +3163,8 @@ async function sendVoiceMessage(voiceUrl) {
 }
 
 async function sendMessageWithVoice(text, voiceUrl) {
-    if (!ws || ws.readyState !== WebSocket.OPEN) { 
-        alert('Not connected to server.'); 
-        return; 
-    }
-    if (!window.groupPassword) { 
-        alert('Group password not set.'); 
-        return; 
-    }
+    if (!ws || ws.readyState !== WebSocket.OPEN) { alert('Not connected to server.'); return; }
+    if (!window.groupPassword) { alert('Group password not set.'); return; }
     
     try {
         const salt = generateSalt();
@@ -3401,13 +3182,9 @@ async function sendMessageWithVoice(text, voiceUrl) {
         recordingStatus.classList.remove('active');
         voiceBtn.classList.remove('recording');
         voiceIcon.textContent = '🎙️';
-    } catch (error) { 
-        console.error('Error sending voice:', error); 
-        alert('Error sending voice message.'); 
-    }
+    } catch (error) { console.error('Error sending voice:', error); alert('Error sending voice message.'); }
 }
 
-// Voice player
 function playVoice(button, url) {
     const audio = new Audio(url);
     const progressBar = button.parentElement.querySelector('.voice-progress-bar');
@@ -3554,7 +3331,7 @@ async function loadAdminData() {
         if (data.users) {
             data.users.forEach(user => {
                 const tr = document.createElement('tr');
-                tr.innerHTML = `<td>${escapeHtml(user.username)}</td><td>${escapeHtml(user.assigned_group || 'None')}</td><td>${escapeHtml(user.display_name || '')}</td><td>${user.status || 'offline'}</td><td>${user.username !== 'Mpc' ? `<button onclick="deleteUser('${user.username}')" class="action-btn">Delete</button>` : 'Admin'}</td>`;
+                tr.innerHTML = `<td>${escapeHtml(user.username)}</td><td>${escapeHtml(user.assigned_group || 'None')}</td><td>${user.status || 'offline'}</td><td>${user.username !== 'Mpc' ? `<button onclick="deleteUser('${user.username}')" class="action-btn">Delete</button>` : 'Admin'}</td>`;
                 usersBody.appendChild(tr);
             });
         }
@@ -3574,7 +3351,7 @@ async function loadAdminData() {
         if (data.messages) {
             data.messages.forEach(msg => {
                 const tr = document.createElement('tr');
-                tr.innerHTML = `<td>${escapeHtml(msg.sender)}</td><td>${escapeHtml(msg.group_name)}</td><td>${new Date(msg.created_at * 1000).toLocaleString()}</td><td><button onclick="deleteMessage(${msg.id})" class="action-btn">Delete</button></td>`;
+                tr.innerHTML = `<td>${escapeHtml(msg.sender)}</td><td>${escapeHtml(msg.group_name)}</td><td><button onclick="deleteMessage(${msg.id})" class="action-btn">Delete</button></td>`;
                 messagesBody.appendChild(tr);
             });
         }
@@ -3584,7 +3361,7 @@ async function loadAdminData() {
         if (data.logs) {
             data.logs.forEach(log => {
                 const tr = document.createElement('tr');
-                tr.innerHTML = `<td>${escapeHtml(log.admin_username)}</td><td>${escapeHtml(log.action)}</td><td>${escapeHtml(log.target || '')}</td><td>${new Date(log.created_at * 1000).toLocaleString()}</td>`;
+                tr.innerHTML = `<td>${escapeHtml(log.admin_username)}</td><td>${escapeHtml(log.action)}</td><td>${escapeHtml(log.target || '')}</td>`;
                 logsBody.appendChild(tr);
             });
         }
@@ -3702,9 +3479,10 @@ function requestAccess() {
     window.open('https://wa.me/250788495861?text=I%20need%20access%20to%20ABAVANDIMWE', '_blank');
 }
 
-console.log('ABAVANDIMWE v4.0 - Secure Messaging System');
-console.log('Features: Voice (Hold-to-Record), Media, Reactions, Read Receipts, Editing');
+console.log('ABAVANDIMWE v5.0 - Secure Messaging System');
+console.log('✅ Fixed: Login, Layout, Voice Recording');
 console.log('🎙️ Voice: Hold to record, release to send, swipe up to cancel');
+console.log('📱 Fully responsive with 100dvh support');
 </script>
 </body>
 </html>
@@ -3724,15 +3502,17 @@ if __name__ == "__main__":
 ║  ██║  ██║██████╔╝██║  ██║ ╚████╔╝ ██║  ██║██║ ╚████║██████╔╝██║██║ ╚═╝ ██║
 ║  ╚═╝  ╚═╝╚═════╝ ╚═╝  ╚═╝  ╚═══╝  ╚═╝  ╚═╝╚═╝  ╚═══╝╚═════╝ ╚═╝╚═╝     ╚═╝
 ║                                                                           ║
-║              ABAVANDIMWE SECURE MESSAGING v4.0                            ║
+║              ABAVANDIMWE SECURE MESSAGING v5.0                            ║
 ║           Messages auto-delete after 24 hours                             ║
 ║                    Author: Mugisha Pc                                     ║
 ║                                                                           ║
 ║   🎙️ Voice: Hold to record, release to send, swipe up to cancel          ║
 ║   ✅ All files stored in Neon PostgreSQL                                 ║
 ║   ✅ Survives Render sleep/restarts                                      ║
-║   ✅ Messages stored in database                                         ║
-║   ✅ End-to-End Encrypted                                                 ║
+║   ✅ Fixed: Login buttons work!                                          ║
+║   ✅ Fixed: Responsive layout with 100dvh                               ║
+║   ✅ Fixed: Composer stays at bottom                                     ║
+║   ✅ Fixed: Messages scroll properly                                     ║
 ║                                                                           ║
 ╚═══════════════════════════════════════════════════════════════════════════╝
 """)
@@ -3742,9 +3522,16 @@ if __name__ == "__main__":
     print(f"[✓] Messages expire after 24 hours")
     print(f"[✓] Files expire after 7 days")
     print(f"[✓] Open: http://localhost:{port}")
-    print(f"\n🎙️ Voice Recording Instructions:")
+    print(f"\n🎙️ Voice Recording (Like WhatsApp):")
     print(f"   📱 Hold 🎙️ to start recording")
     print(f"   ⬆️ Swipe up to cancel")
     print(f"   ✋ Release to send")
     print(f"   ⏰ No auto-stop - record as long as you want!")
+    print(f"\n🔧 Fixed Issues:")
+    print(f"   ✅ Login button now works")
+    print(f"   ✅ WhatsApp button now works")
+    print(f"   ✅ All buttons have onclick and event listeners")
+    print(f"   ✅ Layout uses 100dvh for mobile")
+    print(f"   ✅ Composer stays at bottom")
+    print(f"   ✅ Messages scroll properly")
     uvicorn.run(app, host="0.0.0.0", port=port)
