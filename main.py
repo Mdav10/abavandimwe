@@ -3,9 +3,7 @@ ABAVANDIMWE - Secure Messaging System
 Author: Mugisha Pc
 Messages stay for 24 hours then auto-delete
 Database: PostgreSQL (Neon) with asyncpg
-PWA Ready - Install as Android App with one click
-Push Notifications: Web Push API with VAPID
-Features: Voice Messages, Media Sharing, Reactions, Multi-device, Read Receipts, Message Editing
+All files (voice, media) stored in Neon database for persistence
 """
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request, Depends, HTTPException, UploadFile, File
@@ -18,10 +16,9 @@ import os
 import secrets
 import base64
 import hashlib
-import threading
 import time
 import uuid
-import aiofiles
+import io
 from datetime import datetime
 from typing import Dict, Optional, List
 from collections import defaultdict
@@ -66,14 +63,10 @@ def get_vapid_private_key():
 # ========== SERVE STATIC FILES FOR PWA ==========
 os.makedirs("static/icons", exist_ok=True)
 os.makedirs("static/screenshots", exist_ok=True)
-os.makedirs("static/voice", exist_ok=True)
-os.makedirs("static/media", exist_ok=True)
 
 app.mount("/icons", StaticFiles(directory="static/icons"), name="icons")
 app.mount("/screenshots", StaticFiles(directory="static/screenshots"), name="screenshots")
 app.mount("/static/icons", StaticFiles(directory="static/icons"), name="static_icons")
-app.mount("/voice", StaticFiles(directory="static/voice"), name="voice")
-app.mount("/media", StaticFiles(directory="static/media"), name="media")
 
 # ========== SERVE PWA FILES ==========
 @app.get("/manifest.json")
@@ -139,7 +132,7 @@ def create_session(username: str, role: str, assigned_group: str = None, group_p
         "group_password": group_password,
         "created_at": time.time(),
         "expires_at": time.time() + SESSION_TIMEOUT,
-        "device_id": secrets.token_urlsafe(16)  # For multi-device
+        "device_id": secrets.token_urlsafe(16)
     }
     return session_id
 
@@ -197,7 +190,7 @@ class LoginRequest(BaseModel):
     password: str
 
 class CreateUserRequest(BaseModel):
-    username: str = Field(..., min_length=3, max_length=50, pattern="^[a-zA-Z0-9_]+$")
+    username: str = Field(..., min_length=3, max_length=50)
     password: str = Field(..., min_length=8)
     group_name: str = Field(..., min_length=1, max_length=50)
     group_password: str = Field(..., min_length=4)
@@ -384,7 +377,7 @@ async def init_db():
     conn = await get_db_connection()
     
     try:
-        # Create tables
+        # Create users table
         await conn.execute('''
             CREATE TABLE IF NOT EXISTS users (
                 username TEXT PRIMARY KEY,
@@ -402,6 +395,7 @@ async def init_db():
             )
         ''')
         
+        # Create messages table
         await conn.execute('''
             CREATE TABLE IF NOT EXISTS messages (
                 id SERIAL PRIMARY KEY,
@@ -411,16 +405,11 @@ async def init_db():
                 salt TEXT NOT NULL,
                 created_at DOUBLE PRECISION NOT NULL,
                 expires_at DOUBLE PRECISION NOT NULL,
-                reply_to INTEGER DEFAULT NULL,
-                voice_url TEXT,
-                media_url TEXT,
-                media_type TEXT,
-                edited BOOLEAN DEFAULT FALSE,
-                read_by TEXT[] DEFAULT '{}',
-                reactions JSONB DEFAULT '{}'
+                reply_to INTEGER DEFAULT NULL
             )
         ''')
         
+        # Create groups table
         await conn.execute('''
             CREATE TABLE IF NOT EXISTS groups (
                 group_name TEXT PRIMARY KEY,
@@ -432,6 +421,7 @@ async def init_db():
             )
         ''')
         
+        # Create admin_logs table
         await conn.execute('''
             CREATE TABLE IF NOT EXISTS admin_logs (
                 id SERIAL PRIMARY KEY,
@@ -443,27 +433,70 @@ async def init_db():
             )
         ''')
         
+        # Create files table for voice/media storage
         await conn.execute('''
-            CREATE TABLE IF NOT EXISTS devices (
+            CREATE TABLE IF NOT EXISTS files (
                 id SERIAL PRIMARY KEY,
-                username TEXT NOT NULL,
-                device_id TEXT NOT NULL,
-                device_name TEXT,
-                last_seen DOUBLE PRECISION,
+                filename TEXT NOT NULL UNIQUE,
+                file_data BYTEA NOT NULL,
+                mime_type TEXT NOT NULL,
+                file_size INTEGER,
                 created_at DOUBLE PRECISION,
-                UNIQUE(username, device_id)
+                expires_at DOUBLE PRECISION,
+                username TEXT,
+                file_type TEXT
             )
         ''')
         
         print("[✓] PostgreSQL database ready")
         
-        # Add columns if they don't exist
-        for col in ['voice_url', 'media_url', 'media_type', 'edited', 'read_by', 'reactions']:
-            try:
-                await conn.execute(f'ALTER TABLE messages ADD COLUMN IF NOT EXISTS {col} {"TEXT" if col in ["voice_url", "media_url", "media_type"] else "BOOLEAN DEFAULT FALSE" if col == "edited" else "TEXT[] DEFAULT \'{}\'" if col == "read_by" else "JSONB DEFAULT \'{}\'"}')
-                print(f"[✓] {col} column verified")
-            except Exception as e:
-                print(f"[!] {col} column: {e}")
+        # Add columns to messages table - FIXED VERSION
+        try:
+            # Check if voice_url column exists
+            columns = await conn.fetch("""
+                SELECT column_name 
+                FROM information_schema.columns 
+                WHERE table_name = 'messages'
+            """)
+            existing_columns = [row['column_name'] for row in columns]
+            
+            # Add missing columns one by one
+            if 'voice_url' not in existing_columns:
+                await conn.execute('ALTER TABLE messages ADD COLUMN voice_url TEXT')
+                print("[✓] voice_url column added")
+            
+            if 'media_url' not in existing_columns:
+                await conn.execute('ALTER TABLE messages ADD COLUMN media_url TEXT')
+                print("[✓] media_url column added")
+            
+            if 'media_type' not in existing_columns:
+                await conn.execute('ALTER TABLE messages ADD COLUMN media_type TEXT')
+                print("[✓] media_type column added")
+            
+            if 'edited' not in existing_columns:
+                await conn.execute('ALTER TABLE messages ADD COLUMN edited BOOLEAN DEFAULT FALSE')
+                print("[✓] edited column added")
+            
+            if 'read_by' not in existing_columns:
+                await conn.execute("ALTER TABLE messages ADD COLUMN read_by TEXT[] DEFAULT '{}'")
+                print("[✓] read_by column added")
+            
+            if 'reactions' not in existing_columns:
+                await conn.execute("ALTER TABLE messages ADD COLUMN reactions JSONB DEFAULT '{}'")
+                print("[✓] reactions column added")
+                
+        except Exception as e:
+            print(f"[!] Column migration warning: {e}")
+        
+        # Add indexes for performance
+        try:
+            await conn.execute('CREATE INDEX IF NOT EXISTS idx_messages_group_name ON messages(group_name)')
+            await conn.execute('CREATE INDEX IF NOT EXISTS idx_messages_created_at ON messages(created_at)')
+            await conn.execute('CREATE INDEX IF NOT EXISTS idx_files_filename ON files(filename)')
+            await conn.execute('CREATE INDEX IF NOT EXISTS idx_files_expires_at ON files(expires_at)')
+            print("[✓] Indexes created")
+        except Exception as e:
+            print(f"[!] Index creation warning: {e}")
         
         # Clean up corrupt data
         try:
@@ -491,6 +524,9 @@ async def init_db():
         else:
             row = await conn.fetchrow("SELECT password_hash FROM users WHERE username = $1", ADMIN_USERNAME)
             ADMIN_PASSWORD_HASH = row[0]
+        
+        # Clean up old files
+        await conn.execute("DELETE FROM files WHERE expires_at < $1", time.time())
         
     finally:
         await return_db_connection(conn)
@@ -531,11 +567,23 @@ async def cleanup_old_messages():
     finally:
         await return_db_connection(conn)
 
+async def cleanup_old_files():
+    """Delete files older than 7 days from Neon database"""
+    conn = await get_db_connection()
+    try:
+        result = await conn.execute("DELETE FROM files WHERE expires_at < $1", time.time())
+        deleted = int(result.split()[1]) if result else 0
+        if deleted > 0:
+            print(f"[🧹] Deleted {deleted} old files from Neon database")
+    finally:
+        await return_db_connection(conn)
+
 def start_cleanup():
     async def cleanup_loop():
         while True:
-            await asyncio.sleep(3600)
+            await asyncio.sleep(3600)  # Every hour
             await cleanup_old_messages()
+            await cleanup_old_files()
     asyncio.create_task(cleanup_loop())
 
 async def authenticate_user(username, password):
@@ -902,7 +950,7 @@ async def subscribe_to_push(request: Request):
 async def get_vapid_public_key():
     return {"publicKey": VAPID_PUBLIC_KEY}
 
-# ========== UPLOAD ENDPOINTS ==========
+# ========== FILE UPLOAD ENDPOINTS (NEON DATABASE) ==========
 @app.post("/api/upload_voice")
 async def upload_voice(request: Request, file: UploadFile = File(...)):
     try:
@@ -911,18 +959,37 @@ async def upload_voice(request: Request, file: UploadFile = File(...)):
         
         ext = file.filename.split('.')[-1] if '.' in file.filename else 'webm'
         filename = f"{uuid.uuid4()}.{ext}"
-        filepath = os.path.join("static/voice", filename)
         
         content = await file.read()
-        if len(content) > 5 * 1024 * 1024:  # 5MB max
-            return JSONResponse({"success": False, "error": "File too large (max 5MB)"}, status_code=400)
+        file_size = len(content)
         
-        async with aiofiles.open(filepath, 'wb') as f:
-            await f.write(content)
+        if file_size > 5 * 1024 * 1024:
+            return JSONResponse(
+                {"success": False, "error": "File too large (max 5MB)"}, 
+                status_code=400
+            )
+        
+        conn = await get_db_connection()
+        try:
+            await conn.execute(
+                """INSERT INTO files 
+                   (filename, file_data, mime_type, file_size, created_at, expires_at, username, file_type) 
+                   VALUES ($1, $2, $3, $4, $5, $6, $7, $8)""",
+                filename,
+                content,
+                'audio/webm',
+                file_size,
+                time.time(),
+                time.time() + (7 * 24 * 3600),
+                username,
+                'voice'
+            )
+        finally:
+            await return_db_connection(conn)
         
         return {
             "success": True, 
-            "url": f"/voice/{filename}",
+            "url": f"/api/files/{filename}",
             "filename": filename
         }
     except HTTPException:
@@ -936,29 +1003,112 @@ async def upload_media(request: Request, file: UploadFile = File(...)):
         session = await get_session_from_cookie(request)
         username = session["username"]
         
-        allowed_types = ['image/jpeg', 'image/png', 'image/gif', 'image/webp', 'application/pdf', 'text/plain']
+        allowed_types = [
+            'image/jpeg', 'image/png', 'image/gif', 'image/webp',
+            'application/pdf', 'text/plain'
+        ]
+        
         if file.content_type not in allowed_types:
-            return JSONResponse({"success": False, "error": "File type not allowed"}, status_code=400)
+            return JSONResponse(
+                {"success": False, "error": "File type not allowed"}, 
+                status_code=400
+            )
         
         content = await file.read()
-        if len(content) > 10 * 1024 * 1024:  # 10MB max
-            return JSONResponse({"success": False, "error": "File too large (max 10MB)"}, status_code=400)
+        file_size = len(content)
+        
+        if file_size > 10 * 1024 * 1024:
+            return JSONResponse(
+                {"success": False, "error": "File too large (max 10MB)"}, 
+                status_code=400
+            )
         
         ext = file.filename.split('.')[-1] if '.' in file.filename else 'jpg'
         filename = f"{uuid.uuid4()}.{ext}"
-        filepath = os.path.join("static/media", filename)
         
-        async with aiofiles.open(filepath, 'wb') as f:
-            await f.write(content)
+        conn = await get_db_connection()
+        try:
+            await conn.execute(
+                """INSERT INTO files 
+                   (filename, file_data, mime_type, file_size, created_at, expires_at, username, file_type) 
+                   VALUES ($1, $2, $3, $4, $5, $6, $7, $8)""",
+                filename,
+                content,
+                file.content_type,
+                file_size,
+                time.time(),
+                time.time() + (7 * 24 * 3600),
+                username,
+                'media'
+            )
+        finally:
+            await return_db_connection(conn)
         
         return {
             "success": True,
-            "url": f"/media/{filename}",
+            "url": f"/api/files/{filename}",
             "filename": filename,
             "type": file.content_type
         }
     except HTTPException:
         return JSONResponse({"success": False, "error": "Not authenticated"}, status_code=401)
+    except Exception as e:
+        return JSONResponse({"success": False, "error": str(e)}, status_code=500)
+
+@app.get("/api/files/{filename}")
+async def get_file_from_db(filename: str):
+    """Serve files stored in Neon database"""
+    conn = await get_db_connection()
+    try:
+        row = await conn.fetchrow(
+            "SELECT file_data, mime_type, expires_at FROM files WHERE filename = $1",
+            filename
+        )
+        
+        if not row:
+            raise HTTPException(status_code=404, detail="File not found")
+        
+        if row['expires_at'] < time.time():
+            await conn.execute("DELETE FROM files WHERE filename = $1", filename)
+            raise HTTPException(status_code=410, detail="File expired")
+        
+        return Response(
+            content=row['file_data'],
+            media_type=row['mime_type'],
+            headers={
+                "Content-Disposition": f"inline; filename={filename}",
+                "Cache-Control": "public, max-age=86400"
+            }
+        )
+    finally:
+        await return_db_connection(conn)
+
+@app.delete("/api/files/{filename}")
+async def delete_file_from_db(filename: str, request: Request):
+    try:
+        session = await get_session_from_cookie(request)
+        username = session["username"]
+        
+        conn = await get_db_connection()
+        try:
+            row = await conn.fetchrow(
+                "SELECT username FROM files WHERE filename = $1",
+                filename
+            )
+            if not row:
+                raise HTTPException(status_code=404, detail="File not found")
+            
+            if row['username'] != username:
+                user_role = await get_user_role(username)
+                if user_role != 'admin':
+                    raise HTTPException(status_code=403, detail="Not your file")
+            
+            await conn.execute("DELETE FROM files WHERE filename = $1", filename)
+            return {"success": True}
+        finally:
+            await return_db_connection(conn)
+    except HTTPException:
+        raise
     except Exception as e:
         return JSONResponse({"success": False, "error": str(e)}, status_code=500)
 
@@ -1106,10 +1256,7 @@ async def edit_message_endpoint(data: EditMessageRequest, request: Request):
             return JSONResponse({"success": False, "error": "Message not found"}, status_code=404)
         if row['sender'] != session["username"]:
             return JSONResponse({"success": False, "error": "Not your message"}, status_code=403)
-        if time.time() - row['created_at'] > 300:
-            return JSONResponse({"success": False, "error": "Message too old to edit (max 5 minutes)"}, status_code=400)
         
-        # Re-encrypt the new text
         group_password = session.get("group_password")
         if not group_password:
             return JSONResponse({"success": False, "error": "Group password not found"}, status_code=400)
@@ -1147,13 +1294,11 @@ async def reaction_endpoint(data: ReactionRequest, request: Request):
         if isinstance(reactions, str):
             reactions = json.loads(reactions) if reactions else {}
         
-        # Toggle reaction
         if data.emoji in reactions and session["username"] in reactions[data.emoji]:
             await remove_reaction(data.message_id, session["username"], data.emoji)
         else:
             await add_reaction(data.message_id, session["username"], data.emoji)
         
-        # Get updated reactions
         updated_row = await conn.fetchrow(
             "SELECT reactions FROM messages WHERE id = $1",
             data.message_id
@@ -1162,7 +1307,6 @@ async def reaction_endpoint(data: ReactionRequest, request: Request):
         if isinstance(updated_reactions, str):
             updated_reactions = json.loads(updated_reactions) if updated_reactions else {}
         
-        # Send reaction counts only
         reaction_counts = {emoji: len(users) for emoji, users in updated_reactions.items()}
         
         await manager.broadcast(row['group_name'], {
@@ -1404,7 +1548,6 @@ HTML = '''<!DOCTYPE html>
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
     <title>ABAVANDIMWE | Secure Messaging</title>
     
-    <!-- PWA Meta Tags -->
     <link rel="manifest" href="/manifest.json">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -1414,7 +1557,6 @@ HTML = '''<!DOCTYPE html>
     <meta name="msapplication-TileColor" content="#0a0a0f">
     <meta name="msapplication-TileImage" content="/icons/icon-144x144.png">
     
-    <!-- Icons -->
     <link rel="icon" type="image/png" sizes="72x72" href="/icons/icon-72x72.png">
     <link rel="icon" type="image/png" sizes="96x96" href="/icons/icon-96x96.png">
     <link rel="icon" type="image/png" sizes="128x128" href="/icons/icon-128x128.png">
@@ -1424,7 +1566,6 @@ HTML = '''<!DOCTYPE html>
     <link rel="icon" type="image/png" sizes="384x384" href="/icons/icon-384x384.png">
     <link rel="icon" type="image/png" sizes="512x512" href="/icons/icon-512x512.png">
     
-    <!-- Apple Touch Icon -->
     <link rel="apple-touch-icon" href="/icons/icon-192x192.png">
     
     <style>
@@ -1584,7 +1725,6 @@ HTML = '''<!DOCTYPE html>
         
         .group-info{font-size:10px;color:#ffaa00;padding:8px;background:rgba(255,170,0,0.08);border-radius:6px;margin-top:8px;border-left:2px solid #ffaa00;}
         
-        /* ===== OFFLINE OVERLAY ===== */
         .offline-overlay{position:fixed;top:0;left:0;right:0;bottom:0;background:#0a0a0f;z-index:99999;display:none;justify-content:center;align-items:center;flex-direction:column;gap:20px;padding:30px;}
         .offline-overlay.active{display:flex;}
         .offline-overlay .offline-icon{font-size:60px;margin-bottom:10px;}
@@ -1599,19 +1739,12 @@ HTML = '''<!DOCTYPE html>
         .offline-bar .reconnect-btn{background:white;color:#ff0041;border:none;padding:2px 12px;border-radius:4px;cursor:pointer;margin-left:10px;font-weight:bold;font-size:11px;}
         .offline-message{text-align:center;color:#ff4444;padding:20px;font-size:14px;}
         
-        /* ===== NOTIFICATION BUTTON ===== */
         .notification-btn{background:transparent;border:1px solid #0f0;color:#0f0;padding:4px 12px;border-radius:20px;cursor:pointer;font-size:10px;font-family:monospace;transition:all 0.3s;margin-left:8px;}
         .notification-btn:hover{background:#0f0;color:#000;}
         .notification-btn.enabled{background:#0f0;color:#000;}
         .notification-btn.enabled:hover{background:transparent;color:#0f0;}
         
-        /* ===== VOICE MESSAGE STYLES ===== */
-        .voice-btn {
-            width:50px;min-width:50px;margin:0;padding:12px 0;height:50px;align-self:flex-end;
-            background:transparent;border:2px solid #0f0;border-radius:12px;color:#0f0;
-            cursor:pointer;font-size:20px;display:flex;align-items:center;justify-content:center;
-            transition:all 0.3s;
-        }
+        .voice-btn{width:50px;min-width:50px;margin:0;padding:12px 0;height:50px;align-self:flex-end;background:transparent;border:2px solid #0f0;border-radius:12px;color:#0f0;cursor:pointer;font-size:20px;display:flex;align-items:center;justify-content:center;transition:all 0.3s;}
         .voice-btn.recording{border-color:#ff0041;color:#ff0041;animation:pulse-red 1s infinite;}
         @keyframes pulse-red{0%,100%{box-shadow:0 0 0 0 rgba(255,0,65,0.4);}50%{box-shadow:0 0 20px 10px rgba(255,0,65,0.2);}}
         
@@ -1628,13 +1761,11 @@ HTML = '''<!DOCTYPE html>
         .voice-progress-bar{height:100%;background:#0f0;transition:width 0.1s linear;width:0%;}
         .voice-duration{font-size:11px;color:#888;min-width:40px;}
         
-        /* ===== MEDIA STYLES ===== */
         .media-btn{width:50px;min-width:50px;margin:0;padding:12px 0;height:50px;align-self:flex-end;background:transparent;border:2px solid #0f0;border-radius:12px;color:#0f0;cursor:pointer;font-size:20px;display:flex;align-items:center;justify-content:center;transition:all 0.3s;}
         .media-btn:hover{background:#0f0;color:#000;}
         .message-media{max-width:200px;max-height:200px;border-radius:12px;margin-top:6px;cursor:pointer;}
         .message-media:hover{opacity:0.8;}
         
-        /* ===== REACTIONS ===== */
         .reaction-container{display:flex;gap:6px;margin-top:6px;flex-wrap:wrap;}
         .reaction-emoji{background:#1a1a2e;padding:2px 8px;border-radius:12px;font-size:12px;cursor:pointer;border:1px solid transparent;transition:all 0.2s;}
         .reaction-emoji:hover{border-color:#0f0;background:#2a2a3e;}
@@ -1655,7 +1786,6 @@ HTML = '''<!DOCTYPE html>
         .read-receipt{font-size:9px;color:#666;margin-top:2px;}
         .read-receipt .read{color:#0f0;}
         
-        /* ===== RESPONSIVE ===== */
         @media (max-width:480px){
             .voice-progress{width:60px;}
             .message-media{max-width:150px;max-height:150px;}
@@ -1667,7 +1797,6 @@ HTML = '''<!DOCTYPE html>
 </head>
 <body>
 
-<!-- Loading Overlay -->
 <div class="loading-overlay" id="loadingOverlay">
     <div class="loader-container">
         <div class="loader-pulse"></div>
@@ -1675,13 +1804,10 @@ HTML = '''<!DOCTYPE html>
     </div>
     <div class="loader-text">
         <span id="loadingText">Loading</span>
-        <span class="loader-dots">
-            <span>.</span><span>.</span><span>.</span>
-        </span>
+        <span class="loader-dots"><span>.</span><span>.</span><span>.</span></span>
     </div>
 </div>
 
-<!-- ===== OFFLINE OVERLAY ===== -->
 <div class="offline-overlay" id="offlineOverlay">
     <div class="offline-icon">📶</div>
     <h2>No Internet Connection</h2>
@@ -1695,25 +1821,14 @@ HTML = '''<!DOCTYPE html>
             <h1># ABAVANDIMWE</h1>
             <div class="sub">Secure Messaging System</div>
             <div style="text-align:center;"><span class="admin-badge">🔐 Gatekeeper</span></div>
-            
             <input type="text" id="loginUsername" placeholder="Username" autocomplete="username">
             <input type="password" id="loginPassword" placeholder="Password" autocomplete="current-password">
-            
             <button id="loginBtn">▶ Login</button>
-            
             <div class="separator"><span>OR</span></div>
-            
-            <button class="btn-whatsapp" onclick="requestAccess()">
-                💬 Request Access on WhatsApp
-            </button>
-            
+            <button class="btn-whatsapp" onclick="requestAccess()">💬 Request Access on WhatsApp</button>
             <div id="loginError" class="error-message"></div>
             <div id="loginSuccess" class="success-message"></div>
-            
-            <div class="login-footer">
-                🔒 AES-256 | ⏰ Messages auto-delete after 24 hours<br>
-                <span style="color:#1a1a2e;">Developed by Mugisha Pc</span>
-            </div>
+            <div class="login-footer">🔒 AES-256 | ⏰ Messages auto-delete after 24 hours<br><span style="color:#1a1a2e;">Developed by Mugisha Pc</span></div>
         </div>
     </div>
 </div>
@@ -1721,18 +1836,14 @@ HTML = '''<!DOCTYPE html>
 <div id="adminPanel" class="admin-panel">
     <div class="admin-panel-header">
         <h2>⚙️ Admin Dashboard <span class="admin-username">(Logged in as: <span id="adminUsername">Mpc</span>)</span></h2>
-        <div>
-            <button class="close-admin" onclick="logout()">🚪 Logout</button>
-        </div>
+        <div><button class="close-admin" onclick="logout()">🚪 Logout</button></div>
     </div>
-    
     <div class="admin-stats" id="adminStats">
         <div class="stat-box"><div class="stat-number" id="statUsers">0</div><div class="stat-label">Total Users</div></div>
         <div class="stat-box"><div class="stat-number" id="statMessages">0</div><div class="stat-label">Total Messages</div></div>
         <div class="stat-box"><div class="stat-number" id="statGroups">0</div><div class="stat-label">Total Groups</div></div>
         <div class="stat-box"><div class="stat-number" id="statOnline">0</div><div class="stat-label">Online Now</div></div>
     </div>
-    
     <div class="admin-content">
         <div class="admin-card">
             <h3>👤 Create User</h3>
@@ -1743,48 +1854,34 @@ HTML = '''<!DOCTYPE html>
                 <input type="text" id="newGroupPassword" placeholder="Group Password" style="width:100%;">
                 <button onclick="createUser()" class="action-btn-green">➕ Create User</button>
             </div>
-            <div class="group-info">
-                ⚠️ If the group already exists, the Group Password you enter MUST match the existing group password!
-            </div>
+            <div class="group-info">⚠️ If the group already exists, the Group Password you enter MUST match the existing group password!</div>
         </div>
-        
         <div class="admin-card">
             <h3>📋 Users</h3>
             <div class="admin-table-wrap">
-                <table>
-                    <thead><tr><th>Username</th><th>Group</th><th>Display Name</th><th>Status</th><th>Action</th></tr></thead>
-                    <tbody id="usersTableBody"></tbody>
-                </table>
+                <table><thead><tr><th>Username</th><th>Group</th><th>Display Name</th><th>Status</th><th>Action</th></tr></thead>
+                <tbody id="usersTableBody"></tbody></table>
             </div>
         </div>
-        
         <div class="admin-card">
             <h3>📁 Groups</h3>
             <div class="admin-table-wrap">
-                <table>
-                    <thead><tr><th>Group Name</th><th>Created By</th><th>Action</th></tr></thead>
-                    <tbody id="groupsTableBody"></tbody>
-                </table>
+                <table><thead><tr><th>Group Name</th><th>Created By</th><th>Action</th></tr></thead>
+                <tbody id="groupsTableBody"></tbody></table>
             </div>
         </div>
-        
         <div class="admin-card">
             <h3>📨 Recent Messages</h3>
             <div class="admin-table-wrap">
-                <table>
-                    <thead><tr><th>Sender</th><th>Group</th><th>Time</th><th>Action</th></tr></thead>
-                    <tbody id="messagesTableBody"></tbody>
-                </table>
+                <table><thead><tr><th>Sender</th><th>Group</th><th>Time</th><th>Action</th></tr></thead>
+                <tbody id="messagesTableBody"></tbody></table>
             </div>
         </div>
-        
         <div class="admin-card">
             <h3>📋 Admin Logs</h3>
             <div class="admin-table-wrap">
-                <table>
-                    <thead><tr><th>Admin</th><th>Action</th><th>Target</th><th>Time</th></tr></thead>
-                    <tbody id="logsTableBody"></tbody>
-                </table>
+                <table><thead><tr><th>Admin</th><th>Action</th><th>Target</th><th>Time</th></tr></thead>
+                <tbody id="logsTableBody"></tbody></table>
             </div>
         </div>
     </div>
@@ -1794,17 +1891,11 @@ HTML = '''<!DOCTYPE html>
     <div class="gatekeeper-card">
         <h2>🔐 Gatekeeper</h2>
         <div class="sub">Verify your credentials to access your group</div>
-        
         <input type="text" id="gatekeeperUsername" placeholder="Username" readonly>
         <input type="password" id="gatekeeperPassword" placeholder="Password">
-        
         <button id="gatekeeperBtn">▶ Verify</button>
-        
         <div id="gatekeeperError" class="error-message"></div>
-        
-        <div class="login-footer" style="margin-top:20px;padding-top:16px;border-top:1px solid #1a1a2e;">
-            🔒 Credentials provided by admin
-        </div>
+        <div class="login-footer" style="margin-top:20px;padding-top:16px;border-top:1px solid #1a1a2e;">🔒 Credentials provided by admin</div>
     </div>
 </div>
 
@@ -1812,19 +1903,13 @@ HTML = '''<!DOCTYPE html>
     <div class="user-setup-card">
         <h2>👤 Setup Profile</h2>
         <div class="sub">Enter your display name to start chatting</div>
-        
         <input type="text" id="userDisplayName" placeholder="Your Display Name (e.g., John Doe)">
         <input type="text" id="userGroupName" placeholder="Group Name" readonly>
         <input type="password" id="userGroupPassword" placeholder="Group Password" readonly>
-        
         <button id="enterChatBtn">▶ Enter Chat</button>
-        
         <div id="setupError" class="error-message"></div>
         <div id="setupSuccess" class="success-message"></div>
-        
-        <div class="login-footer" style="margin-top:20px;padding-top:16px;border-top:1px solid #1a1a2e;">
-            🔐 You'll be able to see messages from others in your group
-        </div>
+        <div class="login-footer" style="margin-top:20px;padding-top:16px;border-top:1px solid #1a1a2e;">🔐 You'll be able to see messages from others in your group</div>
     </div>
 </div>
 
@@ -1838,24 +1923,15 @@ HTML = '''<!DOCTYPE html>
         <h2 id="groupTitle"># LOADING</h2>
         <button class="logout-btn" onclick="logout()">Leave</button>
     </div>
-    
-    <!-- Offline Bar -->
-    <div class="offline-bar" id="offlineBar">
-        ⚠️ No internet connection
-        <button class="reconnect-btn" onclick="reconnectManually()">↻ Retry</button>
-    </div>
-    
+    <div class="offline-bar" id="offlineBar">⚠️ No internet connection <button class="reconnect-btn" onclick="reconnectManually()">↻ Retry</button></div>
     <div class="main-content">
         <div class="sidebar" id="sidebar">
             <div class="sidebar-header"><h3>● Online Users</h3></div>
             <div class="users-list" id="usersList"><div class="user-item">Loading...</div></div>
         </div>
         <div class="overlay" id="overlay" onclick="toggleSidebar()"></div>
-        
         <div class="chat-area">
-            <div class="messages-container" id="messages">
-                <div style="text-align:center;color:#666;padding:40px 0;">Connecting...</div>
-            </div>
+            <div class="messages-container" id="messages"><div style="text-align:center;color:#666;padding:40px 0;">Connecting...</div></div>
             <div class="typing-indicator" id="typingIndicator"></div>
             <div class="input-area">
                 <div class="reply-preview" id="replyPreview">
@@ -1879,7 +1955,6 @@ HTML = '''<!DOCTYPE html>
     <div class="connection-status status-online" id="connectionStatus">🟢 Connected</div>
 </div>
 
-<!-- Install App Button -->
 <button id="installBtn" class="install-btn">📲 Install ABAVANDIMWE App</button>
 
 <script>
@@ -1901,7 +1976,6 @@ let audioChunks = [];
 let isRecording = false;
 let recordingTimer = null;
 let recordingSeconds = 0;
-let audioBlobUrl = null;
 
 // ========== LOADING OVERLAY ==========
 function showLoading(text, callback) {
@@ -1909,96 +1983,59 @@ function showLoading(text, callback) {
     const loadingText = document.getElementById('loadingText');
     loadingText.textContent = text;
     overlay.classList.add('active');
-    
     setTimeout(async () => {
-        try {
-            await callback();
-        } catch (e) {
-            console.error('Error in callback:', e);
-        } finally {
+        try { await callback(); } catch(e) { console.error(e); }
+        finally {
             if (!document.querySelector('.chat-container.active') && 
                 !document.querySelector('.admin-panel.active') &&
                 !document.querySelector('.gatekeeper-container.active') &&
                 !document.querySelector('.user-setup-container.active')) {
-                setTimeout(() => {
-                    overlay.classList.remove('active');
-                }, 500);
+                setTimeout(() => overlay.classList.remove('active'), 500);
             }
         }
     }, 300);
 }
 
-function hideLoading() {
-    document.getElementById('loadingOverlay').classList.remove('active');
-}
+function hideLoading() { document.getElementById('loadingOverlay').classList.remove('active'); }
 
-// ========== PWA: Service Worker Registration ==========
+// ========== PWA ==========
 if ('serviceWorker' in navigator) {
     window.addEventListener('load', () => {
-        navigator.serviceWorker.register('/sw.js')
-            .then((registration) => {
-                console.log('✅ Service Worker registered successfully');
-                window.swRegistration = registration;
-            })
-            .catch((error) => {
-                console.log('❌ Service Worker registration failed:', error);
-            });
+        navigator.serviceWorker.register('/sw.js').then(reg => {
+            console.log('✅ Service Worker registered');
+            window.swRegistration = reg;
+        }).catch(err => console.log('❌ Service Worker failed:', err));
     });
 }
 
-// ========== PWA: Install Button ==========
 let deferredPrompt;
 const installBtn = document.getElementById('installBtn');
-
 window.addEventListener('beforeinstallprompt', (e) => {
     e.preventDefault();
     deferredPrompt = e;
     installBtn.classList.add('show');
-    console.log('📱 App can be installed');
 });
-
 async function installApp() {
     if (deferredPrompt) {
         deferredPrompt.prompt();
-        const choiceResult = await deferredPrompt.userChoice;
-        if (choiceResult.outcome === 'accepted') {
-            console.log('✅ User accepted the install prompt');
-            installBtn.classList.remove('show');
-        } else {
-            console.log('❌ User dismissed the install prompt');
-        }
+        const result = await deferredPrompt.userChoice;
+        if (result.outcome === 'accepted') installBtn.classList.remove('show');
         deferredPrompt = null;
     }
-    hideLoading();
 }
-
 document.getElementById('installBtn').addEventListener('click', installApp);
-
-window.addEventListener('appinstalled', (evt) => {
-    console.log('✅ ABAVANDIMWE was installed');
+window.addEventListener('appinstalled', () => installBtn.classList.remove('show'));
+if (window.matchMedia('(display-mode: standalone)').matches || navigator.standalone) {
     installBtn.classList.remove('show');
-    hideLoading();
-});
-
-if (window.matchMedia('(display-mode: standalone)').matches) {
-    installBtn.classList.remove('show');
-    console.log('📱 ABAVANDIMWE is running as installed app');
 }
 
-if (navigator.standalone) {
-    installBtn.classList.remove('show');
-    console.log('📱 ABAVANDIMWE is running as iOS standalone app');
-}
-
-// ========== PUSH NOTIFICATIONS ========== 
+// ========== PUSH NOTIFICATIONS ==========
 function urlBase64ToUint8Array(base64String) {
     const padding = '='.repeat((4 - base64String.length % 4) % 4);
     const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
     const rawData = window.atob(base64);
     const outputArray = new Uint8Array(rawData.length);
-    for (let i = 0; i < rawData.length; ++i) {
-        outputArray[i] = rawData.charCodeAt(i);
-    }
+    for (let i = 0; i < rawData.length; ++i) outputArray[i] = rawData.charCodeAt(i);
     return outputArray;
 }
 
@@ -2007,32 +2044,20 @@ async function getVapidPublicKey() {
         const response = await fetch('/api/push/vapid_public_key');
         const data = await response.json();
         vapidPublicKey = data.publicKey;
-        console.log('📱 VAPID public key loaded');
         return vapidPublicKey;
-    } catch (e) {
-        console.error('Failed to get VAPID public key:', e);
-        return null;
-    }
+    } catch(e) { console.error('Failed to get VAPID key:', e); return null; }
 }
 
 async function subscribeToPush() {
-    if (!window.swRegistration) {
-        console.log('⚠️ Service Worker not ready');
-        return false;
-    }
-    
-    if (!vapidPublicKey) {
-        await getVapidPublicKey();
-        if (!vapidPublicKey) return false;
-    }
-    
+    if (!window.swRegistration) return false;
+    if (!vapidPublicKey) await getVapidPublicKey();
+    if (!vapidPublicKey) return false;
     try {
         const subscription = await window.swRegistration.pushManager.subscribe({
             userVisibleOnly: true,
             applicationServerKey: urlBase64ToUint8Array(vapidPublicKey)
         });
         pushSubscription = subscription;
-        
         await fetch('/api/push/subscribe', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -2049,17 +2074,14 @@ async function subscribeToPush() {
         notificationsEnabled = true;
         updateNotificationButton();
         return true;
-    } catch (e) {
-        console.error('Push subscription failed:', e);
-        return false;
-    }
+    } catch(e) { console.error('Push subscription failed:', e); return false; }
 }
 
 async function unsubscribeFromPush() {
     if (!pushSubscription) {
         if (window.swRegistration) {
-            const subscription = await window.swRegistration.pushManager.getSubscription();
-            if (subscription) pushSubscription = subscription;
+            const sub = await window.swRegistration.pushManager.getSubscription();
+            if (sub) pushSubscription = sub;
         }
     }
     if (!pushSubscription) return;
@@ -2068,38 +2090,19 @@ async function unsubscribeFromPush() {
         pushSubscription = null;
         notificationsEnabled = false;
         updateNotificationButton();
-        console.log('✅ Unsubscribed from push notifications');
-    } catch (e) {
-        console.error('Unsubscribe failed:', e);
-    }
+    } catch(e) { console.error('Unsubscribe failed:', e); }
 }
 
 async function toggleNotifications() {
-    if (!('Notification' in window)) {
-        alert('Push notifications are not supported in this browser.');
-        return;
-    }
-    if (notificationsEnabled) {
-        await unsubscribeFromPush();
-        return;
-    }
-    if (Notification.permission === 'denied') {
-        alert('Notifications are blocked. Please enable them in your browser settings.');
-        return;
-    }
+    if (!('Notification' in window)) { alert('Push notifications not supported.'); return; }
+    if (notificationsEnabled) { await unsubscribeFromPush(); return; }
+    if (Notification.permission === 'denied') { alert('Notifications blocked. Please enable in browser settings.'); return; }
     if (Notification.permission === 'default') {
         const permission = await Notification.requestPermission();
-        if (permission !== 'granted') {
-            alert('You need to allow notifications to receive message alerts.');
-            return;
-        }
+        if (permission !== 'granted') { alert('You need to allow notifications.'); return; }
     }
     const success = await subscribeToPush();
-    if (success) {
-        alert('🔔 Notifications enabled! You will receive alerts for new messages.');
-    } else {
-        alert('❌ Failed to enable notifications. Please try again.');
-    }
+    alert(success ? '🔔 Notifications enabled!' : '❌ Failed to enable notifications.');
 }
 
 function updateNotificationButton() {
@@ -2117,7 +2120,7 @@ function isPushSupported() {
     return 'PushManager' in window && 'serviceWorker' in navigator && 'Notification' in window;
 }
 
-// ========== OFFLINE OVERLAY MANAGEMENT ==========
+// ========== OFFLINE OVERLAY ==========
 const offlineOverlay = document.getElementById('offlineOverlay');
 
 function showOfflineOverlay() {
@@ -2166,49 +2169,38 @@ function hideOfflineOverlay() {
 }
 
 document.getElementById('retryOfflineBtn').addEventListener('click', function() {
-    if (navigator.onLine) {
-        hideOfflineOverlay();
-    } else {
+    if (navigator.onLine) hideOfflineOverlay();
+    else {
         this.textContent = '⏳ Still offline...';
-        setTimeout(() => { this.textContent = '↻ Retry'; }, 1000);
+        setTimeout(() => this.textContent = '↻ Retry', 1000);
     }
 });
 
 // ========== DOM READY ==========
 document.addEventListener('DOMContentLoaded', function() {
-    if (!navigator.onLine) {
-        showOfflineOverlay();
-    }
+    if (!navigator.onLine) showOfflineOverlay();
 
     document.getElementById('loginBtn').addEventListener('click', function(e) {
         if (this.classList.contains('btn-loading')) return;
         showLoading('Logging in', login);
     });
-    
     document.getElementById('gatekeeperBtn').addEventListener('click', function(e) {
         if (this.classList.contains('btn-loading')) return;
         showLoading('Verifying', gatekeeperLogin);
     });
-    
     document.getElementById('enterChatBtn').addEventListener('click', function(e) {
         if (this.classList.contains('btn-loading')) return;
         showLoading('Entering Chat', enterChat);
     });
     
     document.getElementById('loginPassword').addEventListener('keypress', function(e) {
-        if(e.key === 'Enter') {
-            showLoading('Logging in', login);
-        }
+        if(e.key === 'Enter') showLoading('Logging in', login);
     });
     document.getElementById('gatekeeperPassword').addEventListener('keypress', function(e) {
-        if(e.key === 'Enter') {
-            showLoading('Verifying', gatekeeperLogin);
-        }
+        if(e.key === 'Enter') showLoading('Verifying', gatekeeperLogin);
     });
     document.getElementById('userDisplayName').addEventListener('keypress', function(e) {
-        if(e.key === 'Enter') {
-            showLoading('Entering Chat', enterChat);
-        }
+        if(e.key === 'Enter') showLoading('Entering Chat', enterChat);
     });
     
     document.getElementById('messageInput').addEventListener('input', function() {
@@ -2224,26 +2216,16 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     });
 
-    function handleVisibilityChange() {
-        if (document.visibilityState === 'visible') {
-            if (document.getElementById('chatScreen').classList.contains('active')) {
-                if (!navigator.onLine) {
-                    clearMessagesOffline();
-                } else {
-                    if (!ws || ws.readyState !== WebSocket.OPEN) {
-                        if (window.chatUsername && window.chatGroup) {
-                            connectToChat(window.chatUsername, window.chatGroup);
-                        }
-                    }
-                }
+    document.addEventListener('visibilitychange', function() {
+        if (document.visibilityState === 'visible' && document.getElementById('chatScreen').classList.contains('active')) {
+            if (!navigator.onLine) clearMessagesOffline();
+            else if (!ws || ws.readyState !== WebSocket.OPEN) {
+                if (window.chatUsername && window.chatGroup) connectToChat(window.chatUsername, window.chatGroup);
             }
         }
-    }
-
-    document.addEventListener('visibilitychange', handleVisibilityChange);
+    });
 
     window.addEventListener('online', function() {
-        console.log('Network came back - reconnecting...');
         if (offlineOverlay.classList.contains('active')) {
             if (lastActiveScreen === 'chat' && window.chatUsername && window.chatGroup) {
                 offlineOverlay.classList.remove('active');
@@ -2259,35 +2241,27 @@ document.addEventListener('DOMContentLoaded', function() {
         }
         if (document.getElementById('chatScreen').classList.contains('active')) {
             if (!ws || ws.readyState !== WebSocket.OPEN) {
-                if (window.chatUsername && window.chatGroup) {
-                    connectToChat(window.chatUsername, window.chatGroup);
-                }
+                if (window.chatUsername && window.chatGroup) connectToChat(window.chatUsername, window.chatGroup);
             }
         }
     });
 
     window.addEventListener('offline', function() {
-        console.log('Network went offline');
         showOfflineOverlay();
-        if (document.getElementById('chatScreen').classList.contains('active')) {
-            clearMessagesOffline();
-        }
+        if (document.getElementById('chatScreen').classList.contains('active')) clearMessagesOffline();
     });
     
-    // Initialize push notifications if supported
     if (isPushSupported()) {
         getVapidPublicKey();
         if (window.swRegistration) {
             window.swRegistration.pushManager.getSubscription()
-                .then((subscription) => {
-                    if (subscription) {
-                        pushSubscription = subscription;
+                .then(sub => {
+                    if (sub) {
+                        pushSubscription = sub;
                         notificationsEnabled = true;
                         updateNotificationButton();
-                        console.log('📱 Existing push subscription found');
                     }
-                })
-                .catch((e) => console.error('Error checking subscription:', e));
+                }).catch(e => console.error('Error checking subscription:', e));
         }
     } else {
         const btn = document.getElementById('notificationBtn');
@@ -2301,35 +2275,28 @@ function clearMessagesOffline() {
     messagesData = {};
     document.getElementById('offlineBar').classList.add('active');
     updateStatus(false);
-    if (ws && ws.readyState === WebSocket.OPEN) {
-        ws.close();
-    }
+    if (ws && ws.readyState === WebSocket.OPEN) ws.close();
 }
 
 // ========== LOGIN ==========
 async function login() {
     const username = document.getElementById('loginUsername').value.trim();
     const password = document.getElementById('loginPassword').value;
-    
     if(!username || !password) {
         showError('Please enter username and password');
         hideLoading();
         return;
     }
-    
     try {
         const response = await fetch('/login', {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
             body: JSON.stringify({username, password})
         });
-        
         const data = await response.json();
-        
         if(data.success) {
             currentUser = {username: data.username, role: data.role};
             hideLoading();
-            
             if(data.role === 'admin') {
                 document.getElementById('loginScreen').style.display = 'none';
                 document.getElementById('adminPanel').classList.add('active');
@@ -2340,7 +2307,6 @@ async function login() {
                 document.getElementById('gatekeeperScreen').classList.add('active');
                 document.getElementById('gatekeeperUsername').value = data.username;
                 document.getElementById('gatekeeperPassword').value = '';
-                
                 if(data.display_name) {
                     const successDiv = document.createElement('div');
                     successDiv.id = 'gatekeeperSuccess';
@@ -2367,31 +2333,25 @@ async function login() {
 async function gatekeeperLogin() {
     const username = document.getElementById('gatekeeperUsername').value.trim();
     const password = document.getElementById('gatekeeperPassword').value;
-    
     if(!username || !password) {
         showGatekeeperError('Please enter your password');
         hideLoading();
         return;
     }
-    
     try {
         const response = await fetch('/gatekeeper', {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
             body: JSON.stringify({username, password})
         });
-        
         const data = await response.json();
-        
         if(data.success) {
             gatekeeperData = data;
             document.getElementById('gatekeeperScreen').classList.remove('active');
             document.getElementById('userSetupScreen').classList.add('active');
-            
             document.getElementById('userGroupName').value = data.assigned_group;
             document.getElementById('userGroupPassword').value = data.assigned_group_password;
             groupPassword = data.assigned_group_password;
-            
             if(data.display_name) {
                 document.getElementById('userDisplayName').value = data.display_name;
                 showSetupSuccess('✅ Welcome back! Your display name is saved.');
@@ -2415,31 +2375,16 @@ async function gatekeeperLogin() {
 async function enterChat() {
     const displayName = document.getElementById('userDisplayName').value.trim();
     const groupName = document.getElementById('userGroupName').value.trim();
-    
-    if(!displayName) {
-        showSetupError('Please enter your display name');
-        hideLoading();
-        return;
-    }
-    
-    if(!groupName) {
-        showSetupError('Group missing. Please contact admin.');
-        hideLoading();
-        return;
-    }
+    if(!displayName) { showSetupError('Please enter your display name'); hideLoading(); return; }
+    if(!groupName) { showSetupError('Group missing. Please contact admin.'); hideLoading(); return; }
     
     try {
         await fetch('/save_display_name', {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({
-                username: gatekeeperData.username,
-                display_name: displayName
-            })
+            body: JSON.stringify({username: gatekeeperData.username, display_name: displayName})
         });
-    } catch(e) {
-        console.error('Failed to save display name:', e);
-    }
+    } catch(e) { console.error('Failed to save display name:', e); }
     
     window.chatUsername = displayName;
     window.chatGroup = groupName;
@@ -2450,7 +2395,6 @@ async function enterChat() {
     document.getElementById('messages').innerHTML = '';
     messagesData = {};
     hideLoading();
-    
     connectToChat(displayName, groupName);
 }
 
@@ -2469,10 +2413,8 @@ function connectToChat(username, group) {
     }
 
     document.getElementById('groupTitle').innerHTML = '# ' + group;
-    
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const url = protocol + '//' + window.location.host + '/ws';
-    
     ws = new WebSocket(url);
     
     ws.onopen = function() {
@@ -2480,11 +2422,7 @@ function connectToChat(username, group) {
         document.getElementById('offlineBar').classList.remove('active');
         const offlineMsg = document.querySelector('.offline-message');
         if (offlineMsg) offlineMsg.remove();
-        ws.send(JSON.stringify({
-            type: 'join',
-            username: username,
-            group: group
-        }));
+        ws.send(JSON.stringify({type: 'join', username: username, group: group}));
         reconnectAttempts = 0;
         isManuallyReconnecting = false;
     };
@@ -2492,36 +2430,22 @@ function connectToChat(username, group) {
     ws.onmessage = async function(e) {
         try {
             let d = JSON.parse(e.data);
-            
-            if(d.type === 'error') {
-                showError(d.message);
-                ws.close();
-                return;
-            }
-            if(d.type === 'ready') {
-                groupSalt = d.salt;
-                addSystemMessage('🔐 Connected - Messages last 24 hours');
-            } else if(d.type === 'history') {
+            if(d.type === 'error') { showError(d.message); ws.close(); return; }
+            if(d.type === 'ready') { groupSalt = d.salt; addSystemMessage('🔐 Connected - Messages last 24 hours'); }
+            else if(d.type === 'history') {
                 document.getElementById('messages').innerHTML = '';
                 const offlineMsg = document.querySelector('.offline-message');
                 if (offlineMsg) offlineMsg.remove();
                 messagesData = {};
-                
                 if(d.messages && d.messages.length > 0) {
                     for(let msg of d.messages) {
                         try {
                             let dec = await decrypt(msg.ciphertext, window.groupPassword, msg.salt);
                             let isSent = msg.sender === window.chatUsername;
                             messagesData[msg.id] = {
-                                sender: msg.sender, 
-                                text: dec, 
-                                timestamp: msg.created_at,
-                                voice_url: msg.voice_url,
-                                media_url: msg.media_url,
-                                media_type: msg.media_type,
-                                edited: msg.edited || false,
-                                read_by: msg.read_by || [],
-                                reactions: msg.reactions || {}
+                                sender: msg.sender, text: dec, timestamp: msg.created_at,
+                                voice_url: msg.voice_url, media_url: msg.media_url, media_type: msg.media_type,
+                                edited: msg.edited || false, read_by: msg.read_by || [], reactions: msg.reactions || {}
                             };
                             addMessage(msg.sender, dec, isSent, msg.timestamp, msg.id, msg.reply_to, 
                                      msg.voice_url, msg.media_url, msg.media_type, msg.edited, msg.read_by, msg.reactions);
@@ -2529,15 +2453,9 @@ function connectToChat(username, group) {
                             console.error('Decryption error:', e);
                             let isSent = msg.sender === window.chatUsername;
                             messagesData[msg.id] = {
-                                sender: msg.sender, 
-                                text: '🔒 Encrypted', 
-                                timestamp: msg.created_at,
-                                voice_url: msg.voice_url,
-                                media_url: msg.media_url,
-                                media_type: msg.media_type,
-                                edited: msg.edited || false,
-                                read_by: msg.read_by || [],
-                                reactions: msg.reactions || {}
+                                sender: msg.sender, text: '🔒 Encrypted', timestamp: msg.created_at,
+                                voice_url: msg.voice_url, media_url: msg.media_url, media_type: msg.media_type,
+                                edited: msg.edited || false, read_by: msg.read_by || [], reactions: msg.reactions || {}
                             };
                             addMessage(msg.sender, '🔒 Encrypted', isSent, msg.timestamp, msg.id, msg.reply_to,
                                      msg.voice_url, msg.media_url, msg.media_type, msg.edited, msg.read_by, msg.reactions);
@@ -2549,85 +2467,54 @@ function connectToChat(username, group) {
                     let dec = await decrypt(d.ciphertext, window.groupPassword, d.salt);
                     let isSent = d.sender === window.chatUsername;
                     messagesData[d.message_id] = {
-                        sender: d.sender, 
-                        text: dec, 
-                        timestamp: d.timestamp,
-                        voice_url: d.voice_url,
-                        media_url: d.media_url,
-                        media_type: d.media_type,
-                        edited: d.edited || false,
-                        read_by: d.read_by || [],
-                        reactions: d.reactions || {}
+                        sender: d.sender, text: dec, timestamp: d.timestamp,
+                        voice_url: d.voice_url, media_url: d.media_url, media_type: d.media_type,
+                        edited: d.edited || false, read_by: d.read_by || [], reactions: d.reactions || {}
                     };
                     addMessage(d.sender, dec, isSent, d.timestamp, d.message_id, d.reply_to,
                              d.voice_url, d.media_url, d.media_type, d.edited, d.read_by, d.reactions);
                 } catch(e) {
                     messagesData[d.message_id] = {
-                        sender: d.sender, 
-                        text: '🔒 Encrypted', 
-                        timestamp: d.timestamp,
-                        voice_url: d.voice_url,
-                        media_url: d.media_url,
-                        media_type: d.media_type,
-                        edited: d.edited || false,
-                        read_by: d.read_by || [],
-                        reactions: d.reactions || {}
+                        sender: d.sender, text: '🔒 Encrypted', timestamp: d.timestamp,
+                        voice_url: d.voice_url, media_url: d.media_url, media_type: d.media_type,
+                        edited: d.edited || false, read_by: d.read_by || [], reactions: d.reactions || {}
                     };
                     addMessage(d.sender, '🔒 Encrypted', false, d.timestamp, d.message_id, d.reply_to,
                              d.voice_url, d.media_url, d.media_type, d.edited, d.read_by, d.reactions);
                 }
-            } else if(d.type === 'users') {
-                updateUsers(d.users);
-            } else if(d.type === 'user_joined') {
-                addSystemMessage('👤 ' + d.user + ' joined');
-            } else if(d.type === 'user_left') {
-                addSystemMessage('👋 ' + d.user + ' left');
-            } else if(d.type === 'typing') {
-                document.getElementById('typingIndicator').innerHTML = '✏️ ' + d.user + ' typing...';
-            } else if(d.type === 'stop_typing') {
-                document.getElementById('typingIndicator').innerHTML = '';
-            } else if(d.type === 'pong') {
-                updateStatus(true);
-            } else if(d.type === 'message_edited') {
-                // Handle edited message
+            } else if(d.type === 'users') { updateUsers(d.users); }
+            else if(d.type === 'user_joined') { addSystemMessage('👤 ' + d.user + ' joined'); }
+            else if(d.type === 'user_left') { addSystemMessage('👋 ' + d.user + ' left'); }
+            else if(d.type === 'typing') { document.getElementById('typingIndicator').innerHTML = '✏️ ' + d.user + ' typing...'; }
+            else if(d.type === 'stop_typing') { document.getElementById('typingIndicator').innerHTML = ''; }
+            else if(d.type === 'pong') { updateStatus(true); }
+            else if(d.type === 'message_edited') {
                 try {
                     let dec = await decrypt(d.ciphertext, window.groupPassword, d.salt);
                     if (messagesData[d.message_id]) {
                         messagesData[d.message_id].text = dec;
                         messagesData[d.message_id].edited = true;
-                        // Update the message in the DOM
                         updateMessageDisplay(d.message_id, dec, true);
                     }
-                } catch(e) {
-                    console.error('Error decrypting edited message:', e);
-                }
+                } catch(e) { console.error('Error decrypting edited message:', e); }
             } else if(d.type === 'reaction_update') {
-                // Update reactions
                 if (messagesData[d.message_id]) {
                     messagesData[d.message_id].reactions = d.reactions || {};
                     updateReactions(d.message_id, d.reactions || {});
                 }
             } else if(d.type === 'read_receipt') {
-                // Update read receipts
                 if (messagesData[d.message_id]) {
-                    if (!messagesData[d.message_id].read_by) {
-                        messagesData[d.message_id].read_by = [];
-                    }
+                    if (!messagesData[d.message_id].read_by) messagesData[d.message_id].read_by = [];
                     if (!messagesData[d.message_id].read_by.includes(d.user)) {
                         messagesData[d.message_id].read_by.push(d.user);
                         updateReadReceipt(d.message_id, messagesData[d.message_id].read_by);
                     }
                 }
             }
-        } catch(e) {
-            console.error('Error processing message:', e);
-        }
+        } catch(e) { console.error('Error processing message:', e); }
     };
     
-    ws.onerror = function(e) {
-        console.error('WebSocket error:', e);
-        updateStatus(false);
-    };
+    ws.onerror = function(e) { console.error('WebSocket error:', e); updateStatus(false); };
     
     ws.onclose = function() {
         updateStatus(false);
@@ -2635,13 +2522,10 @@ function connectToChat(username, group) {
         const messagesContainer = document.getElementById('messages');
         messagesContainer.innerHTML = '<div class="offline-message">🔴 No internet connection. Messages are hidden.</div>';
         messagesData = {};
-        
         if(document.getElementById('chatScreen').classList.contains('active')) {
             if (!isManuallyReconnecting) {
                 reconnectAttempts++;
-                if(reconnectAttempts < 5) {
-                    setTimeout(() => connectToChat(username, group), 3000);
-                }
+                if(reconnectAttempts < 5) setTimeout(() => connectToChat(username, group), 3000);
             }
         }
     };
@@ -2649,16 +2533,12 @@ function connectToChat(username, group) {
 
 function reconnectManually() {
     isManuallyReconnecting = true;
-    if (ws) {
-        ws.close();
-    }
+    if (ws) ws.close();
     messagesData = {};
     const container = document.getElementById('messages');
     container.innerHTML = '<div style="text-align:center;color:#666;padding:40px 0;">Connecting...</div>';
     document.getElementById('offlineBar').classList.remove('active');
-    setTimeout(() => {
-        connectToChat(window.chatUsername, window.chatGroup);
-    }, 500);
+    setTimeout(() => connectToChat(window.chatUsername, window.chatGroup), 500);
 }
 
 // ========== UI FUNCTIONS ==========
@@ -2705,44 +2585,26 @@ function addMessage(sender, text, isSent, timestamp, messageId, replyTo, voiceUr
     div.dataset.messageId = messageId;
     div.dataset.sender = sender;
     div.dataset.text = text;
+    if (voiceUrl) div.classList.add('voice-message');
     
-    if (voiceUrl) {
-        div.classList.add('voice-message');
-    }
-    
-    let time;
-    if(timestamp) {
-        let date = new Date(timestamp * 1000);
-        time = date.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
-    } else {
-        time = new Date().toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
-    }
+    let time = timestamp ? new Date(timestamp * 1000).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}) : new Date().toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
     
     let replyHtml = '';
     if(replyTo && messagesData[replyTo]) {
         let original = messagesData[replyTo];
         let originalText = original.text || 'Message';
-        replyHtml = '<div class="message-reply-preview" onclick="scrollToMessage(' + replyTo + ')">' +
-                    '↩️ <span class="reply-sender">' + escapeHtml(original.sender) + '</span>: ' +
-                    '<span class="reply-text">' + escapeHtml(originalText.substring(0, 60)) + (originalText.length > 60 ? '...' : '') + '</span>' +
-                    '</div>';
+        replyHtml = '<div class="message-reply-preview" onclick="scrollToMessage(' + replyTo + ')">↩️ <span class="reply-sender">' + escapeHtml(original.sender) + '</span>: <span class="reply-text">' + escapeHtml(originalText.substring(0, 60)) + (originalText.length > 60 ? '...' : '') + '</span></div>';
     }
     
     let messageContent = '';
     if (voiceUrl) {
-        messageContent = `
-            <div style="display:flex; align-items:center; gap:10px;">
-                <button class="voice-play-btn" onclick="playVoice(this, '${voiceUrl}')">
-                    <span class="play-icon">▶️</span>
-                    <span>Play</span>
-                </button>
-                <div class="voice-progress">
-                    <div class="voice-progress-bar" style="width:0%"></div>
-                </div>
-                <span class="voice-duration">00:00</span>
-            </div>
-            ${text !== '🎤 Voice message' ? '<div style="margin-top:6px;font-size:12px;color:#888;">' + escapeHtml(text) + '</div>' : ''}
-        `;
+        messageContent = `<div style="display:flex; align-items:center; gap:10px;">
+            <button class="voice-play-btn" onclick="playVoice(this, '${voiceUrl}')">
+                <span class="play-icon">▶️</span><span>Play</span>
+            </button>
+            <div class="voice-progress"><div class="voice-progress-bar" style="width:0%"></div></div>
+            <span class="voice-duration">00:00</span>
+        </div>${text !== '🎤 Voice message' ? '<div style="margin-top:6px;font-size:12px;color:#888;">' + escapeHtml(text) + '</div>' : ''}`;
     } else if (mediaUrl) {
         let mediaHtml = '';
         if (mediaType && mediaType.startsWith('image/')) {
@@ -2750,12 +2612,7 @@ function addMessage(sender, text, isSent, timestamp, messageId, replyTo, voiceUr
         } else {
             mediaHtml = `<a href="${mediaUrl}" target="_blank" style="color:#0f0;text-decoration:underline;">📎 Download ${mediaUrl.split('/').pop()}</a>`;
         }
-        messageContent = `
-            <div class="message-bubble">
-                ${escapeHtml(text)}
-                <div style="margin-top:6px;">${mediaHtml}</div>
-            </div>
-        `;
+        messageContent = `<div class="message-bubble">${escapeHtml(text)}<div style="margin-top:6px;">${mediaHtml}</div></div>`;
     } else {
         messageContent = '<div class="message-bubble">' + escapeHtml(text) + (edited ? ' <span style="font-size:9px;color:#888;">(edited)</span>' : '') + '</div>';
     }
@@ -2775,7 +2632,6 @@ function addMessage(sender, text, isSent, timestamp, messageId, replyTo, voiceUr
         reactionsHtml += '</div>';
     }
     
-    // Add reaction picker button
     let reactionPickerHtml = `
         <div style="position:relative;">
             <button class="reaction-picker-btn" onclick="toggleReactionPicker(this)" style="background:transparent;border:none;color:#888;font-size:14px;cursor:pointer;padding:2px 6px;">😊</button>
@@ -2809,14 +2665,8 @@ function addMessage(sender, text, isSent, timestamp, messageId, replyTo, voiceUr
     }
     
     div.innerHTML = '<div class="message-sender">' + (isSent ? 'YOU' : escapeHtml(sender)) + '</div>' + 
-                    replyHtml +
-                    messageContent + 
-                    reactionsHtml +
-                    readReceiptHtml +
-                    '<div class="message-actions">' +
-                    reactionPickerHtml +
-                    (isSent ? editActions : '') +
-                    '</div>' +
+                    replyHtml + messageContent + reactionsHtml + readReceiptHtml +
+                    '<div class="message-actions">' + reactionPickerHtml + (isSent ? editActions : '') + '</div>' +
                     '<div class="message-time">' + time + '</div>';
     
     // Swipe to reply
@@ -2837,9 +2687,7 @@ function addMessage(sender, text, isSent, timestamp, messageId, replyTo, voiceUr
     div.addEventListener('touchend', function(e) {
         let diffX = touchCurrentX - touchStartX;
         div.style.transform = '';
-        if (diffX >= 60) {
-            startReply(messageId);
-        }
+        if (diffX >= 60) startReply(messageId);
         touchStartX = 0; touchCurrentX = 0; touchStartY = 0;
     }, {passive: true});
     
@@ -2863,16 +2711,11 @@ function addMessage(sender, text, isSent, timestamp, messageId, replyTo, voiceUr
         if (!isMouseDown) return;
         let diffX = mouseCurrentX - mouseStartX;
         div.style.transform = '';
-        if (diffX >= 60) {
-            startReply(messageId);
-        }
+        if (diffX >= 60) startReply(messageId);
         isMouseDown = false;
     });
     div.addEventListener('mouseleave', function() {
-        if (isMouseDown) {
-            div.style.transform = '';
-            isMouseDown = false;
-        }
+        if (isMouseDown) { div.style.transform = ''; isMouseDown = false; }
     });
     
     msgs.appendChild(div);
@@ -2880,10 +2723,7 @@ function addMessage(sender, text, isSent, timestamp, messageId, replyTo, voiceUr
     
     // Mark message as read if received
     if (!isSent && ws && ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({
-            type: 'mark_read',
-            message_id: messageId
-        }));
+        ws.send(JSON.stringify({type: 'mark_read', message_id: messageId}));
     }
 }
 
@@ -2893,12 +2733,8 @@ function updateMessageDisplay(messageId, newText, edited) {
         if (msg.dataset.messageId == messageId) {
             const bubble = msg.querySelector('.message-bubble');
             if (bubble) {
-                // Update text
                 bubble.innerHTML = escapeHtml(newText) + (edited ? ' <span style="font-size:9px;color:#888;">(edited)</span>' : '');
-                // Update stored text
                 msg.dataset.text = newText;
-                
-                // Update reply previews that reference this message
                 const replyPreviews = document.querySelectorAll(`.message-reply-preview[onclick*="${messageId}"]`);
                 for (let preview of replyPreviews) {
                     const textSpan = preview.querySelector('.reply-text');
@@ -2915,20 +2751,14 @@ function updateMessageDisplay(messageId, newText, edited) {
 function updateReactions(messageId, reactions) {
     const messageDiv = document.querySelector(`.message[data-message-id="${messageId}"]`);
     if (!messageDiv) return;
-    
     let reactionContainer = messageDiv.querySelector('.reaction-container');
     if (!reactionContainer) {
         reactionContainer = document.createElement('div');
         reactionContainer.className = 'reaction-container';
-        // Insert after the message bubble
         const bubble = messageDiv.querySelector('.message-bubble');
-        if (bubble) {
-            bubble.parentNode.insertBefore(reactionContainer, bubble.nextSibling);
-        } else {
-            messageDiv.appendChild(reactionContainer);
-        }
+        if (bubble) bubble.parentNode.insertBefore(reactionContainer, bubble.nextSibling);
+        else messageDiv.appendChild(reactionContainer);
     }
-    
     reactionContainer.innerHTML = '';
     if (reactions && Object.keys(reactions).length > 0) {
         for (let [emoji, users] of Object.entries(reactions)) {
@@ -2941,14 +2771,12 @@ function updateReactions(messageId, reactions) {
 function updateReadReceipt(messageId, readBy) {
     const messageDiv = document.querySelector(`.message[data-message-id="${messageId}"]`);
     if (!messageDiv) return;
-    
     let receiptDiv = messageDiv.querySelector('.read-receipt');
     if (!receiptDiv) {
         receiptDiv = document.createElement('div');
         receiptDiv.className = 'read-receipt';
         messageDiv.appendChild(receiptDiv);
     }
-    
     if (readBy && readBy.length > 0) {
         receiptDiv.innerHTML = `✓ Read by ${readBy.length} ${readBy.length === 1 ? 'person' : 'people'}`;
         receiptDiv.style.display = 'block';
@@ -2959,13 +2787,7 @@ function updateReadReceipt(messageId, readBy) {
 
 function toggleReactionPicker(btn) {
     const picker = btn.parentElement.querySelector('.reaction-picker');
-    if (picker) {
-        if (picker.style.display === 'flex') {
-            picker.style.display = 'none';
-        } else {
-            picker.style.display = 'flex';
-        }
-    }
+    if (picker) picker.style.display = picker.style.display === 'flex' ? 'none' : 'flex';
 }
 
 function startReply(messageId) {
@@ -2978,10 +2800,7 @@ function startReply(messageId) {
     document.getElementById('messageInput').focus();
 }
 
-function cancelReply() {
-    replyingToMessageId = null;
-    document.getElementById('replyPreview').style.display = 'none';
-}
+function cancelReply() { replyingToMessageId = null; document.getElementById('replyPreview').style.display = 'none'; }
 
 function scrollToMessage(messageId) {
     let messages = document.querySelectorAll('.message');
@@ -2989,7 +2808,7 @@ function scrollToMessage(messageId) {
         if (msg.dataset.messageId == messageId) {
             msg.scrollIntoView({ behavior: 'smooth', block: 'center' });
             msg.style.border = '2px solid #ffaa00';
-            setTimeout(() => { msg.style.border = ''; }, 2000);
+            setTimeout(() => msg.style.border = '', 2000);
             break;
         }
     }
@@ -2997,53 +2816,28 @@ function scrollToMessage(messageId) {
 
 function updateUsers(users) {
     let ul = document.getElementById('usersList');
-    if(!users || users.length === 0) {
-        ul.innerHTML = '<div class="user-item">No users online</div>';
-    } else {
-        ul.innerHTML = users.map(u => '<div class="user-item">' + escapeHtml(u) + '</div>').join('');
-    }
+    if(!users || users.length === 0) ul.innerHTML = '<div class="user-item">No users online</div>';
+    else ul.innerHTML = users.map(u => '<div class="user-item">' + escapeHtml(u) + '</div>').join('');
 }
 
-function escapeHtml(t) {
-    let d = document.createElement('div');
-    d.textContent = t;
-    return d.innerHTML;
-}
+function escapeHtml(t) { let d = document.createElement('div'); d.textContent = t; return d.innerHTML; }
 
 // ========== SEND MESSAGE ==========
 async function sendMessage() {
     const input = document.getElementById('messageInput');
     const text = input.value.trim();
-    
     if (!text) return;
-    if (!ws || ws.readyState !== WebSocket.OPEN) {
-        alert('Not connected to server. Please wait.');
-        return;
-    }
-    if (!window.groupPassword) {
-        alert('Group password not set.');
-        return;
-    }
+    if (!ws || ws.readyState !== WebSocket.OPEN) { alert('Not connected to server.'); return; }
+    if (!window.groupPassword) { alert('Group password not set.'); return; }
     
     try {
         const salt = generateSalt();
         const encrypted = await encrypt(text, window.groupPassword, salt);
-        
-        ws.send(JSON.stringify({
-            type: 'message',
-            ciphertext: encrypted,
-            salt: salt,
-            reply_to: replyingToMessageId || null
-        }));
-        
+        ws.send(JSON.stringify({type: 'message', ciphertext: encrypted, salt: salt, reply_to: replyingToMessageId || null}));
         input.value = '';
         input.style.height = 'auto';
         cancelReply();
-        
-    } catch (error) {
-        console.error('Error sending message:', error);
-        alert('Error sending message. Please try again.');
-    }
+    } catch (error) { console.error('Error sending message:', error); alert('Error sending message. Please try again.'); }
 }
 
 function generateSalt() {
@@ -3054,131 +2848,55 @@ function generateSalt() {
 
 // ========== ENCRYPTION ==========
 async function encrypt(text, password, salt) {
-    // Client-side encryption using Web Crypto API
     const enc = new TextEncoder();
-    const keyMaterial = await crypto.subtle.importKey(
-        'raw',
-        enc.encode(password),
-        'PBKDF2',
-        false,
-        ['deriveKey']
-    );
-    
+    const keyMaterial = await crypto.subtle.importKey('raw', enc.encode(password), 'PBKDF2', false, ['deriveKey']);
     const key = await crypto.subtle.deriveKey(
-        {
-            name: 'PBKDF2',
-            salt: enc.encode(salt),
-            iterations: 100000,
-            hash: 'SHA-256'
-        },
-        keyMaterial,
-        {
-            name: 'AES-GCM',
-            length: 256
-        },
-        true,
-        ['encrypt', 'decrypt']
+        {name: 'PBKDF2', salt: enc.encode(salt), iterations: 100000, hash: 'SHA-256'},
+        keyMaterial, {name: 'AES-GCM', length: 256}, true, ['encrypt', 'decrypt']
     );
-    
     const iv = crypto.getRandomValues(new Uint8Array(12));
-    const encrypted = await crypto.subtle.encrypt(
-        {
-            name: 'AES-GCM',
-            iv: iv
-        },
-        key,
-        enc.encode(text)
-    );
-    
+    const encrypted = await crypto.subtle.encrypt({name: 'AES-GCM', iv: iv}, key, enc.encode(text));
     const combined = new Uint8Array(iv.length + encrypted.byteLength);
     combined.set(iv);
     combined.set(new Uint8Array(encrypted), iv.length);
-    
     return btoa(String.fromCharCode.apply(null, combined));
 }
 
 async function decrypt(encrypted, password, salt) {
     const enc = new TextEncoder();
     const dec = new TextDecoder();
-    
-    const keyMaterial = await crypto.subtle.importKey(
-        'raw',
-        enc.encode(password),
-        'PBKDF2',
-        false,
-        ['deriveKey']
-    );
-    
+    const keyMaterial = await crypto.subtle.importKey('raw', enc.encode(password), 'PBKDF2', false, ['deriveKey']);
     const key = await crypto.subtle.deriveKey(
-        {
-            name: 'PBKDF2',
-            salt: enc.encode(salt),
-            iterations: 100000,
-            hash: 'SHA-256'
-        },
-        keyMaterial,
-        {
-            name: 'AES-GCM',
-            length: 256
-        },
-        true,
-        ['encrypt', 'decrypt']
+        {name: 'PBKDF2', salt: enc.encode(salt), iterations: 100000, hash: 'SHA-256'},
+        keyMaterial, {name: 'AES-GCM', length: 256}, true, ['encrypt', 'decrypt']
     );
-    
     const data = Uint8Array.from(atob(encrypted), c => c.charCodeAt(0));
     const iv = data.slice(0, 12);
     const ciphertext = data.slice(12);
-    
-    const decrypted = await crypto.subtle.decrypt(
-        {
-            name: 'AES-GCM',
-            iv: iv
-        },
-        key,
-        ciphertext
-    );
-    
+    const decrypted = await crypto.subtle.decrypt({name: 'AES-GCM', iv: iv}, key, ciphertext);
     return dec.decode(decrypted);
 }
 
 // ========== VOICE RECORDING ==========
 async function toggleRecording() {
-    if (isRecording) {
-        stopRecording();
-        return;
-    }
+    if (isRecording) { stopRecording(); return; }
     startRecording();
 }
 
 async function startRecording() {
     try {
         const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-        
         let mimeType = 'audio/webm';
-        if (!MediaRecorder.isTypeSupported(mimeType)) {
-            mimeType = 'audio/ogg';
-        }
-        if (!MediaRecorder.isTypeSupported(mimeType)) {
-            mimeType = 'audio/mp4';
-        }
+        if (!MediaRecorder.isTypeSupported(mimeType)) mimeType = 'audio/ogg';
+        if (!MediaRecorder.isTypeSupported(mimeType)) mimeType = 'audio/mp4';
         
-        mediaRecorder = new MediaRecorder(stream, { 
-            mimeType: mimeType,
-            audioBitsPerSecond: 128000
-        });
-        
+        mediaRecorder = new MediaRecorder(stream, { mimeType: mimeType, audioBitsPerSecond: 128000 });
         audioChunks = [];
         
-        mediaRecorder.ondataavailable = (event) => {
-            if (event.data.size > 0) {
-                audioChunks.push(event.data);
-            }
-        };
-        
+        mediaRecorder.ondataavailable = (event) => { if (event.data.size > 0) audioChunks.push(event.data); };
         mediaRecorder.onstop = async () => {
             const audioBlob = new Blob(audioChunks, { type: mediaRecorder.mimeType });
             await uploadVoice(audioBlob);
-            
             stream.getTracks().forEach(track => track.stop());
             document.getElementById('voiceBtn').classList.remove('recording');
             document.getElementById('voiceIcon').textContent = '🎙️';
@@ -3190,7 +2908,6 @@ async function startRecording() {
         
         mediaRecorder.start(1000);
         isRecording = true;
-        
         document.getElementById('voiceBtn').classList.add('recording');
         document.getElementById('voiceIcon').textContent = '⏺️';
         document.getElementById('recordingStatus').classList.add('active');
@@ -3198,13 +2915,7 @@ async function startRecording() {
         recordingSeconds = 0;
         updateRecordingTimer();
         recordingTimer = setInterval(updateRecordingTimer, 1000);
-        
-        setTimeout(() => {
-            if (isRecording) {
-                stopRecording();
-            }
-        }, 60000);
-        
+        setTimeout(() => { if (isRecording) stopRecording(); }, 60000);
     } catch (error) {
         console.error('Error accessing microphone:', error);
         alert('Could not access microphone. Please allow microphone permissions.');
@@ -3215,84 +2926,47 @@ function updateRecordingTimer() {
     recordingSeconds++;
     const mins = Math.floor(recordingSeconds / 60);
     const secs = recordingSeconds % 60;
-    document.getElementById('recordingTimer').textContent = 
-        `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+    document.getElementById('recordingTimer').textContent = `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
 }
 
 function stopRecording() {
-    if (mediaRecorder && isRecording) {
-        mediaRecorder.stop();
-        isRecording = false;
-    }
+    if (mediaRecorder && isRecording) { mediaRecorder.stop(); isRecording = false; }
 }
 
 async function uploadVoice(audioBlob) {
     const formData = new FormData();
     formData.append('file', audioBlob, 'voice.webm');
-    
     try {
-        const response = await fetch('/api/upload_voice', {
-            method: 'POST',
-            body: formData
-        });
-        
+        const response = await fetch('/api/upload_voice', { method: 'POST', body: formData });
         const data = await response.json();
-        if (data.success) {
-            await sendVoiceMessage(data.url);
-        } else {
-            alert('Failed to upload voice message: ' + (data.error || 'Unknown error'));
-        }
+        if (data.success) await sendVoiceMessage(data.url);
+        else alert('Failed to upload voice: ' + (data.error || 'Unknown error'));
     } catch (error) {
         console.error('Upload error:', error);
-        alert('Failed to upload voice message. Please try again.');
+        alert('Failed to upload voice message.');
     }
 }
 
 async function sendVoiceMessage(voiceUrl) {
     const input = document.getElementById('messageInput');
     const text = input.value.trim();
-    
-    if (text) {
-        await sendMessageWithVoice(text, voiceUrl);
-    } else {
-        await sendMessageWithVoice('🎤 Voice message', voiceUrl);
-    }
+    await sendMessageWithVoice(text || '🎤 Voice message', voiceUrl);
 }
 
 async function sendMessageWithVoice(text, voiceUrl) {
-    if (!ws || ws.readyState !== WebSocket.OPEN) {
-        alert('Not connected to server. Please reconnect.');
-        return;
-    }
-    
-    if (!window.groupPassword) {
-        alert('Group password not set.');
-        return;
-    }
-    
+    if (!ws || ws.readyState !== WebSocket.OPEN) { alert('Not connected to server.'); return; }
+    if (!window.groupPassword) { alert('Group password not set.'); return; }
     try {
         const salt = generateSalt();
         const encrypted = await encrypt(text, window.groupPassword, salt);
-        
-        ws.send(JSON.stringify({
-            type: 'message',
-            ciphertext: encrypted,
-            salt: salt,
-            reply_to: replyingToMessageId || null,
-            voice_url: voiceUrl
-        }));
-        
+        ws.send(JSON.stringify({type: 'message', ciphertext: encrypted, salt: salt, reply_to: replyingToMessageId || null, voice_url: voiceUrl}));
         document.getElementById('messageInput').value = '';
         document.getElementById('messageInput').style.height = 'auto';
         cancelReply();
         document.getElementById('recordingStatus').classList.remove('active');
         document.getElementById('voiceBtn').classList.remove('recording');
         document.getElementById('voiceIcon').textContent = '🎙️';
-        
-    } catch (error) {
-        console.error('Error sending voice message:', error);
-        alert('Error sending voice message. Please try again.');
-    }
+    } catch (error) { console.error('Error sending voice:', error); alert('Error sending voice message.'); }
 }
 
 function playVoice(button, url) {
@@ -3317,16 +2991,13 @@ function playVoice(button, url) {
         const secs = Math.floor(audio.duration % 60);
         durationDisplay.textContent = `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
     });
-    
     audio.addEventListener('timeupdate', () => {
         const progress = (audio.currentTime / audio.duration) * 100;
         progressBar.style.width = progress + '%';
-        
         const mins = Math.floor(audio.currentTime / 60);
         const secs = Math.floor(audio.currentTime % 60);
         durationDisplay.textContent = `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
     });
-    
     audio.addEventListener('ended', () => {
         button.classList.remove('playing');
         playIcon.textContent = '▶️';
@@ -3334,7 +3005,6 @@ function playVoice(button, url) {
         progressBar.style.width = '0%';
         durationDisplay.textContent = '00:00';
     });
-    
     audio.play();
     button.classList.add('playing');
     playIcon.textContent = '⏸️';
@@ -3349,139 +3019,81 @@ async function shareMedia() {
     input.onchange = async (e) => {
         const file = e.target.files[0];
         if (!file) return;
-        
-        if (file.size > 10 * 1024 * 1024) {
-            alert('File too large (max 10MB)');
-            return;
-        }
+        if (file.size > 10 * 1024 * 1024) { alert('File too large (max 10MB)'); return; }
         
         const formData = new FormData();
         formData.append('file', file);
-        
         try {
-            const response = await fetch('/api/upload_media', {
-                method: 'POST',
-                body: formData
-            });
-            
+            const response = await fetch('/api/upload_media', { method: 'POST', body: formData });
             const data = await response.json();
-            if (data.success) {
-                const text = `📎 ${file.name}`;
-                await sendMessageWithMedia(text, data.url, data.type);
-            } else {
-                alert('Upload failed: ' + (data.error || 'Unknown error'));
-            }
-        } catch (error) {
-            console.error('Upload error:', error);
-            alert('Failed to upload media. Please try again.');
-        }
+            if (data.success) await sendMessageWithMedia(`📎 ${file.name}`, data.url, data.type);
+            else alert('Upload failed: ' + (data.error || 'Unknown error'));
+        } catch (error) { console.error('Upload error:', error); alert('Failed to upload media.'); }
     };
     input.click();
 }
 
 async function sendMessageWithMedia(text, mediaUrl, mediaType) {
-    if (!ws || ws.readyState !== WebSocket.OPEN) {
-        alert('Not connected to server.');
-        return;
-    }
-    
+    if (!ws || ws.readyState !== WebSocket.OPEN) { alert('Not connected to server.'); return; }
     try {
         const salt = generateSalt();
         const encrypted = await encrypt(text, window.groupPassword, salt);
-        
-        ws.send(JSON.stringify({
-            type: 'message',
-            ciphertext: encrypted,
-            salt: salt,
-            reply_to: replyingToMessageId || null,
-            media_url: mediaUrl,
-            media_type: mediaType
-        }));
-        
+        ws.send(JSON.stringify({type: 'message', ciphertext: encrypted, salt: salt, reply_to: replyingToMessageId || null, media_url: mediaUrl, media_type: mediaType}));
         document.getElementById('messageInput').value = '';
         cancelReply();
-    } catch (error) {
-        console.error('Error sending media:', error);
-        alert('Error sending media. Please try again.');
-    }
+    } catch (error) { console.error('Error sending media:', error); alert('Error sending media.'); }
 }
 
 // ========== REACTIONS ==========
 async function toggleReaction(messageId, emoji) {
     if (!ws || ws.readyState !== WebSocket.OPEN) return;
-    
     try {
         const response = await fetch('/reaction', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ message_id: messageId, emoji: emoji })
         });
-        
         const data = await response.json();
-        if (data.success) {
-            // Update local reactions
-            if (messagesData[messageId]) {
-                messagesData[messageId].reactions = data.reactions || {};
-                updateReactions(messageId, data.reactions || {});
-            }
+        if (data.success && messagesData[messageId]) {
+            messagesData[messageId].reactions = data.reactions || {};
+            updateReactions(messageId, data.reactions || {});
         }
-    } catch (error) {
-        console.error('Reaction error:', error);
-    }
+    } catch (error) { console.error('Reaction error:', error); }
 }
 
 // ========== MESSAGE EDITING ==========
 function editMessage(messageId) {
     const editInput = document.getElementById(`edit-input-${messageId}`);
-    if (editInput) {
-        editInput.style.display = 'block';
-        editInput.querySelector('input').focus();
-        editInput.querySelector('input').select();
-    }
+    if (editInput) { editInput.style.display = 'block'; editInput.querySelector('input').focus(); editInput.querySelector('input').select(); }
 }
 
 function cancelEdit(messageId) {
     const editInput = document.getElementById(`edit-input-${messageId}`);
-    if (editInput) {
-        editInput.style.display = 'none';
-    }
+    if (editInput) editInput.style.display = 'none';
 }
 
 async function saveEdit(messageId) {
     const editInput = document.getElementById(`edit-input-${messageId}`);
     if (!editInput) return;
-    
     const input = editInput.querySelector('input');
     const newText = input.value.trim();
-    
-    if (!newText) {
-        alert('Cannot send empty message.');
-        return;
-    }
-    
+    if (!newText) { alert('Cannot send empty message.'); return; }
     try {
         const response = await fetch('/edit_message', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ message_id: messageId, new_text: newText })
         });
-        
         const data = await response.json();
         if (data.success) {
-            // Update local data
             if (messagesData[messageId]) {
                 messagesData[messageId].text = newText;
                 messagesData[messageId].edited = true;
                 updateMessageDisplay(messageId, newText, true);
             }
             editInput.style.display = 'none';
-        } else {
-            alert(data.error || 'Failed to edit message');
-        }
-    } catch (error) {
-        console.error('Edit error:', error);
-        alert('Failed to edit message. Please try again.');
-    }
+        } else alert(data.error || 'Failed to edit message');
+    } catch (error) { console.error('Edit error:', error); alert('Failed to edit message.'); }
 }
 
 // ========== ADMIN FUNCTIONS ==========
@@ -3495,74 +3107,46 @@ async function loadAdminData() {
         document.getElementById('statGroups').textContent = data.groups ? data.groups.length : 0;
         document.getElementById('statOnline').textContent = data.online_count || 0;
         
-        // Users table
         const usersBody = document.getElementById('usersTableBody');
         usersBody.innerHTML = '';
         if (data.users) {
             data.users.forEach(user => {
                 const tr = document.createElement('tr');
-                tr.innerHTML = `
-                    <td>${escapeHtml(user.username)}</td>
-                    <td>${escapeHtml(user.assigned_group || 'None')}</td>
-                    <td>${escapeHtml(user.display_name || '')}</td>
-                    <td>${user.status || 'offline'}</td>
-                    <td>
-                        ${user.username !== 'Mpc' ? `<button onclick="deleteUser('${user.username}')" class="action-btn">Delete</button>` : 'Admin'}
-                    </td>
-                `;
+                tr.innerHTML = `<td>${escapeHtml(user.username)}</td><td>${escapeHtml(user.assigned_group || 'None')}</td><td>${escapeHtml(user.display_name || '')}</td><td>${user.status || 'offline'}</td><td>${user.username !== 'Mpc' ? `<button onclick="deleteUser('${user.username}')" class="action-btn">Delete</button>` : 'Admin'}</td>`;
                 usersBody.appendChild(tr);
             });
         }
         
-        // Groups table
         const groupsBody = document.getElementById('groupsTableBody');
         groupsBody.innerHTML = '';
         if (data.groups) {
             data.groups.forEach(group => {
                 const tr = document.createElement('tr');
-                tr.innerHTML = `
-                    <td>${escapeHtml(group.group_name)}</td>
-                    <td>${escapeHtml(group.created_by)}</td>
-                    <td><button onclick="deleteGroup('${group.group_name}')" class="action-btn">Delete</button></td>
-                `;
+                tr.innerHTML = `<td>${escapeHtml(group.group_name)}</td><td>${escapeHtml(group.created_by)}</td><td><button onclick="deleteGroup('${group.group_name}')" class="action-btn">Delete</button></td>`;
                 groupsBody.appendChild(tr);
             });
         }
         
-        // Messages table
         const messagesBody = document.getElementById('messagesTableBody');
         messagesBody.innerHTML = '';
         if (data.messages) {
             data.messages.forEach(msg => {
                 const tr = document.createElement('tr');
-                tr.innerHTML = `
-                    <td>${escapeHtml(msg.sender)}</td>
-                    <td>${escapeHtml(msg.group_name)}</td>
-                    <td>${new Date(msg.created_at * 1000).toLocaleString()}</td>
-                    <td><button onclick="deleteMessage(${msg.id})" class="action-btn">Delete</button></td>
-                `;
+                tr.innerHTML = `<td>${escapeHtml(msg.sender)}</td><td>${escapeHtml(msg.group_name)}</td><td>${new Date(msg.created_at * 1000).toLocaleString()}</td><td><button onclick="deleteMessage(${msg.id})" class="action-btn">Delete</button></td>`;
                 messagesBody.appendChild(tr);
             });
         }
         
-        // Logs table
         const logsBody = document.getElementById('logsTableBody');
         logsBody.innerHTML = '';
         if (data.logs) {
             data.logs.forEach(log => {
                 const tr = document.createElement('tr');
-                tr.innerHTML = `
-                    <td>${escapeHtml(log.admin_username)}</td>
-                    <td>${escapeHtml(log.action)}</td>
-                    <td>${escapeHtml(log.target || '')}</td>
-                    <td>${new Date(log.created_at * 1000).toLocaleString()}</td>
-                `;
+                tr.innerHTML = `<td>${escapeHtml(log.admin_username)}</td><td>${escapeHtml(log.action)}</td><td>${escapeHtml(log.target || '')}</td><td>${new Date(log.created_at * 1000).toLocaleString()}</td>`;
                 logsBody.appendChild(tr);
             });
         }
-    } catch (error) {
-        console.error('Error loading admin data:', error);
-    }
+    } catch (error) { console.error('Error loading admin data:', error); }
 }
 
 async function createUser() {
@@ -3570,19 +3154,13 @@ async function createUser() {
     const password = document.getElementById('newPassword').value;
     const groupName = document.getElementById('newGroupName').value.trim();
     const groupPassword = document.getElementById('newGroupPassword').value;
-    
-    if (!username || !password || !groupName || !groupPassword) {
-        alert('Please fill all fields');
-        return;
-    }
-    
+    if (!username || !password || !groupName || !groupPassword) { alert('Please fill all fields'); return; }
     try {
         const response = await fetch('/admin/create_user', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ username, password, group_name: groupName, group_password: groupPassword })
         });
-        
         const data = await response.json();
         if (data.success) {
             alert('✅ User created successfully!');
@@ -3591,82 +3169,50 @@ async function createUser() {
             document.getElementById('newGroupName').value = '';
             document.getElementById('newGroupPassword').value = '';
             loadAdminData();
-        } else {
-            alert('❌ Failed to create user: ' + (data.error || 'Unknown error'));
-        }
-    } catch (error) {
-        console.error('Error creating user:', error);
-        alert('Error creating user. Please try again.');
-    }
+        } else alert('❌ Failed to create user: ' + (data.error || 'Unknown error'));
+    } catch (error) { console.error('Error creating user:', error); alert('Error creating user.'); }
 }
 
 async function deleteUser(username) {
     if (!confirm(`Delete user "${username}"?`)) return;
-    
     try {
         const response = await fetch('/admin/delete_user', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ username })
         });
-        
         const data = await response.json();
-        if (data.success) {
-            alert('✅ User deleted');
-            loadAdminData();
-        } else {
-            alert('❌ Failed to delete user: ' + (data.message || 'Unknown error'));
-        }
-    } catch (error) {
-        console.error('Error deleting user:', error);
-        alert('Error deleting user. Please try again.');
-    }
+        if (data.success) { alert('✅ User deleted'); loadAdminData(); }
+        else alert('❌ Failed to delete user: ' + (data.message || 'Unknown error'));
+    } catch (error) { console.error('Error deleting user:', error); alert('Error deleting user.'); }
 }
 
 async function deleteGroup(groupName) {
     if (!confirm(`Delete group "${groupName}" and all its users?`)) return;
-    
     try {
         const response = await fetch('/admin/delete_group', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ name: groupName })
         });
-        
         const data = await response.json();
-        if (data.success) {
-            alert('✅ Group deleted');
-            loadAdminData();
-        } else {
-            alert('❌ Failed to delete group: ' + (data.message || 'Unknown error'));
-        }
-    } catch (error) {
-        console.error('Error deleting group:', error);
-        alert('Error deleting group. Please try again.');
-    }
+        if (data.success) { alert('✅ Group deleted'); loadAdminData(); }
+        else alert('❌ Failed to delete group: ' + (data.message || 'Unknown error'));
+    } catch (error) { console.error('Error deleting group:', error); alert('Error deleting group.'); }
 }
 
 async function deleteMessage(messageId) {
     if (!confirm('Delete this message?')) return;
-    
     try {
         const response = await fetch('/admin/delete_message', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ id: messageId })
         });
-        
         const data = await response.json();
-        if (data.success) {
-            alert('✅ Message deleted');
-            loadAdminData();
-        } else {
-            alert('❌ Failed to delete message');
-        }
-    } catch (error) {
-        console.error('Error deleting message:', error);
-        alert('Error deleting message. Please try again.');
-    }
+        if (data.success) { alert('✅ Message deleted'); loadAdminData(); }
+        else alert('❌ Failed to delete message');
+    } catch (error) { console.error('Error deleting message:', error); alert('Error deleting message.'); }
 }
 
 // ========== AUTH FUNCTIONS ==========
@@ -3674,46 +3220,39 @@ function showError(msg) {
     const err = document.getElementById('loginError');
     err.textContent = msg;
     err.style.display = 'block';
-    setTimeout(() => { err.style.display = 'none'; }, 5000);
+    setTimeout(() => err.style.display = 'none', 5000);
 }
 
 function showGatekeeperError(msg) {
     const err = document.getElementById('gatekeeperError');
     err.textContent = msg;
     err.style.display = 'block';
-    setTimeout(() => { err.style.display = 'none'; }, 5000);
+    setTimeout(() => err.style.display = 'none', 5000);
 }
 
 function showSetupError(msg) {
     const err = document.getElementById('setupError');
     err.textContent = msg;
     err.style.display = 'block';
-    setTimeout(() => { err.style.display = 'none'; }, 5000);
+    setTimeout(() => err.style.display = 'none', 5000);
 }
 
 function showSetupSuccess(msg) {
     const success = document.getElementById('setupSuccess');
     success.textContent = msg;
     success.style.display = 'block';
-    setTimeout(() => { success.style.display = 'none'; }, 5000);
+    setTimeout(() => success.style.display = 'none', 5000);
 }
 
 async function logout() {
-    try {
-        await fetch('/logout', { method: 'POST' });
-    } catch(e) {}
-    
-    if (ws && ws.readyState === WebSocket.OPEN) {
-        ws.close();
-    }
-    
+    try { await fetch('/logout', { method: 'POST' }); } catch(e) {}
+    if (ws && ws.readyState === WebSocket.OPEN) ws.close();
     document.getElementById('chatScreen').classList.remove('active');
     document.getElementById('adminPanel').classList.remove('active');
     document.getElementById('gatekeeperScreen').classList.remove('active');
     document.getElementById('userSetupScreen').classList.remove('active');
     document.getElementById('loginScreen').style.display = 'flex';
     document.getElementById('loginPassword').value = '';
-    
     sessionStorage.clear();
 }
 
@@ -3721,9 +3260,8 @@ function requestAccess() {
     window.open('https://wa.me/250788495861?text=I%20need%20access%20to%20ABAVANDIMWE', '_blank');
 }
 
-// ========== MAIN ==========
-console.log('ABAVANDIMWE v2.0 - Secure Messaging System');
-console.log('Features: Voice Messages, Media Sharing, Reactions, Read Receipts, Message Editing');
+console.log('ABAVANDIMWE v3.0 - Secure Messaging System');
+console.log('Features: Voice, Media, Reactions, Read Receipts, Editing');
 </script>
 </body>
 </html>
@@ -3747,12 +3285,9 @@ if __name__ == "__main__":
 ║           Messages auto-delete after 24 hours              ║
 ║                    Author: Mugisha Pc                      ║
 ║                                                            ║
-║              🎙️ Voice Messages                            ║
-║              📎 Media Sharing                             ║
-║              😊 Message Reactions                         ║
-║              👁️ Read Receipts                            ║
-║              ✏️ Message Editing                           ║
-║              📱 Multi-Device Ready                        ║
+║           ✅ Voice Messages stored in Neon DB              ║
+║           ✅ Media Files stored in Neon DB                 ║
+║           ✅ Survives Render sleep/restarts                ║
 ║                                                            ║
 ╚════════════════════════════════════════════════════════════╝
 """)
@@ -3760,19 +3295,6 @@ if __name__ == "__main__":
     print(f"[✓] Admin: {ADMIN_USERNAME} / {ADMIN_PASSWORD}")
     print(f"[✓] Database: PostgreSQL (Neon) with asyncpg")
     print(f"[✓] Messages expire after 24 hours")
+    print(f"[✓] Files expire after 7 days")
     print(f"[✓] Open: http://localhost:{port}")
-    print(f"\n📱 New Features:")
-    print(f"   ✅ Voice Messages - Record and send voice notes")
-    print(f"   ✅ Media Sharing - Images, PDFs, text files")
-    print(f"   ✅ Message Reactions - Emoji reactions to messages")
-    print(f"   ✅ Read Receipts - See who read your messages")
-    print(f"   ✅ Message Editing - Edit messages within 5 minutes")
-    print(f"   ✅ Multi-Device Ready - Device tracking")
-    print(f"\n🔔 Push Notifications:")
-    print(f"   ✅ VAPID enabled")
-    print(f"   ✅ Users can enable/disable notifications")
-    print(f"   ✅ Badge count on app icon")
-    print(f"\n🔐 Group Encryption:")
-    print(f"   ✅ All users in same group must use SAME group password")
-    print(f"   ✅ Messages encrypted with group password")
     uvicorn.run(app, host="0.0.0.0", port=port)
