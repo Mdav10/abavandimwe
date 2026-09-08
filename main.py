@@ -1450,6 +1450,7 @@ HTML = '''<!DOCTYPE html>
             background:#1a1a2e;
             border-radius:2px;
             overflow:hidden;
+            cursor:pointer;
         }
         .voice-progress-bar{
             height:100%;
@@ -1471,6 +1472,13 @@ HTML = '''<!DOCTYPE html>
             color:#888;
             margin-top:2px;
         }
+        .voice-download{
+            font-size:14px;
+            color:#0a0a0f;
+            text-decoration:none;
+            margin-left:4px;
+            cursor:pointer;
+        }
 
         /* ===== IMAGE MESSAGE ===== */
         .image-bubble{
@@ -1482,6 +1490,7 @@ HTML = '''<!DOCTYPE html>
             display:flex;
             flex-direction:column;
             width:fit-content;
+            position:relative;
         }
         .image-bubble img{
             display:block;
@@ -1499,6 +1508,16 @@ HTML = '''<!DOCTYPE html>
             background:#0f0;
             overflow-wrap:anywhere;
             word-break:break-word;
+            display:flex;
+            justify-content:space-between;
+            align-items:center;
+        }
+        .image-bubble .file-name .download-link{
+            color:#0a0a0f;
+            text-decoration:none;
+            font-size:14px;
+            cursor:pointer;
+            margin-left:8px;
         }
         .image-bubble .spinner{
             position:absolute;
@@ -1516,7 +1535,6 @@ HTML = '''<!DOCTYPE html>
         }
         @keyframes spin{0%{transform:translate(-50%,-50%) rotate(0);}100%{transform:translate(-50%,-50%) rotate(360deg);}}
         .image-bubble.placeholder img{filter:blur(2px);}
-        .image-bubble{position:relative;}
 
         /* MESSAGE ACTIONS (Reply only) */
         .message-actions{
@@ -1904,6 +1922,12 @@ let recordingTimer = null;
 let recordingSeconds = 0;
 let holdTimer = null;
 let isHolding = false;
+
+// Audio player state
+let activeAudio = null;
+let activeButton = null;
+let activeProgressBar = null;
+let activeDurationSpan = null;
 
 // ========== LOADING ==========
 function showLoading(text, callback) {
@@ -2353,8 +2377,12 @@ function connectToChat(username, group) {
                     }
                 }
             } else if(d.type === 'message') {
-                if (d.temp_id && messagesData[d.temp_id]) {
-                    // Replace placeholder
+                // If this message has a temp_id, remove the placeholder DOM element
+                if (d.temp_id) {
+                    const placeholderEl = document.querySelector(`.message[data-message-id="${d.temp_id}"]`);
+                    if (placeholderEl) {
+                        placeholderEl.remove();
+                    }
                     delete messagesData[d.temp_id];
                 }
                 try {
@@ -2465,16 +2493,18 @@ function addMessage(sender, text, isSent, timestamp, messageId, replyTo, voiceUr
 
     let messageContent = '';
     if (voiceUrl) {
-        // Custom audio player
+        // Custom audio player with download link
+        const downloadLink = voiceUrl + '?download=1';
         messageContent = `
             <div class="voice-player">
                 <button class="voice-play-btn" onclick="playVoice(this, '${voiceUrl}')">
                     <span class="play-icon">▶️</span>
                 </button>
-                <div class="voice-progress">
+                <div class="voice-progress" onclick="seekAudio(event, this)">
                     <div class="voice-progress-bar" style="width:0%"></div>
                 </div>
                 <span class="voice-duration">00:00</span>
+                <a href="${downloadLink}" download class="voice-download" title="Download audio">⬇️</a>
             </div>
             ${text !== '🎤 Voice message' ? '<div class="voice-caption">' + escapeHtml(text) + '</div>' : ''}
         `;
@@ -2482,18 +2512,27 @@ function addMessage(sender, text, isSent, timestamp, messageId, replyTo, voiceUr
         if (mediaType && mediaType.startsWith('image/')) {
             const isPlaceholder = mediaUrl.startsWith('blob:') || messageId.toString().startsWith('temp_');
             const placeholderClass = isPlaceholder ? 'placeholder' : '';
+            const downloadLink = mediaUrl + '?download=1';
             messageContent = `
                 <div class="image-bubble ${placeholderClass}">
                     <img src="${mediaUrl}" onclick="window.open('${mediaUrl}','_blank')" loading="lazy">
                     ${isPlaceholder ? '<div class="spinner"></div>' : ''}
-                    <div class="file-name">📎 ${escapeHtml(text.replace('📎 ',''))}</div>
+                    <div class="file-name">
+                        <span>📎 ${escapeHtml(text.replace('📎 ',''))}</span>
+                        <a href="${downloadLink}" download class="download-link" title="Download image">⬇️</a>
+                    </div>
                 </div>
             `;
         } else {
+            const downloadLink = mediaUrl + '?download=1';
             messageContent = `
                 <div class="message-bubble">
                     ${escapeHtml(text)}
-                    <div style="margin-top:6px;"><a href="${mediaUrl}" target="_blank" style="color:#0f0;text-decoration:underline;">📎 Download ${mediaUrl.split('/').pop()}</a></div>
+                    <div style="margin-top:6px;">
+                        <a href="${mediaUrl}" target="_blank" style="color:#0f0;text-decoration:underline;">📎 Open</a>
+                        &nbsp;|&nbsp;
+                        <a href="${downloadLink}" download style="color:#0f0;text-decoration:underline;">⬇️ Download</a>
+                    </div>
                 </div>
             `;
         }
@@ -2805,41 +2844,91 @@ async function sendMessageWithVoice(text, voiceUrl) {
         alert('Error sending voice message. Please try again.');
     }
 }
+
+// ========== CUSTOM AUDIO PLAYER (with toggle play/pause, no reset on pause) ==========
 function playVoice(button, url) {
-    const audio = new Audio(url);
-    const progressBar = button.parentElement.querySelector('.voice-progress-bar');
-    const durationDisplay = button.parentElement.querySelector('.voice-duration');
-    const playIcon = button.querySelector('.play-icon');
-    if (button.classList.contains('playing')) {
-        audio.pause();
-        audio.currentTime = 0;
-        button.classList.remove('playing');
-        playIcon.textContent = '▶️';
-        progressBar.style.width = '0%';
-        durationDisplay.textContent = '00:00';
+    // If there's already an active audio and it's not this button, stop it
+    if (activeAudio && activeButton !== button) {
+        activeAudio.pause();
+        if (activeButton) {
+            activeButton.classList.remove('playing');
+            activeButton.querySelector('.play-icon').textContent = '▶️';
+        }
+        // Don't reset progress for the old one; we just pause it
+        // The new one will take over
+    }
+
+    // If this button is already playing, toggle pause
+    if (activeButton === button && activeAudio) {
+        if (activeAudio.paused) {
+            activeAudio.play();
+            button.querySelector('.play-icon').textContent = '⏸️';
+            button.classList.add('playing');
+        } else {
+            activeAudio.pause();
+            button.querySelector('.play-icon').textContent = '▶️';
+            button.classList.remove('playing');
+        }
         return;
     }
-    audio.addEventListener('loadedmetadata', () => {
-        const mins = Math.floor(audio.duration / 60);
-        const secs = Math.floor(audio.duration % 60);
-        durationDisplay.textContent = `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
-    });
-    audio.addEventListener('timeupdate', () => {
-        const progress = (audio.currentTime / audio.duration) * 100;
-        progressBar.style.width = progress + '%';
-        const mins = Math.floor(audio.currentTime / 60);
-        const secs = Math.floor(audio.currentTime % 60);
-        durationDisplay.textContent = `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
-    });
-    audio.addEventListener('ended', () => {
+
+    // New audio – create and play
+    const audio = new Audio(url);
+    const progressBar = button.parentElement.querySelector('.voice-progress-bar');
+    const durationSpan = button.parentElement.querySelector('.voice-duration');
+
+    // Stop any previously active audio
+    if (activeAudio) {
+        activeAudio.pause();
+        if (activeButton) {
+            activeButton.querySelector('.play-icon').textContent = '▶️';
+            activeButton.classList.remove('playing');
+        }
+        // Reset progress for the old one? No, leave it as is.
+    }
+
+    activeAudio = audio;
+    activeButton = button;
+    activeProgressBar = progressBar;
+    activeDurationSpan = durationSpan;
+
+    audio.onloadedmetadata = function() {
+        const mins = Math.floor(this.duration / 60);
+        const secs = Math.floor(this.duration % 60);
+        durationSpan.textContent = String(mins).padStart(2,'0') + ':' + String(secs).padStart(2,'0');
+    };
+
+    audio.ontimeupdate = function() {
+        const pct = (this.currentTime / this.duration) * 100;
+        progressBar.style.width = pct + '%';
+        const mins = Math.floor(this.currentTime / 60);
+        const secs = Math.floor(this.currentTime % 60);
+        durationSpan.textContent = String(mins).padStart(2,'0') + ':' + String(secs).padStart(2,'0');
+    };
+
+    audio.onended = function() {
+        button.querySelector('.play-icon').textContent = '▶️';
         button.classList.remove('playing');
-        playIcon.textContent = '▶️';
         progressBar.style.width = '0%';
-        durationDisplay.textContent = '00:00';
-    });
+        durationSpan.textContent = '00:00';
+        activeAudio = null;
+        activeButton = null;
+        activeProgressBar = null;
+        activeDurationSpan = null;
+    };
+
     audio.play();
+    button.querySelector('.play-icon').textContent = '⏸️';
     button.classList.add('playing');
-    playIcon.textContent = '⏸️';
+}
+
+function seekAudio(event, progressWrap) {
+    const rect = progressWrap.getBoundingClientRect();
+    const x = event.clientX - rect.left;
+    const pct = Math.min(1, Math.max(0, x / rect.width));
+    if (activeAudio && activeProgressBar === progressWrap.querySelector('.voice-progress-bar')) {
+        activeAudio.currentTime = activeAudio.duration * pct;
+    }
 }
 
 // ========== MEDIA SHARING (instant image placeholder) ==========
@@ -3052,6 +3141,7 @@ if __name__ == "__main__":
 ║           🔔 Push Notifications Enabled!                   ║
 ║           🎙️ Voice Messages (auto-send)                   ║
 ║           🖼️ Instant Image Sharing                        ║
+║           ⬇️ Download Audio & Images                       ║
 ║                                                            ║
 ╚════════════════════════════════════════════════════════════╝
 """)
