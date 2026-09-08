@@ -1,11 +1,14 @@
 """
-ABAVANDIMWE - Secure Messaging (FIXED LAYOUT)
+ABAVANDIMWE - Secure Messaging (FULLY WORKING)
 Author: Mugisha Pc
+All features: text, voice, images, reply, reactions, admin
+Data stored in Neon PostgreSQL
 """
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request, HTTPException, UploadFile, File
 from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 import asyncio
 import json
 import os
@@ -575,7 +578,7 @@ HTML = '''<!DOCTYPE html>
         .gatekeeper-card h2,.setup-card h2{text-align:center;font-size:22px;margin-bottom:4px}
         .gatekeeper-card .sub,.setup-card .sub{text-align:center;font-size:11px;color:#666;margin-bottom:16px}
 
-        /* CHAT LAYOUT - CRITICAL FIX */
+        /* CHAT LAYOUT */
         .chat-container{display:none;flex-direction:column;height:100dvh;background:#0a0a0f}
         .chat-container.active{display:flex}
 
@@ -586,7 +589,6 @@ HTML = '''<!DOCTYPE html>
         .logout-btn{width:auto;padding:4px 12px;font-size:11px;margin:0;border-color:#ff0041;color:#ff0041}
         .logout-btn:hover{background:#ff0041;color:white}
 
-        /* MAIN CONTENT - FLEX COLUMN */
         .main-content{display:flex;flex:1;min-height:0}
         .sidebar{width:200px;background:#050508;border-right:1px solid #0f0;display:flex;flex-direction:column;flex-shrink:0;overflow:hidden}
         .sidebar-header{padding:10px;border-bottom:1px solid #0f0;font-size:12px;font-weight:bold}
@@ -595,13 +597,11 @@ HTML = '''<!DOCTYPE html>
         .online-user::before{content:"●";color:#0f0;font-size:8px}
         @media(max-width:600px){.sidebar{position:fixed;left:-200px;top:0;bottom:0;z-index:20;transition:left 0.3s;width:200px}.sidebar.open{left:0}.overlay{position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:10;display:none}.overlay.active{display:block}}
 
-        /* MESSAGES AREA - TAKES REMAINING HEIGHT */
         .messages-area{flex:1;display:flex;flex-direction:column;min-width:0;width:100%;min-height:0}
-        /* MESSAGES CONTAINER - SCROLLABLE */
         .messages{flex:1;overflow-y:auto;padding:12px;display:flex;flex-direction:column;gap:4px;width:100%;min-width:0;box-sizing:border-box;overscroll-behavior:contain}
         .typing-indicator{padding:2px 16px 6px;font-size:10px;color:#0f0;font-style:italic;min-height:22px;flex-shrink:0}
 
-        /* MESSAGE STYLES */
+        /* MESSAGES */
         .message{display:flex;flex-direction:column;width:100%;padding:4px 0;word-break:break-word;overflow-wrap:anywhere;max-width:100%;min-width:0}
         .message.mine{align-items:flex-end}
         .message.theirs{align-items:flex-start}
@@ -802,12 +802,11 @@ HTML = '''<!DOCTYPE html>
         </div>
         <div class="overlay" id="overlay" onclick="toggleSidebar()"></div>
         <div class="messages-area">
-            <!-- THIS IS THE SCROLLABLE MESSAGES CONTAINER -->
             <div class="messages" id="messages"><div style="text-align:center;color:#666;padding:40px 0;">Connecting...</div></div>
             <div class="typing-indicator" id="typingIndicator"></div>
         </div>
     </div>
-    <!-- COMPOSER - FIXED AT BOTTOM -->
+    <!-- COMPOSER -->
     <div class="composer">
         <div class="composer-row">
             <textarea class="message-input" id="msgInput" placeholder="Type a message..." rows="1"></textarea>
@@ -1099,7 +1098,7 @@ function addMessage(sender, text, isSent, timestamp, id, replyTo, voiceUrl, medi
 
     const time = timestamp ? new Date(timestamp * 1000).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'}) : '';
 
-    // ---- REPLY PREVIEW ----
+    // REPLY PREVIEW
     let replyHtml = '';
     if(replyTo && messagesData[replyTo]) {
         const orig = messagesData[replyTo];
@@ -1114,7 +1113,7 @@ function addMessage(sender, text, isSent, timestamp, id, replyTo, voiceUrl, medi
         } catch(e) {}
     }
 
-    // ---- CONTENT ----
+    // CONTENT
     let contentHtml = '';
     if (voiceUrl) {
         // AUDIO
@@ -1146,7 +1145,7 @@ function addMessage(sender, text, isSent, timestamp, id, replyTo, voiceUrl, medi
         contentHtml = `<div class="text-bubble">${escapeHtml(text)}</div>`;
     }
 
-    // ---- ACTIONS ----
+    // ACTIONS
     const actionsHtml = `
         <div class="message-actions">
             <div style="position:relative;display:inline-block;">
@@ -1166,7 +1165,6 @@ function addMessage(sender, text, isSent, timestamp, id, replyTo, voiceUrl, medi
         </div>
     `;
 
-    // ---- ASSEMBLE ----
     div.innerHTML = `
         <div class="msg-sender">${isSent ? 'YOU' : escapeHtml(sender)}</div>
         ${replyHtml}
@@ -1176,10 +1174,9 @@ function addMessage(sender, text, isSent, timestamp, id, replyTo, voiceUrl, medi
     `;
 
     messagesContainer.appendChild(div);
-    // Scroll to bottom
     messagesContainer.scrollTop = messagesContainer.scrollHeight;
 
-    // ---- SWIPE TO REPLY ----
+    // SWIPE TO REPLY
     let startX = 0, currentX = 0;
     div.addEventListener('touchstart', e => { startX = e.touches[0].clientX; currentX = startX; }, {passive:true});
     div.addEventListener('touchmove', e => {
@@ -1573,7 +1570,7 @@ if __name__ == "__main__":
     print("""
 ╔═══════════════════════════════════════════════╗
 ║     ABAVANDIMWE SECURE MESSAGING             ║
-║     Layout Fixed – Messages Visible          ║
+║     All features working                     ║
 ║     Author: Mugisha Pc                       ║
 ╚═══════════════════════════════════════════════╝
 """)
