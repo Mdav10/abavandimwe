@@ -1,13 +1,12 @@
 """
-ABAVANDIMWE - Secure Messaging (FULLY FIXED)
-All data in Neon PostgreSQL
+ABAVANDIMWE - Secure Messaging (YOUR ORIGINAL + Voice + Images)
 Author: Mugisha Pc
 """
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request, HTTPException, UploadFile, File
 from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.middleware.cors import CORSMiddleware
-from contextlib import asynccontextmanager
+from fastapi.staticfiles import StaticFiles
 import asyncio
 import json
 import os
@@ -17,31 +16,14 @@ import hashlib
 import time
 import uuid
 from typing import Dict, Optional, List
+from collections import defaultdict
+from pydantic import BaseModel
 from argon2 import PasswordHasher
+from argon2.exceptions import VerificationError
 import asyncpg
 from asyncpg import create_pool
 
-# ========== LIFESPAN ==========
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    print("🚀 Starting ABAVANDIMWE...")
-    await init_db()
-    asyncio.create_task(cleanup_loop())
-    print("✅ Server ready")
-    yield
-    if db_pool:
-        await db_pool.close()
-
-app = FastAPI(lifespan=lifespan)
-
-# ========== CORS ==========
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+app = FastAPI()
 
 # ========== DATABASE ==========
 DATABASE_URL = os.getenv('DATABASE_URL')
@@ -82,9 +64,7 @@ async def init_db():
                 reply_to INTEGER,
                 voice_url TEXT,
                 media_url TEXT,
-                media_type TEXT,
-                edited BOOLEAN DEFAULT FALSE,
-                reactions JSONB DEFAULT '{}'
+                media_type TEXT
             )
         ''')
         await conn.execute('''
@@ -315,31 +295,17 @@ async def get_all_msgs():
 class Manager:
     def __init__(self):
         self.connections: Dict[str, Dict[str, WebSocket]] = {}
-        self.online_users: Dict[str, set] = {}
 
     async def add(self, group, user, ws):
         if group not in self.connections:
             self.connections[group] = {}
-            self.online_users[group] = set()
         self.connections[group][user] = ws
-        self.online_users[group].add(user)
-        await self.broadcast_users(group)
 
     def remove(self, group, user):
         if group in self.connections:
             self.connections[group].pop(user, None)
-            if group in self.online_users:
-                self.online_users[group].discard(user)
             if not self.connections[group]:
                 del self.connections[group]
-                del self.online_users[group]
-            else:
-                asyncio.create_task(self.broadcast_users(group))
-
-    async def broadcast_users(self, group):
-        if group in self.online_users:
-            users = list(self.online_users[group])
-            await self.broadcast(group, {'type': 'users', 'users': users})
 
     async def broadcast(self, group, msg, exclude=None):
         if group not in self.connections:
@@ -353,7 +319,21 @@ class Manager:
 
 manager = Manager()
 
-# ========== API ENDPOINTS ==========
+# ========== API ==========
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+@app.on_event("startup")
+async def startup():
+    await init_db()
+    asyncio.create_task(cleanup_loop())
+    print("🚀 Server started")
+
 @app.post("/login")
 async def login(data: dict):
     user = await auth_user(data.get('username'), data.get('password'))
@@ -419,10 +399,8 @@ async def upload_media(request: Request, file: UploadFile = File(...)):
     content = await file.read()
     ext = file.filename.split('.')[-1] if '.' in file.filename else 'bin'
     filename = f"{uuid.uuid4()}.{ext}"
-    # Store the correct mime type
-    mime_type = file.content_type or 'application/octet-stream'
-    await save_file(filename, content, mime_type, session['username'])
-    return {"success": True, "url": f"/api/files/{filename}", "type": mime_type}
+    await save_file(filename, content, file.content_type or 'image/jpeg', session['username'])
+    return {"success": True, "url": f"/api/files/{filename}", "type": file.content_type}
 
 @app.get("/api/files/{filename}")
 async def get_file(filename: str):
@@ -430,61 +408,6 @@ async def get_file(filename: str):
     if not row:
         raise HTTPException(status_code=404)
     return Response(content=row['file_data'], media_type=row['mime_type'])
-
-@app.post("/edit_message")
-async def edit_message(data: dict, request: Request):
-    sid = request.cookies.get('abavandimwe_session')
-    session = await get_session(sid) if sid else None
-    if not session:
-        return JSONResponse({"success": False}, status_code=401)
-    conn = await get_db()
-    try:
-        row = await conn.fetchrow('SELECT sender, group_name FROM messages WHERE id=$1', data['message_id'])
-        if not row or row['sender'] != session['username']:
-            return JSONResponse({"success": False, "error": "Not your message"})
-        salt = gen_salt()
-        new_cipher = encrypt(data['new_text'], session['group_password'], salt)
-        await conn.execute('UPDATE messages SET ciphertext=$1, salt=$2, edited=TRUE WHERE id=$3',
-                          new_cipher, salt, data['message_id'])
-        await manager.broadcast(row['group_name'], {
-            'type': 'message_edited',
-            'message_id': data['message_id'],
-            'ciphertext': new_cipher,
-            'salt': salt
-        })
-        return {"success": True}
-    finally:
-        await release_db(conn)
-
-@app.post("/reaction")
-async def reaction(data: dict, request: Request):
-    sid = request.cookies.get('abavandimwe_session')
-    session = await get_session(sid) if sid else None
-    if not session:
-        return JSONResponse({"success": False}, status_code=401)
-    conn = await get_db()
-    try:
-        row = await conn.fetchrow('SELECT group_name, reactions FROM messages WHERE id=$1', data['message_id'])
-        if not row:
-            return JSONResponse({"success": False, "error": "Not found"})
-        reactions = row['reactions'] or {}
-        emoji = data['emoji']
-        if emoji in reactions and session['username'] in reactions[emoji]:
-            reactions[emoji].remove(session['username'])
-            if not reactions[emoji]:
-                del reactions[emoji]
-        else:
-            reactions.setdefault(emoji, []).append(session['username'])
-        await conn.execute('UPDATE messages SET reactions=$1 WHERE id=$2', json.dumps(reactions), data['message_id'])
-        counts = {e: len(u) for e, u in reactions.items()}
-        await manager.broadcast(row['group_name'], {
-            'type': 'reaction_update',
-            'message_id': data['message_id'],
-            'reactions': counts
-        })
-        return {"success": True, "reactions": counts}
-    finally:
-        await release_db(conn)
 
 @app.get("/admin/data")
 async def admin_data(request: Request):
@@ -568,7 +491,6 @@ async def ws_endpoint(websocket: WebSocket):
         return
     username = session['username']
     group = session['assigned_group']
-    gpass = session['group_password']
     if not group:
         await websocket.send_json({'type': 'error', 'message': 'No group'})
         await websocket.close()
@@ -576,9 +498,6 @@ async def ws_endpoint(websocket: WebSocket):
 
     await manager.add(group, username, websocket)
     await websocket.send_json({'type': 'history', 'messages': await get_msgs(group)})
-    if group in manager.online_users:
-        users_list = list(manager.online_users[group])
-        await websocket.send_json({'type': 'users', 'users': users_list})
     await manager.broadcast(group, {'type': 'user_joined', 'user': username}, exclude=username)
     print(f"[+] {username} joined {group}")
 
@@ -658,14 +577,6 @@ button:disabled{opacity:0.5;cursor:not-allowed}
 .logout-btn{width:auto;padding:4px 12px;font-size:11px;margin:0;border-color:#ff0041;color:#ff0041}
 .logout-btn:hover{background:#ff0041;color:white}
 
-.main-content{display:flex;flex:1;min-height:0}
-.sidebar{width:200px;background:#050508;border-right:1px solid #0f0;display:flex;flex-direction:column;flex-shrink:0;overflow:hidden}
-.sidebar-header{padding:10px;border-bottom:1px solid #0f0;font-size:12px;font-weight:bold}
-.online-users{flex:1;overflow-y:auto;padding:8px}
-.online-user{padding:6px 10px;margin:4px 0;border:1px solid #0f0;border-radius:6px;font-size:12px;display:flex;align-items:center;gap:6px}
-.online-user::before{content:"●";color:#0f0;font-size:8px}
-@media(max-width:600px){.sidebar{position:fixed;left:-200px;top:0;bottom:0;z-index:20;transition:left 0.3s;width:200px}.sidebar.open{left:0}.overlay{position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:10;display:none}.overlay.active{display:block}}
-.messages-area{flex:1;display:flex;flex-direction:column;min-width:0}
 .messages{flex:1;overflow-y:auto;padding:12px;display:flex;flex-direction:column;gap:4px}
 .message{max-width:85%;padding:4px 0;word-break:break-word;overflow-wrap:anywhere}
 .message.sent{align-self:flex-end}
@@ -716,18 +627,6 @@ button:disabled{opacity:0.5;cursor:not-allowed}
 
 .message-media{max-width:160px;max-height:160px;border-radius:8px;margin-top:4px;cursor:pointer}
 .message-media:hover{opacity:0.8}
-
-.reaction-container{display:flex;gap:4px;margin-top:4px;flex-wrap:wrap}
-.reaction-emoji{background:#1a1a2e;padding:1px 6px;border-radius:8px;font-size:11px;cursor:pointer;border:1px solid transparent}
-.reaction-emoji:hover{border-color:#0f0}
-.reaction-picker{display:none;position:absolute;bottom:100%;left:0;background:#050508;border:1px solid #0f0;border-radius:8px;padding:4px;z-index:100}
-.reaction-picker.active{display:flex;flex-wrap:wrap;gap:2px;max-width:160px}
-.reaction-picker span{font-size:16px;cursor:pointer;padding:2px 4px;border-radius:4px}
-.reaction-picker span:hover{background:#1a1a2e}
-.message-actions{display:flex;gap:4px;margin-top:2px;flex-wrap:wrap}
-.message-actions button{background:transparent;border:none;color:#888;font-size:10px;cursor:pointer;padding:1px 4px;width:auto;margin:0}
-.message-actions button:hover{color:#0f0}
-.edit-input{display:none;width:100%;padding:4px;background:#111;border:1px solid #0f0;border-radius:4px;color:#0f0;font-size:12px;margin-top:2px}
 
 .offline-bar{display:none;background:#ff0041;color:white;text-align:center;padding:4px;font-size:10px;font-weight:bold;flex-shrink:0}
 .offline-bar.active{display:block}
@@ -819,35 +718,25 @@ button:disabled{opacity:0.5;cursor:not-allowed}
     <div class="header">
         <div class="header-left">
             <span class="online-badge" id="onlineBadge">● Online</span>
-            <button class="menu-btn" onclick="toggleSidebar()" style="background:transparent;border:1px solid #0f0;color:#0f0;padding:2px 8px;border-radius:4px;cursor:pointer;font-size:14px;display:none">☰</button>
         </div>
         <h2 id="groupTitle"># LOADING</h2>
         <button class="logout-btn" onclick="logout()">Leave</button>
     </div>
     <div class="offline-bar" id="offlineBar">⚠️ Offline <button onclick="reconnect()">↻ Retry</button></div>
-    <div class="main-content">
-        <div class="sidebar" id="sidebar">
-            <div class="sidebar-header">● Online Users</div>
-            <div class="online-users" id="onlineUsers"><div style="color:#666;padding:8px;font-size:12px;">Loading...</div></div>
+    <div class="messages" id="messages"><div style="text-align:center;color:#666;padding:40px 0;">Connecting...</div></div>
+    <div class="typing-indicator" id="typingIndicator"></div>
+    <div class="composer">
+        <div class="composer-row">
+            <textarea id="msgInput" placeholder="Type a message..." rows="1"></textarea>
+            <button class="voice-btn" id="voiceBtn" onmousedown="startRecord()" onmouseup="stopRecord()" onmouseleave="stopRecord()" ontouchstart="startRecord()" ontouchend="stopRecord()" ontouchcancel="stopRecord()">🎙️</button>
+            <button class="media-btn" onclick="shareMedia()">📎</button>
+            <button class="send-btn" onclick="sendMessage()">➤</button>
         </div>
-        <div class="overlay" id="overlay" onclick="toggleSidebar()"></div>
-        <div class="messages-area">
-            <div class="messages" id="messages"><div style="text-align:center;color:#666;padding:40px 0;">Connecting...</div></div>
-            <div class="typing-indicator" id="typingIndicator"></div>
-            <div class="composer">
-                <div class="composer-row">
-                    <textarea id="msgInput" placeholder="Type a message..." rows="1"></textarea>
-                    <button class="voice-btn" id="voiceBtn" onmousedown="startRecord()" onmouseup="stopRecord()" onmouseleave="stopRecord()" ontouchstart="startRecord()" ontouchend="stopRecord()" ontouchcancel="stopRecord()">🎙️</button>
-                    <button class="media-btn" onclick="shareMedia()">📎</button>
-                    <button class="send-btn" onclick="sendMessage()">➤</button>
-                </div>
-                <div class="recording-status" id="recStatus">
-                    <span id="recTimer">00:00</span>
-                    <div class="wave"><span class="bar"></span><span class="bar"></span><span class="bar"></span><span class="bar"></span><span class="bar"></span><span class="bar"></span><span class="bar"></span><span class="bar"></span></div>
-                    <span id="recText">🔴 Recording</span>
-                    <button id="cancelRec" onclick="cancelRecord()">✕ Cancel</button>
-                </div>
-            </div>
+        <div class="recording-status" id="recStatus">
+            <span id="recTimer">00:00</span>
+            <div class="wave"><span class="bar"></span><span class="bar"></span><span class="bar"></span><span class="bar"></span><span class="bar"></span><span class="bar"></span><span class="bar"></span><span class="bar"></span></div>
+            <span id="recText">🔴 Recording</span>
+            <button id="cancelRec" onclick="cancelRecord()">✕ Cancel</button>
         </div>
     </div>
 </div>
@@ -1060,8 +949,6 @@ function connectToChat(user, group) {
                         } catch(e) { console.error(e); }
                     }
                 }
-            } else if(d.type === 'users') {
-                updateOnlineUsers(d.users);
             } else if(d.type === 'message') {
                 try {
                     const dec = await decrypt(d.ciphertext, window.groupPassword, d.salt);
@@ -1077,20 +964,6 @@ function connectToChat(user, group) {
                 document.getElementById('typingIndicator').textContent = '✏️ ' + d.user + ' typing...';
             } else if(d.type === 'stop_typing') {
                 document.getElementById('typingIndicator').textContent = '';
-            } else if(d.type === 'message_edited') {
-                try {
-                    const dec = await decrypt(d.ciphertext, window.groupPassword, d.salt);
-                    if(messagesData[d.message_id]) {
-                        messagesData[d.message_id].ciphertext = d.ciphertext;
-                        messagesData[d.message_id].edited = true;
-                        updateMessageDisplay(d.message_id, dec);
-                    }
-                } catch(e) {}
-            } else if(d.type === 'reaction_update') {
-                if(messagesData[d.message_id]) {
-                    messagesData[d.message_id].reactions = d.reactions;
-                    updateReactions(d.message_id, d.reactions);
-                }
             }
         } catch(e) { console.error('WS error:', e); }
     };
@@ -1113,20 +986,6 @@ function updateStatus(online) {
     }
 }
 
-function updateOnlineUsers(users) {
-    const container = document.getElementById('onlineUsers');
-    if(!users || users.length === 0) {
-        container.innerHTML = '<div style="color:#666;padding:8px;font-size:12px;">No one online</div>';
-    } else {
-        container.innerHTML = users.map(u => `<div class="online-user">${escapeHtml(u)}</div>`).join('');
-    }
-}
-
-function toggleSidebar() {
-    document.getElementById('sidebar').classList.toggle('open');
-    document.getElementById('overlay').classList.toggle('active');
-}
-
 function reconnect() {
     if(ws) ws.close();
     setTimeout(() => connectToChat(window.username, window.groupName), 500);
@@ -1140,7 +999,9 @@ function addMessage(sender, text, isSent, timestamp, id, replyTo, voiceUrl, medi
     div.dataset.id = id;
     const time = timestamp ? new Date(timestamp * 1000).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'}) : '';
     let content = '';
+    
     if(voiceUrl) {
+        // Voice message
         content = `<div style="display:flex;align-items:center;gap:8px;">
             <button class="voice-play-btn" onclick="playVoice(this,'${voiceUrl}')">
                 <span>▶️</span><span>Play</span>
@@ -1152,74 +1013,49 @@ function addMessage(sender, text, isSent, timestamp, id, replyTo, voiceUrl, medi
             content += `<div style="font-size:11px;color:#888;margin-top:4px;">${escapeHtml(text)}</div>`;
         }
     } else if(mediaUrl) {
+        // Image/File
         if(mediaType && mediaType.startsWith('image/')) {
             content = `<div class="bubble">${escapeHtml(text)}<div><img src="${mediaUrl}" class="message-media" onclick="window.open('${mediaUrl}')" loading="lazy"></div></div>`;
         } else {
-            content = `<div class="bubble">${escapeHtml(text)}<div><a href="${mediaUrl}" target="_blank" style="color:#0f0;text-decoration:underline;">📎 Download ${mediaUrl.split('/').pop()}</a></div></div>`;
+            content = `<div class="bubble">${escapeHtml(text)}<div><a href="${mediaUrl}" target="_blank" style="color:#0f0;text-decoration:underline;">📎 Download</a></div></div>`;
         }
     } else {
-        const edited = messagesData[id]?.edited ? ' <span style="font-size:8px;color:#888;">(edited)</span>' : '';
-        content = `<div class="bubble">${escapeHtml(text)}${edited}</div>`;
+        // Text message
+        content = `<div class="bubble">${escapeHtml(text)}</div>`;
     }
     
-    // Fix: Show replied message preview
+    // Reply preview
     let replyHtml = '';
     if(replyTo && messagesData[replyTo]) {
         const orig = messagesData[replyTo];
         try {
-            let origText = '🔒 Encrypted';
+            let origText = 'Message';
             if(orig.ciphertext) {
                 try {
-                    origText = await decrypt(orig.ciphertext, window.groupPassword, orig.salt);
+                    origText = decrypt(orig.ciphertext, window.groupPassword, orig.salt);
                 } catch(e) {}
             }
             replyHtml = `<div style="font-size:10px;color:#ffaa00;margin-bottom:3px;cursor:pointer;padding:4px 8px;background:rgba(255,170,0,0.08);border-left:2px solid #ffaa00;border-radius:4px;" onclick="scrollToMsg(${replyTo})">
                 ↩️ <span style="color:#ffaa00;font-weight:bold;">${escapeHtml(orig.sender)}</span>: ${escapeHtml(origText.substring(0,60))}${origText.length>60?'...':''}
             </div>`;
-        } catch(e) {
-            console.error('Reply preview error:', e);
-        }
+        } catch(e) {}
     }
     
-    let reactionsHtml = '';
-    const reactions = messagesData[id]?.reactions || {};
-    if(Object.keys(reactions).length) {
-        reactionsHtml = '<div class="reaction-container">';
-        for(let [emoji, users] of Object.entries(reactions)) {
-            reactionsHtml += `<span class="reaction-emoji" onclick="toggleReaction(${id},'${emoji}')">${emoji} ${users.length}</span>`;
-        }
-        reactionsHtml += '</div>';
-    }
     let actionsHtml = `
-        <div class="message-actions">
-            <div style="position:relative">
-                <button onclick="togglePicker(this)">😊</button>
-                <div class="reaction-picker">
-                    <span onclick="toggleReaction(${id},'👍')">👍</span>
-                    <span onclick="toggleReaction(${id},'❤️')">❤️</span>
-                    <span onclick="toggleReaction(${id},'😂')">😂</span>
-                    <span onclick="toggleReaction(${id},'😮')">😮</span>
-                    <span onclick="toggleReaction(${id},'😢')">😢</span>
-                    <span onclick="toggleReaction(${id},'👏')">👏</span>
-                    <span onclick="toggleReaction(${id},'🔥')">🔥</span>
-                    <span onclick="toggleReaction(${id},'🎉')">🎉</span>
-                </div>
-            </div>
-            <button onclick="replyToMsg(${id})">↩️ Reply</button>
-            ${isSent ? `<button onclick="editMessage(${id})">✏️ Edit</button>` : ''}
+        <div class="message-actions" style="display:flex;gap:4px;margin-top:2px;flex-wrap:wrap;">
+            <button onclick="replyToMsg(${id})" style="background:transparent;border:none;color:#888;font-size:10px;cursor:pointer;padding:1px 4px;">↩️ Reply</button>
         </div>
-        ${isSent ? `<div class="edit-input" id="edit-${id}"><input type="text" value="${escapeHtml(text)}" style="width:100%;padding:4px;background:#111;border:1px solid #0f0;border-radius:4px;color:#0f0;font-size:12px;"><div style="display:flex;gap:4px;margin-top:4px;"><button onclick="saveEdit(${id})" style="background:#0f0;color:#000;border:none;padding:2px 10px;border-radius:4px;cursor:pointer;font-size:10px;">Save</button><button onclick="cancelEdit(${id})" style="background:#ff0041;color:white;border:none;padding:2px 10px;border-radius:4px;cursor:pointer;font-size:10px;">Cancel</button></div></div>` : ''}
     `;
+    
     div.innerHTML = `<div class="msg-sender">${isSent ? 'YOU' : escapeHtml(sender)}</div>
         ${replyHtml}
         ${content}
-        ${reactionsHtml}
         ${actionsHtml}
         <div class="msg-time">${time}</div>`;
     container.appendChild(div);
     container.scrollTop = container.scrollHeight;
     
-    // Swipe to reply (touch)
+    // Swipe to reply
     let startX = 0, currentX = 0;
     div.addEventListener('touchstart', e => { startX = e.touches[0].clientX; currentX = startX; }, {passive:true});
     div.addEventListener('touchmove', e => {
@@ -1232,41 +1068,6 @@ function addMessage(sender, text, isSent, timestamp, id, replyTo, voiceUrl, medi
         div.style.transform = '';
         if(diff >= 50) replyToMsg(id);
     }, {passive:true});
-}
-
-function updateMessageDisplay(id, newText) {
-    const msgs = document.querySelectorAll('.message');
-    for(let msg of msgs) {
-        if(msg.dataset.id == id) {
-            const bubble = msg.querySelector('.bubble');
-            if(bubble) {
-                bubble.innerHTML = escapeHtml(newText) + ' <span style="font-size:8px;color:#888;">(edited)</span>';
-            }
-            break;
-        }
-    }
-}
-
-function updateReactions(id, reactions) {
-    const msgs = document.querySelectorAll('.message');
-    for(let msg of msgs) {
-        if(msg.dataset.id == id) {
-            let container = msg.querySelector('.reaction-container');
-            if(!container) {
-                container = document.createElement('div');
-                container.className = 'reaction-container';
-                const actions = msg.querySelector('.message-actions');
-                if(actions) actions.parentNode.insertBefore(container, actions);
-            }
-            container.innerHTML = '';
-            if(reactions && Object.keys(reactions).length) {
-                for(let [emoji, users] of Object.entries(reactions)) {
-                    container.innerHTML += `<span class="reaction-emoji" onclick="toggleReaction(${id},'${emoji}')">${emoji} ${users.length}</span>`;
-                }
-            }
-            break;
-        }
-    }
 }
 
 function addSystemMessage(text) {
@@ -1290,11 +1091,6 @@ function scrollToMsg(id) {
             break;
         }
     }
-}
-
-function togglePicker(btn) {
-    const picker = btn.parentElement.querySelector('.reaction-picker');
-    picker.classList.toggle('active');
 }
 
 function replyToMsg(id) {
@@ -1403,18 +1199,11 @@ function stopRecord() {
 async function startRecording() {
     try {
         const stream = await navigator.mediaDevices.getUserMedia({audio:true});
-        // Try to use webm with opus codec for better compatibility
         let mimeType = 'audio/webm;codecs=opus';
-        if(!MediaRecorder.isTypeSupported(mimeType)) {
-            mimeType = 'audio/webm';
-        }
-        if(!MediaRecorder.isTypeSupported(mimeType)) {
-            mimeType = 'audio/mp4';
-        }
-        mediaRecorder = new MediaRecorder(stream, { 
-            mimeType: mimeType,
-            audioBitsPerSecond: 64000 
-        });
+        if(!MediaRecorder.isTypeSupported(mimeType)) mimeType = 'audio/webm';
+        if(!MediaRecorder.isTypeSupported(mimeType)) mimeType = 'audio/mp4';
+        
+        mediaRecorder = new MediaRecorder(stream, { mimeType: mimeType, audioBitsPerSecond: 64000 });
         audioChunks = [];
         mediaRecorder.ondataavailable = e => { if(e.data.size > 0) audioChunks.push(e.data); };
         mediaRecorder.onstop = async () => {
@@ -1466,7 +1255,6 @@ function cancelRecord() {
 
 async function uploadVoice(blob) {
     const formData = new FormData();
-    // Use webm extension for compatibility
     formData.append('file', blob, 'voice.webm');
     try {
         const res = await fetch('/api/upload_voice', {method:'POST', body:formData});
@@ -1565,47 +1353,6 @@ async function shareMedia() {
         } catch(e) { console.error('Upload error:', e); }
     };
     input.click();
-}
-
-// ========== REACTIONS ==========
-async function toggleReaction(id, emoji) {
-    if(!ws || ws.readyState !== WebSocket.OPEN) return;
-    try {
-        const res = await fetch('/reaction', {
-            method:'POST', headers:{'Content-Type':'application/json'},
-            body:JSON.stringify({message_id:id, emoji:emoji})
-        });
-        const data = await res.json();
-        if(data.success && messagesData[id]) {
-            messagesData[id].reactions = data.reactions;
-            updateReactions(id, data.reactions);
-        }
-    } catch(e) { console.error('Reaction error:', e); }
-}
-
-// ========== EDIT MESSAGE ==========
-function editMessage(id) {
-    const el = document.getElementById('edit-'+id);
-    if(el) el.style.display = 'block';
-}
-function cancelEdit(id) {
-    const el = document.getElementById('edit-'+id);
-    if(el) el.style.display = 'none';
-}
-async function saveEdit(id) {
-    const el = document.getElementById('edit-'+id);
-    if(!el) return;
-    const input = el.querySelector('input');
-    const text = input.value.trim();
-    if(!text) return;
-    try {
-        const res = await fetch('/edit_message', {
-            method:'POST', headers:{'Content-Type':'application/json'},
-            body:JSON.stringify({message_id:id, new_text:text})
-        });
-        const data = await res.json();
-        if(data.success) el.style.display = 'none';
-    } catch(e) { console.error('Edit error:', e); }
 }
 
 // ========== ADMIN ==========
@@ -1722,15 +1469,12 @@ if __name__ == "__main__":
     port = int(os.getenv('PORT', 8080))
     print("""
 ╔═══════════════════════════════════════════════╗
-║     ABAVANDIMWE SECURE MESSAGING v6.0        ║
-║     Everything in Neon PostgreSQL            ║
+║     ABAVANDIMWE SECURE MESSAGING             ║
+║     Original App + Voice + Images            ║
 ║     Author: Mugisha Pc                       ║
 ╚═══════════════════════════════════════════════╝
 """)
     print(f"✅ Server running on port {port}")
     print(f"✅ Admin: Mpc / {os.getenv('ADMIN_PASSWORD', 'Mpc@Secure+_+')}")
     print(f"✅ Database: PostgreSQL (Neon)")
-    print(f"✅ Messages: 24h auto-delete")
-    print(f"✅ Files: 7d auto-delete")
-    print(f"✅ Online users: enabled")
     uvicorn.run(app, host="0.0.0.0", port=port)
