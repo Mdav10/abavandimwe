@@ -1,12 +1,13 @@
 """
-ABAVANDIMWE - Secure Messaging (FIXED)
-All features: text, voice, images, reply, reactions, admin
-Data stored in Neon PostgreSQL
+ABAVANDIMWE - Secure Messaging (Final Professional)
+All data in Neon PostgreSQL
+Author: Mugisha Pc
 """
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request, HTTPException, UploadFile, File
 from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 import asyncio
 import json
 import os
@@ -219,7 +220,6 @@ async def get_msgs(group):
     finally:
         await release_db(conn)
 
-# ========== FILE FUNCTIONS (renamed to avoid collision) ==========
 async def save_file(filename, data, mime, username):
     conn = await get_db()
     try:
@@ -597,50 +597,146 @@ HTML = '''<!DOCTYPE html>
         @media(max-width:600px){.sidebar{position:fixed;left:-200px;top:0;bottom:0;z-index:20;transition:left 0.3s;width:200px}.sidebar.open{left:0}.overlay{position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:10;display:none}.overlay.active{display:block}}
 
         .messages-area{flex:1;display:flex;flex-direction:column;min-width:0;width:100%;min-height:0}
-        .messages{flex:1;overflow-y:auto;padding:12px;display:flex;flex-direction:column;gap:4px;width:100%;min-width:0;box-sizing:border-box;overscroll-behavior:contain}
+        .messages{flex:1;overflow-y:auto;padding:12px;display:flex;flex-direction:column;gap:8px;width:100%;min-width:0;box-sizing:border-box;overscroll-behavior:contain}
         .typing-indicator{padding:2px 16px 6px;font-size:10px;color:#0f0;font-style:italic;min-height:22px;flex-shrink:0}
 
-        /* MESSAGES */
-        .message{display:flex;flex-direction:column;width:100%;padding:4px 0;word-break:break-word;overflow-wrap:anywhere;max-width:100%;min-width:0}
-        .message.mine{align-items:flex-end}
-        .message.theirs{align-items:flex-start}
+        /* MESSAGE CONTAINER – FLEX ALIGNMENT */
+        .message{
+            display:flex;
+            flex-direction:column;
+            width:fit-content;
+            max-width:80%;
+            padding:4px 0;
+            word-break:break-word;
+            overflow-wrap:anywhere;
+        }
+        .message.mine{
+            align-self:flex-end;
+            margin-left:auto;
+            margin-right:12px;
+        }
+        .message.theirs{
+            align-self:flex-start;
+            margin-left:12px;
+            margin-right:auto;
+        }
         .msg-sender{font-size:9px;opacity:0.7;padding-left:4px;margin-bottom:2px}
         .msg-time{font-size:8px;opacity:0.5;margin-top:2px}
         .system-msg{text-align:center;font-size:10px;color:#ffaa00;margin:4px 0;font-style:italic}
 
         /* TEXT BUBBLE */
-        .text-bubble{padding:8px 12px;border-radius:14px;font-size:14px;word-wrap:break-word;line-height:1.4;max-width:min(85%,700px)}
+        .text-bubble{
+            padding:8px 12px;
+            border-radius:14px;
+            font-size:14px;
+            word-wrap:break-word;
+            line-height:1.4;
+            max-width:100%;
+        }
         .mine .text-bubble{background:#0f0;color:#000;border-bottom-right-radius:4px}
         .theirs .text-bubble{background:#1a1a2e;border:1px solid #0f0;border-bottom-left-radius:4px}
 
-        /* IMAGE BUBBLE */
-        .media-bubble{width:fit-content;max-width:min(88vw,520px);overflow:hidden;border:2px solid #0f0;border-radius:18px;background:#0f0;display:flex;flex-direction:column}
-        .chat-image{display:block;width:100%;height:auto;max-height:420px;object-fit:contain;cursor:pointer;background:#111}
-        .file-name{padding:8px 12px;color:#111;overflow-wrap:anywhere;word-break:break-word;font-size:12px;background:#0f0}
-        .mine .media-bubble{margin-left:auto}
-        .theirs .media-bubble{margin-right:auto}
-
-        /* AUDIO BUBBLE - NATIVE <audio> */
-        .audio-bubble{width:min(88vw,420px);border-radius:30px;background:#0f0;padding:4px;display:flex;align-items:center}
-        .audio-bubble audio{width:100%;height:44px;border-radius:30px;display:block}
-        .mine .audio-bubble{margin-left:auto}
-        .theirs .audio-bubble{margin-right:auto}
+        /* MEDIA BUBBLE (image & audio) */
+        .media-bubble{
+            width:auto;
+            max-width:100%;
+            border-radius:18px;
+            overflow:hidden;
+            border:2px solid #0f0;
+            background:#0f0;
+            display:flex;
+            flex-direction:column;
+        }
+        .media-bubble .chat-image{
+            display:block;
+            width:100%;
+            height:auto;
+            max-height:420px;
+            object-fit:contain;
+            cursor:pointer;
+            background:#111;
+        }
+        .media-bubble .file-name{
+            padding:6px 10px;
+            color:#111;
+            overflow-wrap:anywhere;
+            word-break:break-word;
+            font-size:12px;
+            background:#0f0;
+        }
+        .audio-bubble{
+            width:min(420px,100%);
+            max-width:100%;
+            border-radius:30px;
+            background:#0f0;
+            padding:4px;
+        }
+        .audio-bubble audio{
+            width:100%;
+            height:44px;
+            border-radius:30px;
+            display:block;
+        }
+        /* style native audio controls to match theme */
         audio::-webkit-media-controls-panel{background:#0f0}
         audio::-webkit-media-controls-play-button{background:#0a0a0f;border-radius:50%;color:#0f0}
-        audio::-webkit-media-controls-current-time-display,audio::-webkit-media-controls-time-remaining-display{color:#0a0a0f}
+        audio::-webkit-media-controls-current-time-display,
+        audio::-webkit-media-controls-time-remaining-display{color:#0a0a0f}
 
         /* ACTIONS */
-        .message-actions{display:flex;gap:6px;margin-top:4px;flex-wrap:wrap}
-        .message-actions button{background:transparent;border:none;color:#888;font-size:10px;cursor:pointer;padding:1px 4px}
+        .message-actions{
+            display:flex;
+            gap:6px;
+            margin-top:4px;
+            flex-wrap:wrap;
+        }
+        .message-actions button{
+            background:transparent;
+            border:none;
+            color:#888;
+            font-size:10px;
+            cursor:pointer;
+            padding:1px 4px;
+        }
         .message-actions button:hover{color:#0f0}
-        .reaction-picker{display:none;position:absolute;bottom:100%;left:0;background:#050508;border:1px solid #0f0;border-radius:8px;padding:4px;z-index:100}
-        .reaction-picker.active{display:flex;flex-wrap:wrap;gap:2px;max-width:160px}
-        .reaction-picker span{font-size:16px;cursor:pointer;padding:2px 4px;border-radius:4px}
+        .reaction-picker{
+            display:none;
+            position:absolute;
+            bottom:100%;
+            left:0;
+            background:#050508;
+            border:1px solid #0f0;
+            border-radius:8px;
+            padding:4px;
+            z-index:100;
+        }
+        .reaction-picker.active{
+            display:flex;
+            flex-wrap:wrap;
+            gap:2px;
+            max-width:160px;
+        }
+        .reaction-picker span{
+            font-size:16px;
+            cursor:pointer;
+            padding:2px 4px;
+            border-radius:4px;
+        }
         .reaction-picker span:hover{background:#1a1a2e}
-        .reply-preview{font-size:10px;color:#ffaa00;margin-bottom:3px;cursor:pointer;padding:4px 8px;background:rgba(255,170,0,0.08);border-left:2px solid #ffaa00;border-radius:4px;max-width:min(85%,700px)}
+        .reply-preview{
+            font-size:10px;
+            color:#ffaa00;
+            margin-bottom:3px;
+            cursor:pointer;
+            padding:4px 8px;
+            background:rgba(255,170,0,0.08);
+            border-left:2px solid #ffaa00;
+            border-radius:4px;
+            max-width:100%;
+        }
         .reply-preview .reply-sender{color:#ffaa00;font-weight:bold}
 
-        /* COMPOSER - FIXED AT BOTTOM */
+        /* COMPOSER */
         .composer{padding:8px;background:#050508;border-top:1px solid #0f0;flex-shrink:0}
         .composer-row{display:flex;align-items:center;gap:8px;width:100%;box-sizing:border-box}
         .message-input{flex:1 1 auto;min-width:0;padding:10px 14px;background:#111;border:1px solid #0f0;border-radius:10px;color:#0f0;font-family:monospace;font-size:13px;resize:none;max-height:120px;min-height:40px;line-height:1.4;outline:none}
@@ -719,10 +815,12 @@ HTML = '''<!DOCTYPE html>
             .media-bubble{max-width:min(88vw,380px)}
             .text-bubble{font-size:13px;padding:6px 10px}
             .header h2{font-size:13px}
+            .message{max-width:82%}
         }
         @media(max-width:380px){
             .composer-button{flex-basis:36px;width:36px;height:36px;font-size:14px}
             .message-input{font-size:11px;padding:6px 10px;min-height:32px}
+            .message{max-width:85%}
         }
     </style>
 </head>
@@ -1092,12 +1190,13 @@ function reconnect() {
 // ========== ADD MESSAGE ==========
 function addMessage(sender, text, isSent, timestamp, id, replyTo, voiceUrl, mediaUrl, mediaType) {
     const div = document.createElement('div');
+    // Use 'mine' for sent, 'theirs' for received
     div.className = 'message ' + (isSent ? 'mine' : 'theirs');
     div.dataset.id = id;
 
     const time = timestamp ? new Date(timestamp * 1000).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'}) : '';
 
-    // REPLY PREVIEW
+    // REPLY PREVIEW (Original structure from parts 1-8)
     let replyHtml = '';
     if(replyTo && messagesData[replyTo]) {
         const orig = messagesData[replyTo];
@@ -1117,10 +1216,10 @@ function addMessage(sender, text, isSent, timestamp, id, replyTo, voiceUrl, medi
     if (voiceUrl) {
         // AUDIO
         contentHtml = `
-            <div class="audio-bubble">
+            <div class="media-bubble audio-bubble">
                 <audio controls preload="metadata" src="${voiceUrl}"></audio>
             </div>
-            ${text && text !== '🎤 Voice message' ? `<div style="font-size:11px;color:#888;margin-top:2px;max-width:min(88vw,420px);">${escapeHtml(text)}</div>` : ''}
+            ${text && text !== '🎤 Voice message' ? `<div style="font-size:11px;color:#888;margin-top:2px;max-width:100%;">${escapeHtml(text)}</div>` : ''}
         `;
     } else if (mediaUrl) {
         // IMAGE / FILE
@@ -1144,7 +1243,7 @@ function addMessage(sender, text, isSent, timestamp, id, replyTo, voiceUrl, medi
         contentHtml = `<div class="text-bubble">${escapeHtml(text)}</div>`;
     }
 
-    // ACTIONS
+    // ACTIONS (reply, reactions – from original structure)
     const actionsHtml = `
         <div class="message-actions">
             <div style="position:relative;display:inline-block;">
@@ -1175,7 +1274,7 @@ function addMessage(sender, text, isSent, timestamp, id, replyTo, voiceUrl, medi
     messagesContainer.appendChild(div);
     messagesContainer.scrollTop = messagesContainer.scrollHeight;
 
-    // SWIPE TO REPLY
+    // SWIPE TO REPLY (from original)
     let startX = 0, currentX = 0;
     div.addEventListener('touchstart', e => { startX = e.touches[0].clientX; currentX = startX; }, {passive:true});
     div.addEventListener('touchmove', e => {
@@ -1569,7 +1668,8 @@ if __name__ == "__main__":
     print("""
 ╔═══════════════════════════════════════════════╗
 ║     ABAVANDIMWE SECURE MESSAGING             ║
-║     FULLY WORKING - FIXED RECURSION          ║
+║     FINAL PROFESSIONAL VERSION               ║
+║     Incoming left · Outgoing right           ║
 ║     Author: Mugisha Pc                       ║
 ╚═══════════════════════════════════════════════╝
 """)
