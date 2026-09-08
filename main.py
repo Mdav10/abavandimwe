@@ -1,5 +1,5 @@
 """
-ABAVANDIMWE - Secure Messaging (Instant Images + Audio)
+ABAVANDIMWE - Secure Messaging (Auto-Send Audio, Instant Images)
 All data in Neon PostgreSQL
 Author: Mugisha Pc
 """
@@ -506,7 +506,6 @@ async def ws_endpoint(websocket: WebSocket):
         while True:
             data = await websocket.receive_json()
             if data.get('type') == 'message':
-                # Include temp_id if present
                 temp_id = data.get('temp_id')
                 result = await save_msg(
                     data['ciphertext'], group, username, data['salt'],
@@ -824,11 +823,37 @@ HTML = '''<!DOCTYPE html>
         .voice-btn.recording{border-color:#ff0041;background:rgba(255,0,65,0.15);animation:pulse 1s infinite}
         @keyframes pulse{0%,100%{box-shadow:0 0 0 0 rgba(255,0,65,0.4)}50%{box-shadow:0 0 20px 10px rgba(255,0,65,0.15)}}
 
-        .recording-status{display:none;padding:6px 12px;margin-top:4px;background:#1a1a2e;border:1px solid #ff0041;border-radius:8px;align-items:center;gap:8px}
+        /* RECORDING STATUS – NO CANCEL BUTTON */
+        .recording-status{
+            display:none;
+            padding:6px 12px;
+            margin-top:4px;
+            background:#1a1a2e;
+            border:1px solid #ff0041;
+            border-radius:8px;
+            align-items:center;
+            gap:8px;
+        }
         .recording-status.active{display:flex}
-        #recTimer{color:#ff0041;font-size:14px;font-weight:bold;min-width:44px}
-        .wave{flex:1;display:flex;align-items:center;gap:2px;height:20px}
-        .wave .bar{width:3px;background:#ff0041;border-radius:2px;animation:wave 0.6s ease-in-out infinite alternate}
+        #recTimer{
+            color:#ff0041;
+            font-size:14px;
+            font-weight:bold;
+            min-width:44px;
+        }
+        .wave{
+            flex:1;
+            display:flex;
+            align-items:center;
+            gap:2px;
+            height:20px;
+        }
+        .wave .bar{
+            width:3px;
+            background:#ff0041;
+            border-radius:2px;
+            animation:wave 0.6s ease-in-out infinite alternate;
+        }
         .wave .bar:nth-child(1){height:6px;animation-delay:0s}
         .wave .bar:nth-child(2){height:14px;animation-delay:0.1s}
         .wave .bar:nth-child(3){height:20px;animation-delay:0.2s}
@@ -838,8 +863,13 @@ HTML = '''<!DOCTYPE html>
         .wave .bar:nth-child(7){height:8px;animation-delay:0.6s}
         .wave .bar:nth-child(8){height:18px;animation-delay:0.7s}
         @keyframes wave{0%{transform:scaleY(0.3)}100%{transform:scaleY(1)}}
-        #cancelRec{background:transparent;border:1px solid #555;color:#888;padding:2px 10px;border-radius:4px;cursor:pointer;font-size:11px}
-        #cancelRec:hover{border-color:#ff0041;color:#ff0041}
+        #recText{
+            font-size:10px;
+            color:#ff0041;
+            font-weight:bold;
+            min-width:60px;
+            animation:pulse 1.5s infinite;
+        }
 
         .offline-bar{display:none;background:#ff0041;color:white;text-align:center;padding:4px;font-size:10px;font-weight:bold;flex-shrink:0}
         .offline-bar.active{display:block}
@@ -995,7 +1025,6 @@ HTML = '''<!DOCTYPE html>
             <span id="recTimer">00:00</span>
             <div class="wave"><span class="bar"></span><span class="bar"></span><span class="bar"></span><span class="bar"></span><span class="bar"></span><span class="bar"></span><span class="bar"></span><span class="bar"></span></div>
             <span id="recText">🔴 Recording</span>
-            <button id="cancelRec" onclick="cancelRecord()">✕ Cancel</button>
         </div>
     </div>
 </div>
@@ -1212,15 +1241,10 @@ function connectToChat(user, group) {
             } else if(d.type === 'users') {
                 updateOnlineUsers(d.users);
             } else if(d.type === 'message') {
-                // Check if this is an update for a temp message
                 if(d.temp_id && messagesData[d.temp_id]) {
-                    // Replace temp message with real one
                     const tempMsg = messagesData[d.temp_id];
-                    // Update the DOM element
                     updateTempMessage(d.temp_id, d.message_id, d.sender, d.ciphertext, d.salt, d.timestamp, d.reply_to, d.voice_url, d.media_url, d.media_type);
-                    // Remove temp entry
                     delete messagesData[d.temp_id];
-                    // Store real message
                     messagesData[d.message_id] = {
                         id: d.message_id,
                         sender: d.sender,
@@ -1234,7 +1258,6 @@ function connectToChat(user, group) {
                     };
                     return;
                 }
-                // Normal incoming message
                 try {
                     const dec = await decrypt(d.ciphertext, window.groupPassword, d.salt);
                     const isSent = d.sender === window.username;
@@ -1399,7 +1422,6 @@ function addMessage(sender, text, isSent, timestamp, id, replyTo, voiceUrl, medi
 
 // ========== UPDATE TEMP MESSAGE ==========
 function updateTempMessage(tempId, realId, sender, ciphertext, salt, timestamp, replyTo, voiceUrl, mediaUrl, mediaType) {
-    // Find the placeholder element
     const elements = messagesContainer.querySelectorAll('.message');
     let targetElement = null;
     for (let el of elements) {
@@ -1409,20 +1431,11 @@ function updateTempMessage(tempId, realId, sender, ciphertext, salt, timestamp, 
         }
     }
     if (!targetElement) return;
-
-    // Replace the content with the real data
-    // We'll reconstruct the message using the real data
-    // Remove the old element
     targetElement.remove();
-
-    // Now add the real message using addMessage with the real id
-    // We need to decrypt the text
     (async () => {
         try {
             const dec = await decrypt(ciphertext, window.groupPassword, salt);
             const isSent = sender === window.username;
-            // We need to store the real message in messagesData
-            // But we already deleted the temp entry, so we add it now
             messagesData[realId] = {
                 id: realId,
                 sender: sender,
@@ -1554,7 +1567,7 @@ async function decrypt(encrypted, password, salt) {
     return dec.decode(decrypted);
 }
 
-// ========== VOICE RECORDING ==========
+// ========== VOICE RECORDING – AUTO-SEND ON RELEASE ==========
 function startHoldRecording() {
     if(isRecording) return;
     isHolding = true;
@@ -1567,8 +1580,13 @@ function stopHoldRecording() {
     isHolding = false;
     clearTimeout(holdTimer);
     if(isRecording) {
-        if(recSeconds < 1) cancelRecord();
-        else stopRecordingAndSend();
+        if(recSeconds < 1) {
+            // Too short – cancel (no message)
+            cancelRecord();
+        } else {
+            // Auto-send on release
+            stopRecordingAndSend();
+        }
     }
 }
 
@@ -1755,13 +1773,11 @@ async function shareMedia() {
         if(!file) return;
         if(file.size > 10*1024*1024) { alert('Max 10MB'); return; }
 
-        // Create temporary ID and local URL
         const tempId = 'temp_' + Date.now();
         const localUrl = URL.createObjectURL(file);
         const text = '📎 ' + file.name;
         const timestamp = Date.now() / 1000;
 
-        // Store temp data
         messagesData[tempId] = {
             id: tempId,
             sender: window.username,
@@ -1772,17 +1788,14 @@ async function shareMedia() {
             isPlaceholder: true
         };
 
-        // Show placeholder message immediately
         addMessage(window.username, text, true, timestamp, tempId, null, null, localUrl, file.type, true);
 
-        // Upload the file
         const formData = new FormData();
         formData.append('file', file);
         try {
             const res = await fetch('/api/upload_media', {method:'POST', body:formData});
             const data = await res.json();
             if(data.success) {
-                // Now send the real message via WebSocket with temp_id
                 const salt = genSalt();
                 const encrypted = await encrypt(text, window.groupPassword, salt);
                 ws.send(JSON.stringify({
@@ -1794,13 +1807,10 @@ async function shareMedia() {
                     media_type:data.type || file.type,
                     temp_id: tempId
                 }));
-                // The broadcast will replace the placeholder
-                // Revoke the object URL later (after replacement)
                 setTimeout(() => URL.revokeObjectURL(localUrl), 5000);
             }
         } catch(e) {
             console.error('Upload error:', e);
-            // Optionally remove the placeholder or show error
         }
     };
     input.click();
@@ -1932,7 +1942,7 @@ if __name__ == "__main__":
     print("""
 ╔═══════════════════════════════════════════════╗
 ║     ABAVANDIMWE SECURE MESSAGING             ║
-║     Instant Images + Audio                   ║
+║     Auto-Send Audio + Instant Images         ║
 ║     Incoming left · Outgoing right           ║
 ║     Author: Mugisha Pc                       ║
 ╚═══════════════════════════════════════════════╝
