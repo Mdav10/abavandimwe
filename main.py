@@ -1,6 +1,5 @@
 """
-ABAVANDIMWE - Secure Messaging (FULLY WORKING)
-Author: Mugisha Pc
+ABAVANDIMWE - Secure Messaging (FIXED)
 All features: text, voice, images, reply, reactions, admin
 Data stored in Neon PostgreSQL
 """
@@ -8,7 +7,6 @@ Data stored in Neon PostgreSQL
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request, HTTPException, UploadFile, File
 from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
 import asyncio
 import json
 import os
@@ -221,6 +219,7 @@ async def get_msgs(group):
     finally:
         await release_db(conn)
 
+# ========== FILE FUNCTIONS (renamed to avoid collision) ==========
 async def save_file(filename, data, mime, username):
     conn = await get_db()
     try:
@@ -229,7 +228,7 @@ async def save_file(filename, data, mime, username):
     finally:
         await release_db(conn)
 
-async def get_file(filename):
+async def get_file_data(filename):
     conn = await get_db()
     try:
         return await conn.fetchrow('SELECT file_data,mime_type FROM files WHERE filename=$1', filename)
@@ -405,8 +404,8 @@ async def upload_media(request: Request, file: UploadFile = File(...)):
     return {"success": True, "url": f"/api/files/{filename}", "type": mime_type}
 
 @app.get("/api/files/{filename}")
-async def get_file(filename: str):
-    row = await get_file(filename)
+async def get_file_endpoint(filename: str):
+    row = await get_file_data(filename)
     if not row:
         raise HTTPException(status_code=404)
     return Response(content=row['file_data'], media_type=row['mime_type'])
@@ -1570,7 +1569,7 @@ if __name__ == "__main__":
     print("""
 ╔═══════════════════════════════════════════════╗
 ║     ABAVANDIMWE SECURE MESSAGING             ║
-║     All features working                     ║
+║     FULLY WORKING - FIXED RECURSION          ║
 ║     Author: Mugisha Pc                       ║
 ╚═══════════════════════════════════════════════╝
 """)
