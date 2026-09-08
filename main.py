@@ -1,5 +1,5 @@
 """
-ABAVANDIMWE - Secure Messaging (Audio Player Fixed)
+ABAVANDIMWE - Secure Messaging (Instant Images + Audio)
 All data in Neon PostgreSQL
 Author: Mugisha Pc
 """
@@ -506,12 +506,14 @@ async def ws_endpoint(websocket: WebSocket):
         while True:
             data = await websocket.receive_json()
             if data.get('type') == 'message':
+                # Include temp_id if present
+                temp_id = data.get('temp_id')
                 result = await save_msg(
                     data['ciphertext'], group, username, data['salt'],
                     data.get('reply_to'), data.get('voice_url'),
                     data.get('media_url'), data.get('media_type')
                 )
-                await manager.broadcast(group, {
+                broadcast_msg = {
                     'type': 'message',
                     'message_id': result['id'],
                     'ciphertext': data['ciphertext'],
@@ -522,7 +524,10 @@ async def ws_endpoint(websocket: WebSocket):
                     'voice_url': data.get('voice_url'),
                     'media_url': data.get('media_url'),
                     'media_type': data.get('media_type')
-                })
+                }
+                if temp_id:
+                    broadcast_msg['temp_id'] = temp_id
+                await manager.broadcast(group, broadcast_msg)
             elif data.get('type') == 'typing':
                 await manager.broadcast(group, {'type': 'typing', 'user': username}, exclude=username)
             elif data.get('type') == 'stop_typing':
@@ -646,6 +651,7 @@ HTML = '''<!DOCTYPE html>
             background:#0f0;
             display:flex;
             flex-direction:column;
+            position:relative;
         }
         .media-bubble .chat-image{
             display:block;
@@ -665,7 +671,28 @@ HTML = '''<!DOCTYPE html>
             background:#0f0;
         }
 
-        /* ===== CUSTOM AUDIO PLAYER ===== */
+        /* LOADING SPINNER OVERLAY FOR IMAGES */
+        .media-bubble .spinner {
+            position:absolute;
+            top:50%;
+            left:50%;
+            transform:translate(-50%,-50%);
+            width:40px;
+            height:40px;
+            border:4px solid rgba(0,0,0,0.1);
+            border-top:4px solid #0f0;
+            border-radius:50%;
+            animation:spin 0.8s linear infinite;
+            pointer-events:none;
+            background:rgba(0,0,0,0.3);
+            border-radius:50%;
+        }
+        @keyframes spin{0%{transform:translate(-50%,-50%) rotate(0)}100%{transform:translate(-50%,-50%) rotate(360deg)}}
+        .media-bubble.placeholder .chat-image {
+            filter: blur(2px);
+        }
+
+        /* AUDIO PLAYER */
         .audio-player {
             display:flex;
             align-items:center;
@@ -724,7 +751,6 @@ HTML = '''<!DOCTYPE html>
             text-align:center;
             font-weight:bold;
         }
-        /* Audio caption text */
         .audio-caption {
             font-size:11px;
             color:#888;
@@ -1186,6 +1212,29 @@ function connectToChat(user, group) {
             } else if(d.type === 'users') {
                 updateOnlineUsers(d.users);
             } else if(d.type === 'message') {
+                // Check if this is an update for a temp message
+                if(d.temp_id && messagesData[d.temp_id]) {
+                    // Replace temp message with real one
+                    const tempMsg = messagesData[d.temp_id];
+                    // Update the DOM element
+                    updateTempMessage(d.temp_id, d.message_id, d.sender, d.ciphertext, d.salt, d.timestamp, d.reply_to, d.voice_url, d.media_url, d.media_type);
+                    // Remove temp entry
+                    delete messagesData[d.temp_id];
+                    // Store real message
+                    messagesData[d.message_id] = {
+                        id: d.message_id,
+                        sender: d.sender,
+                        ciphertext: d.ciphertext,
+                        salt: d.salt,
+                        created_at: d.timestamp,
+                        reply_to: d.reply_to,
+                        voice_url: d.voice_url,
+                        media_url: d.media_url,
+                        media_type: d.media_type
+                    };
+                    return;
+                }
+                // Normal incoming message
                 try {
                     const dec = await decrypt(d.ciphertext, window.groupPassword, d.salt);
                     const isSent = d.sender === window.username;
@@ -1241,8 +1290,8 @@ function reconnect() {
     setTimeout(() => connectToChat(window.username, window.groupName), 500);
 }
 
-// ========== ADD MESSAGE ==========
-function addMessage(sender, text, isSent, timestamp, id, replyTo, voiceUrl, mediaUrl, mediaType) {
+// ========== ADD MESSAGE (with placeholder support) ==========
+function addMessage(sender, text, isSent, timestamp, id, replyTo, voiceUrl, mediaUrl, mediaType, isPlaceholder) {
     const div = document.createElement('div');
     div.className = 'message ' + (isSent ? 'mine' : 'theirs');
     div.dataset.id = id;
@@ -1281,9 +1330,11 @@ function addMessage(sender, text, isSent, timestamp, id, replyTo, voiceUrl, medi
     } else if (mediaUrl) {
         // IMAGE / FILE
         if (mediaType && mediaType.startsWith('image/')) {
+            const placeholderClass = isPlaceholder ? 'placeholder' : '';
             contentHtml = `
-                <div class="media-bubble">
+                <div class="media-bubble ${placeholderClass}">
                     <img class="chat-image" src="${mediaUrl}" alt="Shared image" loading="lazy" onclick="window.open('${mediaUrl}','_blank')">
+                    ${isPlaceholder ? '<div class="spinner"></div>' : ''}
                     <div class="file-name">📎 ${escapeHtml(text.replace('📎 ',''))}</div>
                 </div>
             `;
@@ -1344,6 +1395,50 @@ function addMessage(sender, text, isSent, timestamp, id, replyTo, voiceUrl, medi
         div.style.transform = '';
         if(diff >= 50) replyToMsg(id);
     }, {passive:true});
+}
+
+// ========== UPDATE TEMP MESSAGE ==========
+function updateTempMessage(tempId, realId, sender, ciphertext, salt, timestamp, replyTo, voiceUrl, mediaUrl, mediaType) {
+    // Find the placeholder element
+    const elements = messagesContainer.querySelectorAll('.message');
+    let targetElement = null;
+    for (let el of elements) {
+        if (el.dataset.id === tempId) {
+            targetElement = el;
+            break;
+        }
+    }
+    if (!targetElement) return;
+
+    // Replace the content with the real data
+    // We'll reconstruct the message using the real data
+    // Remove the old element
+    targetElement.remove();
+
+    // Now add the real message using addMessage with the real id
+    // We need to decrypt the text
+    (async () => {
+        try {
+            const dec = await decrypt(ciphertext, window.groupPassword, salt);
+            const isSent = sender === window.username;
+            // We need to store the real message in messagesData
+            // But we already deleted the temp entry, so we add it now
+            messagesData[realId] = {
+                id: realId,
+                sender: sender,
+                ciphertext: ciphertext,
+                salt: salt,
+                created_at: timestamp,
+                reply_to: replyTo,
+                voice_url: voiceUrl,
+                media_url: mediaUrl,
+                media_type: mediaType
+            };
+            addMessage(sender, dec, isSent, timestamp, realId, replyTo, voiceUrl, mediaUrl, mediaType);
+        } catch(e) {
+            console.error('Error decrypting temp message:', e);
+        }
+    })();
 }
 
 function addSystemMessage(text) {
@@ -1576,7 +1671,6 @@ function toggleAudio(btn) {
     const progressBar = player.querySelector('.audio-progress-bar');
     const durationSpan = player.querySelector('.audio-duration');
 
-    // If this audio is already playing, pause it
     if (activeAudio && activeButton === btn) {
         activeAudio.pause();
         activeAudio.currentTime = 0;
@@ -1591,7 +1685,6 @@ function toggleAudio(btn) {
         return;
     }
 
-    // Stop any currently playing audio
     if (activeAudio) {
         activeAudio.pause();
         activeAudio.currentTime = 0;
@@ -1607,7 +1700,6 @@ function toggleAudio(btn) {
         activeDuration = null;
     }
 
-    // Create new audio
     const audio = new Audio(url);
     activeAudio = audio;
     activeButton = btn;
@@ -1653,22 +1745,44 @@ function seekAudio(event, wrap) {
     }
 }
 
-// ========== MEDIA SHARING – ONLY IMAGES (GALLERY) ==========
+// ========== MEDIA SHARING – INSTANT IMAGE PLACEHOLDER ==========
 async function shareMedia() {
     const input = document.createElement('input');
     input.type = 'file';
-    input.accept = 'image/*';  // Only images → mobile opens gallery
+    input.accept = 'image/*';
     input.onchange = async (e) => {
         const file = e.target.files[0];
         if(!file) return;
         if(file.size > 10*1024*1024) { alert('Max 10MB'); return; }
+
+        // Create temporary ID and local URL
+        const tempId = 'temp_' + Date.now();
+        const localUrl = URL.createObjectURL(file);
+        const text = '📎 ' + file.name;
+        const timestamp = Date.now() / 1000;
+
+        // Store temp data
+        messagesData[tempId] = {
+            id: tempId,
+            sender: window.username,
+            text: text,
+            created_at: timestamp,
+            media_url: localUrl,
+            media_type: file.type,
+            isPlaceholder: true
+        };
+
+        // Show placeholder message immediately
+        addMessage(window.username, text, true, timestamp, tempId, null, null, localUrl, file.type, true);
+
+        // Upload the file
         const formData = new FormData();
         formData.append('file', file);
         try {
             const res = await fetch('/api/upload_media', {method:'POST', body:formData});
             const data = await res.json();
             if(data.success) {
-                const text = '📎 ' + file.name;
+                // Now send the real message via WebSocket with temp_id
                 const salt = genSalt();
                 const encrypted = await encrypt(text, window.groupPassword, salt);
                 ws.send(JSON.stringify({
@@ -1677,13 +1791,17 @@ async function shareMedia() {
                     salt:salt,
                     reply_to:replyingTo || null,
                     media_url:data.url,
-                    media_type:data.type || file.type
+                    media_type:data.type || file.type,
+                    temp_id: tempId
                 }));
-                msgInput.value = '';
-                msgInput.style.height = 'auto';
-                replyingTo = null;
+                // The broadcast will replace the placeholder
+                // Revoke the object URL later (after replacement)
+                setTimeout(() => URL.revokeObjectURL(localUrl), 5000);
             }
-        } catch(e) { console.error('Upload error:', e); }
+        } catch(e) {
+            console.error('Upload error:', e);
+            // Optionally remove the placeholder or show error
+        }
     };
     input.click();
 }
@@ -1814,7 +1932,7 @@ if __name__ == "__main__":
     print("""
 ╔═══════════════════════════════════════════════╗
 ║     ABAVANDIMWE SECURE MESSAGING             ║
-║     Audio Player Fixed                       ║
+║     Instant Images + Audio                   ║
 ║     Incoming left · Outgoing right           ║
 ║     Author: Mugisha Pc                       ║
 ╚═══════════════════════════════════════════════╝
