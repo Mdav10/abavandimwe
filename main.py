@@ -1,12 +1,11 @@
 """
-ABAVANDIMWE - Secure Messaging (Fixed Image & Audio Layout)
+ABAVANDIMWE - Secure Messaging (FIXED LAYOUT)
 Author: Mugisha Pc
 """
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request, HTTPException, UploadFile, File
 from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
 import asyncio
 import json
 import os
@@ -547,11 +546,11 @@ HTML = '''<!DOCTYPE html>
     <meta name="theme-color" content="#0a0a0f">
     <link rel="apple-touch-icon" href="/icons/icon-192x192.png">
     <style>
-        /* ===== RESET & BASE ===== */
+        /* RESET */
         *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
         html,body{width:100%;height:100%;overflow:hidden;background:#0a0a0f;font-family:monospace;color:#0f0}
 
-        /* ===== LOGIN ===== */
+        /* LOGIN / AUTH */
         .login-container{position:fixed;inset:0;display:flex;justify-content:center;align-items:center;background:#0a0a0f;z-index:1000;padding:20px}
         .login-card{background:#050508;border:2px solid #0f0;border-radius:24px;padding:32px 24px;width:100%;max-width:400px}
         h1{text-align:center;font-size:24px;margin-bottom:4px}
@@ -570,16 +569,16 @@ HTML = '''<!DOCTYPE html>
         .footer{text-align:center;margin-top:16px;font-size:8px;color:#333;border-top:1px solid #1a1a2e;padding-top:12px}
         .admin-badge{display:block;text-align:center;margin-bottom:20px;font-size:10px;color:#0f0;border:1px solid #0f0;padding:4px 12px;border-radius:20px;background:rgba(0,255,0,0.05);width:fit-content;margin-left:auto;margin-right:auto}
 
-        /* ===== GATEKEEPER / SETUP ===== */
         .gatekeeper-container,.setup-container{display:none;position:fixed;inset:0;background:#0a0a0f;z-index:900;padding:20px;justify-content:center;align-items:center}
         .gatekeeper-container.active,.setup-container.active{display:flex}
         .gatekeeper-card,.setup-card{background:#050508;border:2px solid #0f0;border-radius:24px;padding:32px 24px;width:100%;max-width:400px}
         .gatekeeper-card h2,.setup-card h2{text-align:center;font-size:22px;margin-bottom:4px}
         .gatekeeper-card .sub,.setup-card .sub{text-align:center;font-size:11px;color:#666;margin-bottom:16px}
 
-        /* ===== CHAT LAYOUT ===== */
+        /* CHAT LAYOUT - CRITICAL FIX */
         .chat-container{display:none;flex-direction:column;height:100dvh;background:#0a0a0f}
         .chat-container.active{display:flex}
+
         .header{padding:10px 14px;background:#050508;border-bottom:1px solid #0f0;display:flex;justify-content:space-between;align-items:center;flex-shrink:0;min-height:50px}
         .header h2{font-size:15px;text-align:center;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:0 8px}
         .header-left{display:flex;align-items:center;gap:8px}
@@ -587,7 +586,7 @@ HTML = '''<!DOCTYPE html>
         .logout-btn{width:auto;padding:4px 12px;font-size:11px;margin:0;border-color:#ff0041;color:#ff0041}
         .logout-btn:hover{background:#ff0041;color:white}
 
-        /* ===== MAIN AREA (scrollable) ===== */
+        /* MAIN CONTENT - FLEX COLUMN */
         .main-content{display:flex;flex:1;min-height:0}
         .sidebar{width:200px;background:#050508;border-right:1px solid #0f0;display:flex;flex-direction:column;flex-shrink:0;overflow:hidden}
         .sidebar-header{padding:10px;border-bottom:1px solid #0f0;font-size:12px;font-weight:bold}
@@ -596,12 +595,13 @@ HTML = '''<!DOCTYPE html>
         .online-user::before{content:"●";color:#0f0;font-size:8px}
         @media(max-width:600px){.sidebar{position:fixed;left:-200px;top:0;bottom:0;z-index:20;transition:left 0.3s;width:200px}.sidebar.open{left:0}.overlay{position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:10;display:none}.overlay.active{display:block}}
 
-        /* ===== MESSAGES AREA ===== */
-        .messages-area{flex:1;display:flex;flex-direction:column;min-width:0;width:100%}
+        /* MESSAGES AREA - TAKES REMAINING HEIGHT */
+        .messages-area{flex:1;display:flex;flex-direction:column;min-width:0;width:100%;min-height:0}
+        /* MESSAGES CONTAINER - SCROLLABLE */
         .messages{flex:1;overflow-y:auto;padding:12px;display:flex;flex-direction:column;gap:4px;width:100%;min-width:0;box-sizing:border-box;overscroll-behavior:contain}
         .typing-indicator{padding:2px 16px 6px;font-size:10px;color:#0f0;font-style:italic;min-height:22px;flex-shrink:0}
 
-        /* ===== MESSAGE CONTAINER ===== */
+        /* MESSAGE STYLES */
         .message{display:flex;flex-direction:column;width:100%;padding:4px 0;word-break:break-word;overflow-wrap:anywhere;max-width:100%;min-width:0}
         .message.mine{align-items:flex-end}
         .message.theirs{align-items:flex-start}
@@ -609,34 +609,28 @@ HTML = '''<!DOCTYPE html>
         .msg-time{font-size:8px;opacity:0.5;margin-top:2px}
         .system-msg{text-align:center;font-size:10px;color:#ffaa00;margin:4px 0;font-style:italic}
 
-        /* ===== TEXT MESSAGE ===== */
+        /* TEXT BUBBLE */
         .text-bubble{padding:8px 12px;border-radius:14px;font-size:14px;word-wrap:break-word;line-height:1.4;max-width:min(85%,700px)}
         .mine .text-bubble{background:#0f0;color:#000;border-bottom-right-radius:4px}
         .theirs .text-bubble{background:#1a1a2e;border:1px solid #0f0;border-bottom-left-radius:4px}
 
-        /* ===== IMAGE MESSAGE ===== */
+        /* IMAGE BUBBLE */
         .media-bubble{width:fit-content;max-width:min(88vw,520px);overflow:hidden;border:2px solid #0f0;border-radius:18px;background:#0f0;display:flex;flex-direction:column}
         .chat-image{display:block;width:100%;height:auto;max-height:420px;object-fit:contain;cursor:pointer;background:#111}
         .file-name{padding:8px 12px;color:#111;overflow-wrap:anywhere;word-break:break-word;font-size:12px;background:#0f0}
         .mine .media-bubble{margin-left:auto}
         .theirs .media-bubble{margin-right:auto}
 
-        /* ===== AUDIO MESSAGE ===== */
-        .audio-bubble{width:min(88vw,420px);min-height:54px;display:flex;align-items:center;gap:10px;padding:7px 10px;box-sizing:border-box;border:2px solid #0f0;border-radius:30px;background:#0f0}
-        .audio-play{flex:0 0 42px;width:42px;height:42px;border:0;border-radius:50%;font-size:20px;background:#0a0a0f;color:#0f0;cursor:pointer;display:flex;align-items:center;justify-content:center}
-        .audio-play:hover{background:#1a1a2e}
-        .audio-track{flex:1 1 auto;min-width:0;height:5px;background:#1a1a2e;border-radius:10px;position:relative;cursor:pointer}
-        .audio-progress{height:100%;width:0%;background:#0a0a0f;border-radius:10px;transition:width 0.1s}
-        .audio-duration{flex:0 0 auto;white-space:nowrap;font-size:12px;color:#0a0a0f;min-width:40px;text-align:center}
+        /* AUDIO BUBBLE - NATIVE <audio> */
+        .audio-bubble{width:min(88vw,420px);border-radius:30px;background:#0f0;padding:4px;display:flex;align-items:center}
+        .audio-bubble audio{width:100%;height:44px;border-radius:30px;display:block}
         .mine .audio-bubble{margin-left:auto}
         .theirs .audio-bubble{margin-right:auto}
+        audio::-webkit-media-controls-panel{background:#0f0}
+        audio::-webkit-media-controls-play-button{background:#0a0a0f;border-radius:50%;color:#0f0}
+        audio::-webkit-media-controls-current-time-display,audio::-webkit-media-controls-time-remaining-display{color:#0a0a0f}
 
-        /* ===== NATIVE AUDIO FALLBACK ===== */
-        .chat-audio{display:block;width:min(88vw,420px);max-width:100%;height:48px;border-radius:30px;background:#0f0}
-        .mine .chat-audio{margin-left:auto}
-        .theirs .chat-audio{margin-right:auto}
-
-        /* ===== MESSAGE ACTIONS ===== */
+        /* ACTIONS */
         .message-actions{display:flex;gap:6px;margin-top:4px;flex-wrap:wrap}
         .message-actions button{background:transparent;border:none;color:#888;font-size:10px;cursor:pointer;padding:1px 4px}
         .message-actions button:hover{color:#0f0}
@@ -647,7 +641,7 @@ HTML = '''<!DOCTYPE html>
         .reply-preview{font-size:10px;color:#ffaa00;margin-bottom:3px;cursor:pointer;padding:4px 8px;background:rgba(255,170,0,0.08);border-left:2px solid #ffaa00;border-radius:4px;max-width:min(85%,700px)}
         .reply-preview .reply-sender{color:#ffaa00;font-weight:bold}
 
-        /* ===== COMPOSER ===== */
+        /* COMPOSER - FIXED AT BOTTOM */
         .composer{padding:8px;background:#050508;border-top:1px solid #0f0;flex-shrink:0}
         .composer-row{display:flex;align-items:center;gap:8px;width:100%;box-sizing:border-box}
         .message-input{flex:1 1 auto;min-width:0;padding:10px 14px;background:#111;border:1px solid #0f0;border-radius:10px;color:#0f0;font-family:monospace;font-size:13px;resize:none;max-height:120px;min-height:40px;line-height:1.4;outline:none}
@@ -659,7 +653,6 @@ HTML = '''<!DOCTYPE html>
         .voice-btn.recording{border-color:#ff0041;background:rgba(255,0,65,0.15);animation:pulse 1s infinite}
         @keyframes pulse{0%,100%{box-shadow:0 0 0 0 rgba(255,0,65,0.4)}50%{box-shadow:0 0 20px 10px rgba(255,0,65,0.15)}}
 
-        /* ===== RECORDING STATUS ===== */
         .recording-status{display:none;padding:6px 12px;margin-top:4px;background:#1a1a2e;border:1px solid #ff0041;border-radius:8px;align-items:center;gap:8px}
         .recording-status.active{display:flex}
         #recTimer{color:#ff0041;font-size:14px;font-weight:bold;min-width:44px}
@@ -677,7 +670,6 @@ HTML = '''<!DOCTYPE html>
         #cancelRec{background:transparent;border:1px solid #555;color:#888;padding:2px 10px;border-radius:4px;cursor:pointer;font-size:11px}
         #cancelRec:hover{border-color:#ff0041;color:#ff0041}
 
-        /* ===== OFFLINE ===== */
         .offline-bar{display:none;background:#ff0041;color:white;text-align:center;padding:4px;font-size:10px;font-weight:bold;flex-shrink:0}
         .offline-bar.active{display:block}
         .offline-overlay{position:fixed;inset:0;background:#0a0a0f;z-index:99999;display:none;justify-content:center;align-items:center;flex-direction:column;gap:16px;padding:30px}
@@ -687,14 +679,12 @@ HTML = '''<!DOCTYPE html>
         .offline-overlay p{color:#888;font-size:13px;text-align:center}
         .offline-overlay .retry-btn{background:transparent;border:2px solid #0f0;color:#0f0;padding:12px 32px;border-radius:10px;font-size:14px;font-weight:bold;cursor:pointer}
 
-        /* ===== LOADING ===== */
         .loading-overlay{position:fixed;inset:0;background:rgba(10,10,15,0.95);z-index:9999;display:none;justify-content:center;align-items:center;flex-direction:column;gap:16px}
         .loading-overlay.active{display:flex}
         .loader{width:50px;height:50px;border:3px solid rgba(0,255,65,0.1);border-top:3px solid #0f0;border-radius:50%;animation:spin 0.8s linear infinite}
         @keyframes spin{0%{transform:rotate(0)}100%{transform:rotate(360deg)}}
         .loader-text{color:#0f0;font-size:14px}
 
-        /* ===== ADMIN ===== */
         .admin-panel{display:none;position:fixed;inset:0;background:#0a0a0f;z-index:50;padding:16px;overflow-y:auto}
         .admin-panel.active{display:block}
         .admin-header{display:flex;justify-content:space-between;align-items:center;padding:12px;border-bottom:2px solid #0f0;margin-bottom:16px}
@@ -718,17 +708,14 @@ HTML = '''<!DOCTYPE html>
         .action-btn-green:hover{background:#0f0;color:#000}
         .close-admin{background:#ff0041;border-color:#ff0041;color:white;padding:4px 12px;border-radius:6px;cursor:pointer;font-size:12px;width:auto;margin:0}
 
-        /* ===== SCROLLBAR ===== */
         ::-webkit-scrollbar{width:4px}
         ::-webkit-scrollbar-track{background:#1a1a2e}
         ::-webkit-scrollbar-thumb{background:#0f0;border-radius:2px}
 
-        /* ===== RESPONSIVE ===== */
         @media(max-width:480px){
             .composer-button{flex-basis:40px;width:40px;height:40px;font-size:16px}
             .message-input{font-size:12px;padding:8px 12px;min-height:36px}
-            .audio-bubble{min-height:46px;padding:5px 8px}
-            .audio-play{flex-basis:36px;width:36px;height:36px;font-size:16px}
+            .audio-bubble audio{height:40px}
             .chat-image{max-height:280px}
             .media-bubble{max-width:min(88vw,380px)}
             .text-bubble{font-size:13px;padding:6px 10px}
@@ -737,9 +724,6 @@ HTML = '''<!DOCTYPE html>
         @media(max-width:380px){
             .composer-button{flex-basis:36px;width:36px;height:36px;font-size:14px}
             .message-input{font-size:11px;padding:6px 10px;min-height:32px}
-            .audio-bubble{min-height:40px}
-            .audio-play{flex-basis:32px;width:32px;height:32px;font-size:14px}
-            .audio-duration{font-size:10px;min-width:30px}
         }
     </style>
 </head>
@@ -818,22 +802,24 @@ HTML = '''<!DOCTYPE html>
         </div>
         <div class="overlay" id="overlay" onclick="toggleSidebar()"></div>
         <div class="messages-area">
+            <!-- THIS IS THE SCROLLABLE MESSAGES CONTAINER -->
             <div class="messages" id="messages"><div style="text-align:center;color:#666;padding:40px 0;">Connecting...</div></div>
             <div class="typing-indicator" id="typingIndicator"></div>
-            <div class="composer">
-                <div class="composer-row">
-                    <textarea class="message-input" id="msgInput" placeholder="Type a message..." rows="1"></textarea>
-                    <button class="composer-button voice-btn" id="voiceBtn" onmousedown="startHoldRecording()" onmouseup="stopHoldRecording()" onmouseleave="stopHoldRecording()" ontouchstart="startHoldRecording()" ontouchend="stopHoldRecording()" ontouchcancel="stopHoldRecording()">🎙️</button>
-                    <button class="composer-button media-btn" onclick="shareMedia()">📎</button>
-                    <button class="composer-button send-btn" onclick="sendMessage()">➤</button>
-                </div>
-                <div class="recording-status" id="recStatus">
-                    <span id="recTimer">00:00</span>
-                    <div class="wave"><span class="bar"></span><span class="bar"></span><span class="bar"></span><span class="bar"></span><span class="bar"></span><span class="bar"></span><span class="bar"></span><span class="bar"></span></div>
-                    <span id="recText">🔴 Recording</span>
-                    <button id="cancelRec" onclick="cancelRecord()">✕ Cancel</button>
-                </div>
-            </div>
+        </div>
+    </div>
+    <!-- COMPOSER - FIXED AT BOTTOM -->
+    <div class="composer">
+        <div class="composer-row">
+            <textarea class="message-input" id="msgInput" placeholder="Type a message..." rows="1"></textarea>
+            <button class="composer-button voice-btn" id="voiceBtn" onmousedown="startHoldRecording()" onmouseup="stopHoldRecording()" onmouseleave="stopHoldRecording()" ontouchstart="startHoldRecording()" ontouchend="stopHoldRecording()" ontouchcancel="stopHoldRecording()">🎙️</button>
+            <button class="composer-button media-btn" onclick="shareMedia()">📎</button>
+            <button class="composer-button send-btn" onclick="sendMessage()">➤</button>
+        </div>
+        <div class="recording-status" id="recStatus">
+            <span id="recTimer">00:00</span>
+            <div class="wave"><span class="bar"></span><span class="bar"></span><span class="bar"></span><span class="bar"></span><span class="bar"></span><span class="bar"></span><span class="bar"></span><span class="bar"></span></div>
+            <span id="recText">🔴 Recording</span>
+            <button id="cancelRec" onclick="cancelRecord()">✕ Cancel</button>
         </div>
     </div>
 </div>
@@ -888,6 +874,7 @@ const loginBtn = document.getElementById('loginBtn');
 const gkBtn = document.getElementById('gkBtn');
 const setupBtn = document.getElementById('setupBtn');
 const msgInput = document.getElementById('msgInput');
+const messagesContainer = document.getElementById('messages');
 
 // ========== LOADING ==========
 function showLoading() { document.getElementById('loadingOverlay').classList.add('active'); }
@@ -1003,7 +990,7 @@ async function enterChat() {
         window.groupPassword = groupPassword;
         document.getElementById('setupScreen').classList.remove('active');
         document.getElementById('chatScreen').classList.add('active');
-        document.getElementById('messages').innerHTML = '';
+        messagesContainer.innerHTML = '';
         messagesData = {};
         hideLoading();
         connectToChat(display, group);
@@ -1034,7 +1021,7 @@ function connectToChat(user, group) {
         try {
             const d = JSON.parse(e.data);
             if(d.type === 'history') {
-                document.getElementById('messages').innerHTML = '';
+                messagesContainer.innerHTML = '';
                 messagesData = {};
                 if(d.messages && d.messages.length) {
                     for(let msg of d.messages) {
@@ -1104,9 +1091,8 @@ function reconnect() {
     setTimeout(() => connectToChat(window.username, window.groupName), 500);
 }
 
-// ========== ADD MESSAGE (with separate renderers) ==========
+// ========== ADD MESSAGE ==========
 function addMessage(sender, text, isSent, timestamp, id, replyTo, voiceUrl, mediaUrl, mediaType) {
-    const container = document.getElementById('messages');
     const div = document.createElement('div');
     div.className = 'message ' + (isSent ? 'mine' : 'theirs');
     div.dataset.id = id;
@@ -1128,19 +1114,18 @@ function addMessage(sender, text, isSent, timestamp, id, replyTo, voiceUrl, medi
         } catch(e) {}
     }
 
-    // ---- CONTENT: TEXT / IMAGE / AUDIO ----
+    // ---- CONTENT ----
     let contentHtml = '';
-
     if (voiceUrl) {
-        // AUDIO MESSAGE – using native <audio> for reliability
+        // AUDIO
         contentHtml = `
             <div class="audio-bubble">
-                <audio class="chat-audio" controls preload="metadata" src="${voiceUrl}"></audio>
+                <audio controls preload="metadata" src="${voiceUrl}"></audio>
             </div>
             ${text && text !== '🎤 Voice message' ? `<div style="font-size:11px;color:#888;margin-top:2px;max-width:min(88vw,420px);">${escapeHtml(text)}</div>` : ''}
         `;
     } else if (mediaUrl) {
-        // IMAGE / FILE MESSAGE
+        // IMAGE / FILE
         if (mediaType && mediaType.startsWith('image/')) {
             contentHtml = `
                 <div class="media-bubble">
@@ -1157,7 +1142,7 @@ function addMessage(sender, text, isSent, timestamp, id, replyTo, voiceUrl, medi
             `;
         }
     } else {
-        // TEXT MESSAGE
+        // TEXT
         contentHtml = `<div class="text-bubble">${escapeHtml(text)}</div>`;
     }
 
@@ -1190,10 +1175,11 @@ function addMessage(sender, text, isSent, timestamp, id, replyTo, voiceUrl, medi
         <div class="msg-time">${time}</div>
     `;
 
-    container.appendChild(div);
-    container.scrollTop = container.scrollHeight;
+    messagesContainer.appendChild(div);
+    // Scroll to bottom
+    messagesContainer.scrollTop = messagesContainer.scrollHeight;
 
-    // ---- SWIPE TO REPLY (touch) ----
+    // ---- SWIPE TO REPLY ----
     let startX = 0, currentX = 0;
     div.addEventListener('touchstart', e => { startX = e.touches[0].clientX; currentX = startX; }, {passive:true});
     div.addEventListener('touchmove', e => {
@@ -1209,18 +1195,17 @@ function addMessage(sender, text, isSent, timestamp, id, replyTo, voiceUrl, medi
 }
 
 function addSystemMessage(text) {
-    const container = document.getElementById('messages');
     const div = document.createElement('div');
     div.className = 'system-msg';
     div.textContent = text;
-    container.appendChild(div);
-    container.scrollTop = container.scrollHeight;
+    messagesContainer.appendChild(div);
+    messagesContainer.scrollTop = messagesContainer.scrollHeight;
 }
 
 function escapeHtml(t) { const d = document.createElement('div'); d.textContent = t; return d.innerHTML; }
 
 function scrollToMsg(id) {
-    const msgs = document.querySelectorAll('.message');
+    const msgs = messagesContainer.querySelectorAll('.message');
     for(let msg of msgs) {
         if(msg.dataset.id == id) {
             msg.scrollIntoView({behavior:'smooth', block:'center'});
@@ -1322,7 +1307,7 @@ async function decrypt(encrypted, password, salt) {
     return dec.decode(decrypted);
 }
 
-// ========== VOICE RECORDING (HOLD TO RECORD) ==========
+// ========== VOICE RECORDING ==========
 function startHoldRecording() {
     if(isRecording) return;
     isHolding = true;
@@ -1466,11 +1451,10 @@ async function shareMedia() {
 async function toggleReaction(id, emoji) {
     if(!ws || ws.readyState !== WebSocket.OPEN) return;
     try {
-        const res = await fetch('/reaction', {
+        await fetch('/reaction', {
             method:'POST', headers:{'Content-Type':'application/json'},
             body:JSON.stringify({message_id:id, emoji:emoji})
         });
-        // No local state update needed – server will broadcast if needed
     } catch(e) { console.error('Reaction error:', e); }
 }
 
@@ -1589,13 +1573,11 @@ if __name__ == "__main__":
     print("""
 ╔═══════════════════════════════════════════════╗
 ║     ABAVANDIMWE SECURE MESSAGING             ║
-║     Fixed Image & Audio Layout               ║
+║     Layout Fixed – Messages Visible          ║
 ║     Author: Mugisha Pc                       ║
 ╚═══════════════════════════════════════════════╝
 """)
     print(f"✅ Server running on port {port}")
     print(f"✅ Admin: Mpc / {os.getenv('ADMIN_PASSWORD', 'Mpc@Secure+_+')}")
     print(f"✅ Database: PostgreSQL (Neon)")
-    print(f"✅ Messages: 24h auto-delete")
-    print(f"✅ Files: 7d auto-delete")
     uvicorn.run(app, host="0.0.0.0", port=port)
