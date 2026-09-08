@@ -1,5 +1,5 @@
 """
-ABAVANDIMWE - Secure Messaging (Final Professional)
+ABAVANDIMWE - Secure Messaging (Audio Player Fixed)
 All data in Neon PostgreSQL
 Author: Mugisha Pc
 """
@@ -664,24 +664,74 @@ HTML = '''<!DOCTYPE html>
             font-size:12px;
             background:#0f0;
         }
-        .audio-bubble{
-            width:min(420px,100%);
-            max-width:100%;
-            border-radius:30px;
+
+        /* ===== CUSTOM AUDIO PLAYER ===== */
+        .audio-player {
+            display:flex;
+            align-items:center;
+            gap:10px;
+            padding:8px 12px;
             background:#0f0;
-            padding:4px;
-        }
-        .audio-bubble audio{
-            width:100%;
-            height:44px;
             border-radius:30px;
-            display:block;
+            min-width:200px;
+            width:min(420px,100%);
+            box-sizing:border-box;
         }
-        /* style native audio controls to match theme */
-        audio::-webkit-media-controls-panel{background:#0f0}
-        audio::-webkit-media-controls-play-button{background:#0a0a0f;border-radius:50%;color:#0f0}
-        audio::-webkit-media-controls-current-time-display,
-        audio::-webkit-media-controls-time-remaining-display{color:#0a0a0f}
+        .audio-play-btn {
+            flex:0 0 48px;
+            width:48px;
+            height:48px;
+            border:0;
+            border-radius:50%;
+            background:#0a0a0f;
+            color:#0f0;
+            font-size:22px;
+            cursor:pointer;
+            display:flex;
+            align-items:center;
+            justify-content:center;
+            transition:0.2s;
+        }
+        .audio-play-btn:hover {
+            background:#1a1a2e;
+        }
+        .audio-play-btn.playing {
+            background:#0a0a0f;
+            color:#ffaa00;
+        }
+        .audio-progress-wrap {
+            flex:1;
+            min-width:0;
+            height:4px;
+            background:#1a1a2e;
+            border-radius:4px;
+            cursor:pointer;
+            position:relative;
+        }
+        .audio-progress-bar {
+            height:100%;
+            width:0%;
+            background:#0a0a0f;
+            border-radius:4px;
+            transition:width 0.1s;
+        }
+        .audio-duration {
+            flex:0 0 auto;
+            white-space:nowrap;
+            font-size:12px;
+            color:#0a0a0f;
+            min-width:44px;
+            text-align:center;
+            font-weight:bold;
+        }
+        /* Audio caption text */
+        .audio-caption {
+            font-size:11px;
+            color:#888;
+            margin-top:2px;
+            max-width:100%;
+            overflow-wrap:anywhere;
+        }
 
         /* ACTIONS */
         .message-actions{
@@ -810,17 +860,21 @@ HTML = '''<!DOCTYPE html>
         @media(max-width:480px){
             .composer-button{flex-basis:40px;width:40px;height:40px;font-size:16px}
             .message-input{font-size:12px;padding:8px 12px;min-height:36px}
-            .audio-bubble audio{height:40px}
             .chat-image{max-height:280px}
             .media-bubble{max-width:min(88vw,380px)}
             .text-bubble{font-size:13px;padding:6px 10px}
             .header h2{font-size:13px}
             .message{max-width:82%}
+            .audio-player { padding:6px 10px; min-width:160px; }
+            .audio-play-btn { flex-basis:40px; width:40px; height:40px; font-size:18px; }
         }
         @media(max-width:380px){
             .composer-button{flex-basis:36px;width:36px;height:36px;font-size:14px}
             .message-input{font-size:11px;padding:6px 10px;min-height:32px}
             .message{max-width:85%}
+            .audio-player { padding:4px 8px; min-width:140px; gap:6px; }
+            .audio-play-btn { flex-basis:36px; width:36px; height:36px; font-size:16px; }
+            .audio-duration { font-size:10px; min-width:32px; }
         }
     </style>
 </head>
@@ -1213,12 +1267,16 @@ function addMessage(sender, text, isSent, timestamp, id, replyTo, voiceUrl, medi
     // CONTENT
     let contentHtml = '';
     if (voiceUrl) {
-        // AUDIO
+        // AUDIO – custom player
         contentHtml = `
-            <div class="media-bubble audio-bubble">
-                <audio controls preload="metadata" src="${voiceUrl}"></audio>
+            <div class="audio-player" data-url="${voiceUrl}">
+                <button class="audio-play-btn" onclick="toggleAudio(this)">▶</button>
+                <div class="audio-progress-wrap" onclick="seekAudio(event, this)">
+                    <div class="audio-progress-bar"></div>
+                </div>
+                <span class="audio-duration">00:00</span>
             </div>
-            ${text && text !== '🎤 Voice message' ? `<div style="font-size:11px;color:#888;margin-top:2px;max-width:100%;">${escapeHtml(text)}</div>` : ''}
+            ${text && text !== '🎤 Voice message' ? `<div class="audio-caption">${escapeHtml(text)}</div>` : ''}
         `;
     } else if (mediaUrl) {
         // IMAGE / FILE
@@ -1506,6 +1564,95 @@ async function sendVoiceMessage(url) {
     } catch(e) { console.error('Send voice error:', e); }
 }
 
+// ========== CUSTOM AUDIO PLAYER ==========
+let activeAudio = null;
+let activeButton = null;
+let activeProgress = null;
+let activeDuration = null;
+
+function toggleAudio(btn) {
+    const player = btn.closest('.audio-player');
+    const url = player.dataset.url;
+    const progressBar = player.querySelector('.audio-progress-bar');
+    const durationSpan = player.querySelector('.audio-duration');
+
+    // If this audio is already playing, pause it
+    if (activeAudio && activeButton === btn) {
+        activeAudio.pause();
+        activeAudio.currentTime = 0;
+        btn.textContent = '▶';
+        btn.classList.remove('playing');
+        progressBar.style.width = '0%';
+        durationSpan.textContent = '00:00';
+        activeAudio = null;
+        activeButton = null;
+        activeProgress = null;
+        activeDuration = null;
+        return;
+    }
+
+    // Stop any currently playing audio
+    if (activeAudio) {
+        activeAudio.pause();
+        activeAudio.currentTime = 0;
+        if (activeButton) {
+            activeButton.textContent = '▶';
+            activeButton.classList.remove('playing');
+        }
+        if (activeProgress) activeProgress.style.width = '0%';
+        if (activeDuration) activeDuration.textContent = '00:00';
+        activeAudio = null;
+        activeButton = null;
+        activeProgress = null;
+        activeDuration = null;
+    }
+
+    // Create new audio
+    const audio = new Audio(url);
+    activeAudio = audio;
+    activeButton = btn;
+    activeProgress = progressBar;
+    activeDuration = durationSpan;
+
+    audio.onloadedmetadata = function() {
+        const mins = Math.floor(this.duration / 60);
+        const secs = Math.floor(this.duration % 60);
+        durationSpan.textContent = String(mins).padStart(2,'0') + ':' + String(secs).padStart(2,'0');
+    };
+
+    audio.ontimeupdate = function() {
+        const pct = (this.currentTime / this.duration) * 100;
+        progressBar.style.width = pct + '%';
+        const mins = Math.floor(this.currentTime / 60);
+        const secs = Math.floor(this.currentTime % 60);
+        durationSpan.textContent = String(mins).padStart(2,'0') + ':' + String(secs).padStart(2,'0');
+    };
+
+    audio.onended = function() {
+        btn.textContent = '▶';
+        btn.classList.remove('playing');
+        progressBar.style.width = '0%';
+        durationSpan.textContent = '00:00';
+        activeAudio = null;
+        activeButton = null;
+        activeProgress = null;
+        activeDuration = null;
+    };
+
+    audio.play();
+    btn.textContent = '⏸';
+    btn.classList.add('playing');
+}
+
+function seekAudio(event, wrap) {
+    const rect = wrap.getBoundingClientRect();
+    const x = event.clientX - rect.left;
+    const pct = Math.min(1, Math.max(0, x / rect.width));
+    if (activeAudio && activeProgress === wrap.querySelector('.audio-progress-bar')) {
+        activeAudio.currentTime = activeAudio.duration * pct;
+    }
+}
+
 // ========== MEDIA SHARING – ONLY IMAGES (GALLERY) ==========
 async function shareMedia() {
     const input = document.createElement('input');
@@ -1667,9 +1814,8 @@ if __name__ == "__main__":
     print("""
 ╔═══════════════════════════════════════════════╗
 ║     ABAVANDIMWE SECURE MESSAGING             ║
-║     FINAL PROFESSIONAL VERSION               ║
+║     Audio Player Fixed                       ║
 ║     Incoming left · Outgoing right           ║
-║     Gallery opens for images                 ║
 ║     Author: Mugisha Pc                       ║
 ╚═══════════════════════════════════════════════╝
 """)
