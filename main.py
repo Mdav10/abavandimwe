@@ -1,5 +1,5 @@
 """
-ABAVANDIMWE - Secure Messaging (Final with Online Users)
+ABAVANDIMWE - Secure Messaging (FINAL WORKING)
 All data in Neon PostgreSQL
 Author: Mugisha Pc
 """
@@ -315,7 +315,7 @@ async def get_all_msgs():
 class Manager:
     def __init__(self):
         self.connections: Dict[str, Dict[str, WebSocket]] = {}
-        self.online_users: Dict[str, set] = {}  # group -> set of usernames
+        self.online_users: Dict[str, set] = {}
 
     async def add(self, group, user, ws):
         if group not in self.connections:
@@ -417,7 +417,8 @@ async def upload_media(request: Request, file: UploadFile = File(...)):
     if not session:
         return JSONResponse({"success": False, "error": "Auth required"}, status_code=401)
     content = await file.read()
-    ext = file.filename.split('.')[-1]
+    # preserve original file extension
+    ext = file.filename.split('.')[-1] if '.' in file.filename else 'bin'
     filename = f"{uuid.uuid4()}.{ext}"
     await save_file(filename, content, file.content_type, session['username'])
     return {"success": True, "url": f"/api/files/{filename}", "type": file.content_type}
@@ -572,9 +573,20 @@ async def ws_endpoint(websocket: WebSocket):
         await websocket.close()
         return
 
+    # Add user and broadcast users list
     await manager.add(group, username, websocket)
+
+    # Send history
     await websocket.send_json({'type': 'history', 'messages': await get_msgs(group)})
+
+    # Send current online users list to the new user
+    if group in manager.online_users:
+        users_list = list(manager.online_users[group])
+        await websocket.send_json({'type': 'users', 'users': users_list})
+
+    # Notify others that a user joined
     await manager.broadcast(group, {'type': 'user_joined', 'user': username}, exclude=username)
+
     print(f"[+] {username} joined {group}")
 
     try:
@@ -586,6 +598,7 @@ async def ws_endpoint(websocket: WebSocket):
                     data.get('reply_to'), data.get('voice_url'),
                     data.get('media_url'), data.get('media_type')
                 )
+                # Broadcast to all (including sender) so sender sees their message
                 await manager.broadcast(group, {
                     'type': 'message',
                     'message_id': result['id'],
@@ -597,7 +610,7 @@ async def ws_endpoint(websocket: WebSocket):
                     'voice_url': data.get('voice_url'),
                     'media_url': data.get('media_url'),
                     'media_type': data.get('media_type')
-                }, exclude=username)
+                })  # No exclude – sender gets it too
             elif data.get('type') == 'typing':
                 await manager.broadcast(group, {'type': 'typing', 'user': username}, exclude=username)
             elif data.get('type') == 'stop_typing':
@@ -1072,6 +1085,8 @@ function connectToChat(user, group) {
                         } catch(e) { console.error(e); }
                     }
                 }
+            } else if(d.type === 'users') {
+                updateOnlineUsers(d.users);
             } else if(d.type === 'message') {
                 try {
                     const dec = await decrypt(d.ciphertext, window.groupPassword, d.salt);
@@ -1079,8 +1094,6 @@ function connectToChat(user, group) {
                     messagesData[d.message_id] = d;
                     addMessage(d.sender, dec, isSent, d.timestamp, d.message_id, d.reply_to, d.voice_url, d.media_url, d.media_type);
                 } catch(e) { console.error(e); }
-            } else if(d.type === 'users') {
-                updateOnlineUsers(d.users);
             } else if(d.type === 'user_joined') {
                 addSystemMessage('👤 ' + d.user + ' joined');
             } else if(d.type === 'user_left') {
@@ -1333,6 +1346,7 @@ async function sendMessage() {
             salt:salt,
             reply_to:replyingTo || null
         }));
+        // Clear input immediately (optimistic update will come from server broadcast)
         msgInput.value = '';
         msgInput.style.height = 'auto';
         msgInput.placeholder = 'Type a message...';
@@ -1717,5 +1731,5 @@ if __name__ == "__main__":
     print(f"✅ Database: PostgreSQL (Neon)")
     print(f"✅ Messages: 24h auto-delete")
     print(f"✅ Files: 7d auto-delete")
-    print(f"✅ Online users list: enabled")
+    print(f"✅ Online users: enabled")
     uvicorn.run(app, host="0.0.0.0", port=port)
