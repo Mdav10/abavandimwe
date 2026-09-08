@@ -1013,6 +1013,201 @@ HTML = '''<!DOCTYPE html>
         .offline-bar .reconnect-btn{background:white;color:#ff0041;border:none;padding:2px 12px;border-radius:4px;cursor:pointer;margin-left:10px;font-weight:bold;font-size:11px;}
         .offline-message{text-align:center;color:#ff4444;padding:20px;font-size:14px;}
         
+
+
+
+        /* ===== RECORDING INDICATOR ===== */
+.recording-indicator {
+    display: none;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 16px;
+    background: rgba(255, 0, 0, 0.06);
+    border-radius: 12px;
+    border: 1px solid #ff0041;
+    margin-top: 8px;
+}
+.recording-indicator.active {
+    display: flex;
+}
+.recording-indicator .rec-dot {
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    background: #ff0041;
+    animation: blink 0.8s infinite;
+}
+.recording-indicator .rec-timer {
+    font-family: monospace;
+    font-size: 18px;
+    color: #ff0041;
+    min-width: 60px;
+    font-weight: bold;
+}
+.recording-indicator .rec-cancel {
+    background: transparent;
+    border: none;
+    color: #888;
+    cursor: pointer;
+    font-size: 20px;
+    padding: 4px 8px;
+    transition: color 0.2s;
+}
+.recording-indicator .rec-cancel:hover {
+    color: #ff4444;
+}
+.recording-indicator .rec-stop {
+    background: #ff0041;
+    border: none;
+    color: white;
+    border-radius: 8px;
+    padding: 8px 16px;
+    cursor: pointer;
+    font-size: 14px;
+    font-weight: bold;
+    transition: all 0.2s;
+}
+.recording-indicator .rec-stop:hover {
+    transform: scale(1.05);
+    box-shadow: 0 0 20px rgba(255, 0, 65, 0.3);
+}
+
+/* ===== INPUT ROW ===== */
+.input-row {
+    display: flex;
+    gap: 10px;
+    align-items: flex-end;
+}
+.input-row textarea {
+    flex: 1;
+    margin: 0;
+    padding: 12px 16px;
+    background: #111;
+    border: 1px solid #0f0;
+    border-radius: 12px;
+    color: #0f0;
+    font-family: monospace;
+    font-size: 14px;
+    resize: vertical;
+    min-height: 50px;
+    max-height: 80px;
+    line-height: 1.5;
+    overflow-y: auto;
+}
+.input-row textarea:disabled {
+    opacity: 0.5;
+}
+.input-row .input-buttons {
+    display: flex;
+    gap: 8px;
+    align-items: flex-end;
+}
+.input-row .voice-btn {
+    width: 50px;
+    min-width: 50px;
+    height: 50px;
+    margin: 0;
+    padding: 0;
+    background: transparent;
+    border: 2px solid #0f0;
+    border-radius: 12px;
+    color: #0f0;
+    font-size: 20px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.3s;
+}
+.input-row .voice-btn:hover {
+    background: rgba(0, 255, 65, 0.1);
+    box-shadow: 0 0 20px rgba(0, 255, 65, 0.2);
+}
+.input-row .voice-btn:active {
+    transform: scale(0.95);
+}
+.input-row .voice-btn.recording {
+    border-color: #ff0041;
+    color: #ff0041;
+    animation: pulseBorder 1s infinite;
+}
+@keyframes pulseBorder {
+    0%, 100% { box-shadow: 0 0 10px rgba(255, 0, 65, 0.3); }
+    50% { box-shadow: 0 0 30px rgba(255, 0, 65, 0.6); }
+}
+
+/* ===== VOICE MESSAGE ===== */
+.voice-message {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 8px 14px;
+    background: rgba(0, 255, 65, 0.05);
+    border-radius: 20px;
+    min-width: 160px;
+}
+.message.sent .voice-message {
+    background: rgba(0, 255, 65, 0.15);
+}
+.voice-message .play-btn {
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    background: #0f0;
+    color: #000;
+    border: none;
+    cursor: pointer;
+    font-size: 14px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    transition: all 0.2s;
+}
+.voice-message .play-btn:hover {
+    opacity: 0.8;
+    transform: scale(1.05);
+}
+.voice-message .play-btn.playing {
+    background: #ffaa00;
+}
+.voice-message .waveform {
+    flex: 1;
+    height: 30px;
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    padding: 0 4px;
+}
+.voice-message .waveform .bar {
+    flex: 1;
+    background: #0f0;
+    border-radius: 2px;
+    height: 20%;
+    opacity: 0.5;
+    transition: height 0.15s;
+    animation: waveBounce 1.2s ease-in-out infinite;
+}
+.voice-message .waveform .bar.active {
+    opacity: 1;
+}
+@keyframes waveBounce {
+    0%, 100% { height: 15%; }
+    50% { height: 85%; }
+}
+.voice-message .duration {
+    font-size: 11px;
+    opacity: 0.7;
+    min-width: 50px;
+    text-align: right;
+    font-family: monospace;
+}
+
+
+
+
+
+
         /* ===== NOTIFICATION BUTTON ===== */
         .notification-btn{background:transparent;border:1px solid #0f0;color:#0f0;padding:4px 12px;border-radius:20px;cursor:pointer;font-size:10px;font-family:monospace;transition:all 0.3s;margin-left:8px;}
         .notification-btn:hover{background:#0f0;color:#000;}
@@ -1067,7 +1262,7 @@ HTML = '''<!DOCTYPE html>
             
             <div class="login-footer">
                 🔒 AES-256 | ⏰ Messages auto-delete after 24 hours<br>
-                <span style="color:#1a1a2e;">Developed by Bernard MANIRUMVA</span>
+                <span style="color:#1a1a2e;">Developed by Mugisha Pc</span>
             </div>
         </div>
     </div>
@@ -1075,7 +1270,7 @@ HTML = '''<!DOCTYPE html>
 
 <div id="adminPanel" class="admin-panel">
     <div class="admin-panel-header">
-        <h2>⚙️ Admin Dashboard <span class="admin-username">(Logged in as: <span id="adminUsername">MB&A</span>)</span></h2>
+        <h2>⚙️ Admin Dashboard <span class="admin-username">(Logged in as: <span id="adminUsername">Mpc</span>)</span></h2>
         <div>
             <button class="close-admin" onclick="logout()">🚪 Logout</button>
         </div>
@@ -1187,8 +1382,8 @@ HTML = '''<!DOCTYPE html>
     <div class="chat-header">
         <div class="chat-header-left">
             <button class="menu-btn" onclick="toggleSidebar()">☰</button>
-            <span class="online-badge" id="connectionBadge">●Online</span>
-            <button class="notification-btn" id="notificationBtn" onclick="toggleNotifications()">🔔</button>
+            <span class="online-badge" id="connectionBadge">● Online</span>
+            <button class="notification-btn" id="notificationBtn" onclick="toggleNotifications()">🔔 Enable</button>
         </div>
         <h2 id="groupTitle"># LOADING</h2>
         <button class="logout-btn" onclick="logout()">Leave</button>
@@ -1217,15 +1412,47 @@ HTML = '''<!DOCTYPE html>
                     <span>↩️ Replying to <span id="replyPreviewSender" style="color:#ffaa00;font-weight:bold;"></span>: <span id="replyPreviewText" style="color:#888;"></span></span>
                     <span class="reply-cancel" onclick="cancelReply()">✕</span>
                 </div>
-                <div class="input-row">
-                    <textarea id="messageInput" placeholder="Type a message..." rows="2"></textarea>
-                    <button onclick="sendMessage()"><span class="btn-text">➥</span></button>
+
+
+
+
+
+    <div class="input-row">
+    <textarea id="messageInput" placeholder="Type a message..." rows="2"></textarea>
+    <div class="input-buttons">
+        <button id="voiceBtn" class="voice-btn" 
+                onmousedown="startHoldRecording()" 
+                onmouseup="stopHoldRecording()" 
+                onmouseleave="stopHoldRecording()"
+                ontouchstart="startHoldRecording()" 
+                ontouchend="stopHoldRecording()"
+                ontouchcancel="stopHoldRecording()">
+            <span class="mic-icon">🎙️</span>
+        </button>
+        <button onclick="sendMessage()"><span class="btn-text">➥</span></button>
+    </div>
+</div>
+
+<!-- Recording UI (shows duration) -->
+<div class="recording-indicator" id="recordingIndicator">
+    <span class="rec-dot"></span>
+    <span class="rec-timer" id="recTimer">00:00</span>
+    <span style="flex:1;color:#888;font-size:12px;">Recording...</span>
+    <button class="rec-cancel" onclick="cancelRecording()">✕</button>
+    <button class="rec-send" onclick="stopRecording()">⏹ Stop</button>
+</div>
+
+
+
+
+
+
                 </div>
             </div>
             <div class="footer">🔐 End-to-End Encrypted | Messages self-destruct after 24 hours</div>
         </div>
     </div>
-   
+    <div class="connection-status status-online" id="connectionStatus">🟢 Connected</div>
 </div>
 
 <!-- Install App Button -->
@@ -1331,7 +1558,7 @@ if (navigator.standalone) {
     console.log('📱 ABAVANDIMWE is running as iOS standalone app');
 }
 
-// ========== PUSH NOTIFICATIONS ==========
+// ========== PUSH NOTIFICATIONS ========== 
 function urlBase64ToUint8Array(base64String) {
     const padding = '='.repeat((4 - base64String.length % 4) % 4);
     const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
@@ -1446,10 +1673,10 @@ async function toggleNotifications() {
 function updateNotificationButton() {
     const btn = document.getElementById('notificationBtn');
     if (notificationsEnabled) {
-        btn.textContent = '🔔';
+        btn.textContent = '🔔 Enabled';
         btn.classList.add('enabled');
     } else {
-        btn.textContent = '🔔';
+        btn.textContent = '🔔 Enable';
         btn.classList.remove('enabled');
     }
 }
@@ -1938,15 +2165,15 @@ function updateStatus(online) {
     let status = document.getElementById('connectionStatus');
     let badge = document.getElementById('connectionBadge');
     if(online) {
-        
+        status.innerHTML = '🟢 Connected';
         status.className = 'connection-status status-online';
-        badge.innerHTML = '●Online';
+        badge.innerHTML = '● Online';
         badge.style.color = '#0f0';
         document.getElementById('offlineBar').classList.remove('active');
     } else {
-        
+        status.innerHTML = '🔴 Disconnected';
         status.className = 'connection-status status-offline';
-        badge.innerHTML = '●Offline';
+        badge.innerHTML = '● Offline';
         badge.style.color = '#ff4444';
     }
 }
@@ -2097,7 +2324,176 @@ function escapeHtml(t) {
     return d.innerHTML;
 }
 
-// ========== ENCRYPTION ==========
+
+
+
+
+
+
+
+
+
+
+
+
+// ========== VOICE MESSAGE RECORDING (UNLIMITED) ==========
+let mediaRecorder = null;
+let audioChunks = [];
+let recordingTimer = null;
+let recordingSeconds = 0;
+let isRecording = false;
+let recordingStartTime = 0;
+
+async function startRecording() {
+    if (isRecording) return;
+    
+    try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        mediaRecorder = new MediaRecorder(stream);
+        audioChunks = [];
+        recordingSeconds = 0;
+        recordingStartTime = Date.now();
+        
+        mediaRecorder.ondataavailable = (event) => {
+            audioChunks.push(event.data);
+        };
+        
+        mediaRecorder.onstop = async () => {
+            const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
+            const reader = new FileReader();
+            reader.onloadend = () => {
+                const base64Audio = reader.result.split(',')[1];
+                window.voiceData = {
+                    data: base64Audio,
+                    duration: recordingSeconds,
+                    type: 'webm'
+                };
+                // Auto-send after stop
+                sendVoiceMessage();
+            };
+            reader.readAsDataURL(audioBlob);
+            stopRecordingUI();
+        };
+        
+        mediaRecorder.start();
+        isRecording = true;
+        startRecordingUI();
+        
+        // Update timer continuously
+        recordingTimer = setInterval(() => {
+            recordingSeconds = Math.floor((Date.now() - recordingStartTime) / 1000);
+            const mins = String(Math.floor(recordingSeconds / 60)).padStart(2, '0');
+            const secs = String(recordingSeconds % 60).padStart(2, '0');
+            document.getElementById('recTimer').textContent = `${mins}:${secs}`;
+            
+            // Show hours if recording is long
+            if (recordingSeconds >= 3600) {
+                const hours = String(Math.floor(recordingSeconds / 3600)).padStart(2, '0');
+                const mins2 = String(Math.floor((recordingSeconds % 3600) / 60)).padStart(2, '0');
+                const secs2 = String(recordingSeconds % 60).padStart(2, '0');
+                document.getElementById('recTimer').textContent = `${hours}:${mins2}:${secs2}`;
+            }
+        }, 1000);
+        
+    } catch (err) {
+        console.error('Microphone error:', err);
+        alert('Unable to access microphone. Please allow microphone permission.');
+    }
+}
+
+function startRecordingUI() {
+    document.getElementById('recordingIndicator').classList.add('active');
+    document.getElementById('messageInput').disabled = true;
+    document.getElementById('voiceBtn').style.display = 'none';
+    document.getElementById('recTimer').textContent = '00:00';
+}
+
+function stopRecordingUI() {
+    document.getElementById('recordingIndicator').classList.remove('active');
+    document.getElementById('messageInput').disabled = false;
+    document.getElementById('voiceBtn').style.display = 'flex';
+    clearInterval(recordingTimer);
+    isRecording = false;
+}
+
+function stopRecording() {
+    if (mediaRecorder && mediaRecorder.state === 'recording') {
+        mediaRecorder.stop();
+        mediaRecorder.stream.getTracks().forEach(track => track.stop());
+        stopRecordingUI();
+    }
+}
+
+function cancelRecording() {
+    if (mediaRecorder && mediaRecorder.state === 'recording') {
+        mediaRecorder.stop();
+        mediaRecorder.stream.getTracks().forEach(track => track.stop());
+        stopRecordingUI();
+        audioChunks = [];
+        window.voiceData = null;
+    }
+}
+
+async function sendVoiceMessage() {
+    if (!window.voiceData) return;
+    
+    const voiceData = window.voiceData;
+    window.voiceData = null;
+    
+    // Send voice message via WebSocket
+    if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({
+            type: 'voice_message',
+            voice_data: voiceData.data,
+            voice_duration: voiceData.duration,
+            voice_type: voiceData.type
+        }));
+    }
+}
+
+// ========== TOGGLE RECORDING (Tap to start, tap to stop) ==========
+let isRecordingMode = false;
+
+function toggleRecording() {
+    if (isRecording) {
+        // Stop recording
+        stopRecording();
+    } else {
+        // Start recording
+        startRecording();
+    }
+}
+
+// Or use Press & Hold (mobile style)
+let holdTimeout = null;
+
+function startHoldRecording() {
+    if (isRecording) return;
+    holdTimeout = setTimeout(() => {
+        startRecording();
+    }, 300); // 300ms hold to start
+}
+
+function stopHoldRecording() {
+    clearTimeout(holdTimeout);
+    if (isRecording) {
+        stopRecording();
+    }
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+// ========== ENCRYPTION ========== 
 async function encrypt(text, pwd, salt) {
     const e = new TextEncoder();
     const km = await crypto.subtle.importKey('raw', e.encode(pwd), 'PBKDF2', false, ['deriveKey']);
@@ -2415,7 +2811,7 @@ console.log('🔔 Push notifications: Click "Enable" to receive message alerts')
 </body>
 </html>'''
 
-# ========== FASTAPI ENDPOINTS ==========
+# ========== FASTAPI ENDPOINTS ========== 
 @app.get("/")
 async def root():
     return HTMLResponse(HTML)
