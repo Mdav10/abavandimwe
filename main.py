@@ -1343,10 +1343,33 @@ HTML = '''<!DOCTYPE html>
         @media (min-width:769px){.menu-btn,.overlay{display:none;}}
 
         /* CHAT AREA – THIS CONTAINS THE SCROLLABLE MESSAGES */
-        .chat-area{flex:1;display:flex;flex-direction:column;min-width:0;width:100%;}
+        .chat-area{flex:1;display:flex;flex-direction:column;min-width:0;width:100%;position:relative;}
 
         /* MESSAGES CONTAINER – SCROLLABLE */
         .messages-container{flex:1;overflow-y:auto;padding:12px;display:flex;flex-direction:column;gap:8px;min-height:0;overscroll-behavior:contain;}
+
+        /* "NEW MESSAGES" BUTTON (floating) */
+        .new-msgs-btn{
+            position:absolute;
+            bottom:100px;
+            left:50%;
+            transform:translateX(-50%);
+            background:#0f0;
+            color:#000;
+            padding:8px 20px;
+            border-radius:30px;
+            font-size:14px;
+            font-weight:bold;
+            cursor:pointer;
+            box-shadow:0 4px 15px rgba(0,255,65,0.4);
+            z-index:30;
+            display:none;
+            border:2px solid #0f0;
+            transition:transform 0.2s;
+            font-family:monospace;
+        }
+        .new-msgs-btn:hover{transform:translateX(-50%) scale(1.05);}
+        .new-msgs-btn.show{display:block;}
 
         /* MESSAGE ITEMS – FLEX ALIGNMENT (WhatsApp style) */
         .message{
@@ -1731,6 +1754,7 @@ HTML = '''<!DOCTYPE html>
             .image-bubble img{max-height:280px;}
             .sidebar{width:240px;}
             @media (max-width:768px){.sidebar{width:240px;left:-240px;}}
+            .new-msgs-btn{font-size:12px;padding:6px 16px;bottom:90px;}
         }
         @media (max-width:380px){
             .input-row button{flex-basis:38px;width:38px;height:38px;font-size:14px;}
@@ -1738,6 +1762,7 @@ HTML = '''<!DOCTYPE html>
             .voice-player{min-width:120px;padding:4px 8px;gap:6px;}
             .voice-duration{font-size:9px;min-width:28px;}
             .message{max-width:92%;}
+            .new-msgs-btn{font-size:11px;padding:4px 14px;bottom:80px;}
         }
     </style>
 </head>
@@ -1872,6 +1897,10 @@ HTML = '''<!DOCTYPE html>
         <div class="overlay" id="overlay" onclick="toggleSidebar()"></div>
         <div class="chat-area">
             <div class="messages-container" id="messages"><div style="text-align:center;color:#666;padding:40px 0;">Connecting...</div></div>
+            <!-- New Messages Button -->
+            <div class="new-msgs-btn" id="newMsgsBtn" onclick="scrollToBottom()">
+                <span id="newMsgsCount">0</span> new messages
+            </div>
             <div class="typing-indicator" id="typingIndicator"></div>
             <div class="input-area">
                 <div class="reply-preview" id="replyPreview">
@@ -1928,6 +1957,11 @@ let activeAudio = null;
 let activeButton = null;
 let activeProgressBar = null;
 let activeDurationSpan = null;
+
+// New messages counter
+let unreadCount = 0;
+let isAtBottom = true;
+let initialLoad = true;
 
 // ========== LOADING ==========
 function showLoading(text, callback) {
@@ -2155,6 +2189,21 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     });
 
+    // Scroll event to detect if at bottom
+    const messagesContainer = document.getElementById('messages');
+    messagesContainer.addEventListener('scroll', function() {
+        const threshold = 100; // pixels from bottom
+        const atBottom = (this.scrollHeight - this.scrollTop - this.clientHeight) < threshold;
+        if (atBottom && !isAtBottom) {
+            isAtBottom = true;
+            // Reset unread count and hide button
+            unreadCount = 0;
+            updateNewMsgsButton();
+        } else if (!atBottom && isAtBottom) {
+            isAtBottom = false;
+        }
+    });
+
     document.addEventListener('visibilitychange', function() {
         if (document.visibilityState === 'visible' && document.getElementById('chatScreen').classList.contains('active')) {
             if (!navigator.onLine) clearMessagesOffline();
@@ -2215,6 +2264,27 @@ function clearMessagesOffline() {
     document.getElementById('offlineBar').classList.add('active');
     updateStatus(false);
     if (ws && ws.readyState === WebSocket.OPEN) ws.close();
+}
+
+// ========== NEW MESSAGES BUTTON ==========
+function updateNewMsgsButton() {
+    const btn = document.getElementById('newMsgsBtn');
+    const countSpan = document.getElementById('newMsgsCount');
+    if (unreadCount > 0) {
+        countSpan.textContent = unreadCount;
+        btn.classList.add('show');
+    } else {
+        btn.classList.remove('show');
+    }
+}
+
+function scrollToBottom() {
+    const container = document.getElementById('messages');
+    container.scrollTop = container.scrollHeight;
+    // Reset counter
+    unreadCount = 0;
+    updateNewMsgsButton();
+    isAtBottom = true;
 }
 
 // ========== LOGIN ==========
@@ -2350,6 +2420,11 @@ function connectToChat(username, group) {
         ws.send(JSON.stringify({type: 'join', username: username, group: group}));
         reconnectAttempts = 0;
         isManuallyReconnecting = false;
+        // Reset unread counter on new connection
+        unreadCount = 0;
+        updateNewMsgsButton();
+        isAtBottom = true;
+        initialLoad = true;
     };
     ws.onmessage = async function(e) {
         try {
@@ -2376,6 +2451,15 @@ function connectToChat(username, group) {
                         }
                     }
                 }
+                // On history load, scroll to bottom and reset unread count
+                setTimeout(() => {
+                    const container = document.getElementById('messages');
+                    container.scrollTop = container.scrollHeight;
+                    isAtBottom = true;
+                    unreadCount = 0;
+                    updateNewMsgsButton();
+                    initialLoad = false;
+                }, 100);
             } else if(d.type === 'message') {
                 // If this message has a temp_id, remove the placeholder DOM element
                 if (d.temp_id) {
@@ -2393,6 +2477,14 @@ function connectToChat(username, group) {
                 } catch(e) {
                     messagesData[d.message_id] = {sender: d.sender, text: '🔒 Encrypted', timestamp: d.timestamp, voice_url: d.voice_url, media_url: d.media_url, media_type: d.media_type};
                     addMessage(d.sender, '🔒 Encrypted', false, d.timestamp, d.message_id, d.reply_to, d.voice_url, d.media_url, d.media_type);
+                }
+                // Check if we're at bottom; if not, increment unread count
+                const container = document.getElementById('messages');
+                const threshold = 100;
+                const atBottom = (container.scrollHeight - container.scrollTop - container.clientHeight) < threshold;
+                if (!atBottom && !d.temp_id) { // don't count placeholders as new
+                    unreadCount++;
+                    updateNewMsgsButton();
                 }
             } else if(d.type === 'users') {
                 updateUsers(d.users);
@@ -2611,7 +2703,10 @@ function addMessage(sender, text, isSent, timestamp, messageId, replyTo, voiceUr
     });
 
     msgs.appendChild(div);
-    msgs.scrollTop = msgs.scrollHeight;
+    // If we're at bottom, scroll to bottom; else, the button will handle it
+    if (isAtBottom) {
+        msgs.scrollTop = msgs.scrollHeight;
+    }
 }
 
 function replyToMessage(messageId) {
@@ -3142,6 +3237,7 @@ if __name__ == "__main__":
 ║           🎙️ Voice Messages (auto-send)                   ║
 ║           🖼️ Instant Image Sharing                        ║
 ║           ⬇️ Download Audio & Images                       ║
+║           📬 New Messages Counter (floating button)        ║
 ║                                                            ║
 ╚════════════════════════════════════════════════════════════╝
 """)
