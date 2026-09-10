@@ -369,7 +369,6 @@ async def init_db():
     conn = await get_db_connection()
     
     try:
-        # Create tables
         await conn.execute('''
             CREATE TABLE IF NOT EXISTS users (
                 username TEXT PRIMARY KEY,
@@ -399,7 +398,8 @@ async def init_db():
                 reply_to INTEGER DEFAULT NULL,
                 voice_url TEXT,
                 media_url TEXT,
-                media_type TEXT
+                media_type TEXT,
+                delivered BOOLEAN DEFAULT FALSE
             )
         ''')
         
@@ -425,7 +425,6 @@ async def init_db():
             )
         ''')
         
-        # Files table for voice/media storage (Neon)
         await conn.execute('''
             CREATE TABLE IF NOT EXISTS files (
                 id SERIAL PRIMARY KEY,
@@ -458,6 +457,8 @@ async def init_db():
                 await conn.execute('ALTER TABLE messages ADD COLUMN media_type TEXT')
             if 'reply_to' not in existing:
                 await conn.execute('ALTER TABLE messages ADD COLUMN reply_to INTEGER DEFAULT NULL')
+            if 'delivered' not in existing:
+                await conn.execute('ALTER TABLE messages ADD COLUMN delivered BOOLEAN DEFAULT FALSE')
         except Exception as e:
             print(f"[!] Column migration: {e}")
         
@@ -589,7 +590,6 @@ async def create_user_with_group(username, password, group_name, group_password)
         salt = generate_salt()
         user_password_hash = hash_password_argon2(password)
         
-        # Check if group exists
         row = await conn.fetchrow("SELECT group_name, group_password FROM groups WHERE group_name = $1", group_name)
         if row:
             stored_group_password = row['group_password']
@@ -601,7 +601,6 @@ async def create_user_with_group(username, password, group_name, group_password)
                     group_password, group_name
                 )
         else:
-            # Create new group
             group_salt = generate_salt()
             group_pwd_hash = hash_password_argon2(group_password)
             await conn.execute(
@@ -610,7 +609,6 @@ async def create_user_with_group(username, password, group_name, group_password)
             )
             print(f"[✓] New group created: '{group_name}'")
         
-        # Insert user with assigned_group
         await conn.execute(
             "INSERT INTO users (username, password_hash, salt, role, assigned_group, created_at) VALUES ($1, $2, $3, $4, $5, $6)",
             username, user_password_hash, salt, "user", group_name, time.time()
@@ -676,12 +674,19 @@ async def save_message_with_media(ciphertext, group, sender, salt, reply_to=None
     try:
         result = await conn.fetchrow(
             """INSERT INTO messages 
-               (ciphertext, group_name, sender, salt, created_at, expires_at, reply_to, voice_url, media_url, media_type) 
-               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) 
+               (ciphertext, group_name, sender, salt, created_at, expires_at, reply_to, voice_url, media_url, media_type, delivered) 
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, FALSE) 
                RETURNING id, created_at""",
             ciphertext, group, sender, salt, now, expiry, reply_to, voice_url, media_url, media_type
         )
         return dict(result)
+    finally:
+        await return_db_connection(conn)
+
+async def mark_message_delivered(message_id):
+    conn = await get_db_connection()
+    try:
+        await conn.execute("UPDATE messages SET delivered = TRUE WHERE id = $1", message_id)
     finally:
         await return_db_connection(conn)
 
@@ -690,7 +695,7 @@ async def get_messages(group):
     conn = await get_db_connection()
     try:
         rows = await conn.fetch(
-            "SELECT id, ciphertext, sender, salt, created_at, reply_to, voice_url, media_url, media_type FROM messages WHERE group_name = $1 AND created_at > $2 ORDER BY id ASC",
+            "SELECT id, ciphertext, sender, salt, created_at, reply_to, voice_url, media_url, media_type, delivered FROM messages WHERE group_name = $1 AND created_at > $2 ORDER BY id ASC",
             group, cutoff
         )
         return [dict(row) for row in rows]
@@ -757,17 +762,14 @@ async def get_all_groups():
 async def delete_group(group_name):
     conn = await get_db_connection()
     try:
-        # Delete all users assigned to this group
         await conn.execute("DELETE FROM users WHERE assigned_group = $1", group_name)
-        # Delete all messages in this group
         await conn.execute("DELETE FROM messages WHERE group_name = $1", group_name)
-        # Delete the group itself
         result = await conn.execute("DELETE FROM groups WHERE group_name = $1", group_name)
         return result != "DELETE 0"
     finally:
         await return_db_connection(conn)
 
-# ========== FILE STORAGE FUNCTIONS (Neon) ==========
+# ========== FILE STORAGE FUNCTIONS ==========
 async def save_file(filename, data, mime_type, username, file_type='voice'):
     conn = await get_db_connection()
     try:
@@ -882,10 +884,7 @@ async def root():
 async def login(request: Request, login_data: LoginRequest):
     allowed, message = check_login_rate_limit(login_data.username)
     if not allowed:
-        return JSONResponse(
-            status_code=429,
-            content={"success": False, "message": message}
-        )
+        return JSONResponse(status_code=429, content={"success": False, "message": message})
     
     conn = await get_db_connection()
     try:
@@ -898,10 +897,7 @@ async def login(request: Request, login_data: LoginRequest):
     
     if not row:
         record_failed_login(login_data.username)
-        return JSONResponse(
-            status_code=401,
-            content={"success": False, "message": "Invalid credentials"}
-        )
+        return JSONResponse(status_code=401, content={"success": False, "message": "Invalid credentials"})
     
     stored_hash = row['password_hash']
     role = row['role']
@@ -910,10 +906,7 @@ async def login(request: Request, login_data: LoginRequest):
     locked_until = row['locked_until']
     
     if locked_until and locked_until > time.time():
-        return JSONResponse(
-            status_code=429,
-            content={"success": False, "message": f"Account locked. Try again in {int((locked_until - time.time()) / 60)} minutes."}
-        )
+        return JSONResponse(status_code=429, content={"success": False, "message": f"Account locked. Try again in {int((locked_until - time.time()) / 60)} minutes."})
     
     if verify_password_argon2(login_data.password, stored_hash):
         reset_login_attempts(login_data.username)
@@ -942,46 +935,28 @@ async def login(request: Request, login_data: LoginRequest):
         return response
     else:
         record_failed_login(login_data.username)
-        return JSONResponse(
-            status_code=401,
-            content={"success": False, "message": "Invalid credentials"}
-        )
+        return JSONResponse(status_code=401, content={"success": False, "message": "Invalid credentials"})
 
 @app.post("/gatekeeper")
 async def gatekeeper(login_data: LoginRequest):
     allowed, message = check_login_rate_limit(login_data.username)
     if not allowed:
-        return JSONResponse(
-            status_code=429,
-            content={"success": False, "message": message}
-        )
+        return JSONResponse(status_code=429, content={"success": False, "message": message})
     
     user = await authenticate_user(login_data.username, login_data.password)
     if not user:
         record_failed_login(login_data.username)
-        return JSONResponse(
-            status_code=401,
-            content={"success": False, "message": "Invalid credentials"}
-        )
+        return JSONResponse(status_code=401, content={"success": False, "message": "Invalid credentials"})
     
     if "error" in user:
-        return JSONResponse(
-            status_code=429,
-            content={"success": False, "message": user["error"]}
-        )
+        return JSONResponse(status_code=429, content={"success": False, "message": user["error"]})
     
     if user["role"] == "admin":
-        return JSONResponse(
-            status_code=403,
-            content={"success": False, "message": "Admin cannot access chat"}
-        )
+        return JSONResponse(status_code=403, content={"success": False, "message": "Admin cannot access chat"})
     
     assigned_group = user["assigned_group"]
     if not assigned_group:
-        return JSONResponse(
-            status_code=404,
-            content={"success": False, "message": "No group assigned to this user"}
-        )
+        return JSONResponse(status_code=404, content={"success": False, "message": "No group assigned to this user"})
     
     group_password = await get_group_password(assigned_group)
     if not group_password:
@@ -1129,7 +1104,8 @@ async def ws_endpoint(websocket: WebSocket):
             'reply_to': msg.get('reply_to'),
             'voice_url': msg.get('voice_url'),
             'media_url': msg.get('media_url'),
-            'media_type': msg.get('media_type')
+            'media_type': msg.get('media_type'),
+            'delivered': msg.get('delivered', False)
         })
     
     await websocket.send_json({
@@ -1172,11 +1148,23 @@ async def ws_endpoint(websocket: WebSocket):
                         'reply_to': reply_to,
                         'voice_url': voice_url,
                         'media_url': media_url,
-                        'media_type': media_type
+                        'media_type': media_type,
+                        'delivered': False
                     }
                     if temp_id:
                         broadcast_msg['temp_id'] = temp_id
                     await manager.broadcast(group_name, broadcast_msg)
+            
+            elif msg_type == 'delivered':
+                # Client confirms a message was delivered
+                message_id = data.get('message_id')
+                if message_id:
+                    await mark_message_delivered(message_id)
+                    await manager.broadcast(group_name, {
+                        'type': 'message_delivered',
+                        'message_id': message_id,
+                        'user': username
+                    })
             
             elif msg_type == 'typing':
                 if username and group_name:
@@ -1212,7 +1200,6 @@ HTML = '''<!DOCTYPE html>
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
     <title>ABAVANDIMWE | Secure Messaging</title>
     
-    <!-- PWA Meta Tags -->
     <link rel="manifest" href="/manifest.json">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -1222,7 +1209,6 @@ HTML = '''<!DOCTYPE html>
     <meta name="msapplication-TileColor" content="#0a0a0f">
     <meta name="msapplication-TileImage" content="/icons/icon-144x144.png">
     
-    <!-- Icons -->
     <link rel="icon" type="image/png" sizes="72x72" href="/icons/icon-72x72.png">
     <link rel="icon" type="image/png" sizes="96x96" href="/icons/icon-96x96.png">
     <link rel="icon" type="image/png" sizes="128x128" href="/icons/icon-128x128.png">
@@ -1231,12 +1217,9 @@ HTML = '''<!DOCTYPE html>
     <link rel="icon" type="image/png" sizes="192x192" href="/icons/icon-192x192.png">
     <link rel="icon" type="image/png" sizes="384x384" href="/icons/icon-384x384.png">
     <link rel="icon" type="image/png" sizes="512x512" href="/icons/icon-512x512.png">
-    
-    <!-- Apple Touch Icon -->
     <link rel="apple-touch-icon" href="/icons/icon-192x192.png">
     
     <style>
-        /* RESET & BASE */
         *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent;}
         html,body{width:100%;height:100%;overflow:hidden;background:#0a0a0f;font-family:monospace;color:#0f0;}
 
@@ -1249,19 +1232,19 @@ HTML = '''<!DOCTYPE html>
         h1{text-align:center;margin-bottom:4px;font-size:28px;letter-spacing:2px;}
         .sub{text-align:center;margin-bottom:12px;font-size:11px;color:#666;}
         .admin-badge{text-align:center;margin-bottom:20px;font-size:10px;color:#0f0;border:1px solid #0f0;padding:4px 12px;display:inline-block;border-radius:20px;background:rgba(0,255,0,0.05);}
-        input{width:100%;padding:14px;margin:10px 0;background:#111;border:1px solid #0f0;border-radius:12px;color:#0f0;font-family:monospace;font-size:15px;transition:all 0.3s;}
+        input{width:100%;padding:14px;margin:10px 0;background:#111;border:1px solid #0f0;border-radius:12px;color:#0f0;font-family:monospace;font-size:15px;}
         input:focus{outline:none;box-shadow:0 0 20px rgba(0,255,65,0.2);border-color:#0f0;}
         input::placeholder{color:#444;}
-        button{width:100%;padding:14px;margin-top:20px;background:transparent;border:2px solid #0f0;border-radius:12px;color:#0f0;font-size:16px;font-weight:bold;cursor:pointer;transition:all 0.3s;position:relative;overflow:hidden;}
+        button{width:100%;padding:14px;margin-top:20px;background:transparent;border:2px solid #0f0;border-radius:12px;color:#0f0;font-size:16px;font-weight:bold;cursor:pointer;transition:all 0.3s;}
         button:hover{background:#0f0;color:#000;transform:translateY(-2px);box-shadow:0 5px 20px rgba(0,255,65,0.3);}
         button:active{transform:scale(0.98);}
         .btn-whatsapp{background:#25D366;border-color:#25D366;color:white;margin-top:12px;}
-        .btn-whatsapp:hover{background:#128C7E;border-color:#128C7E;color:white;box-shadow:0 5px 20px rgba(37,211,102,0.3);}
+        .btn-whatsapp:hover{background:#128C7E;border-color:#128C7E;color:white;}
         .error-message{color:#ff4444;font-size:12px;text-align:center;margin-top:12px;display:none;}
         .success-message{color:#0f0;font-size:12px;text-align:center;margin-top:12px;display:none;}
         .login-footer{text-align:center;margin-top:20px;font-size:9px;color:#333;border-top:1px solid #1a1a2e;padding-top:16px;}
 
-        /* ADMIN, GATEKEEPER, SETUP – unchanged from original */
+        /* ADMIN / GATEKEEPER / SETUP */
         .admin-panel{display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:#0a0a0f;z-index:50;padding:20px;overflow-y:auto;}
         .admin-panel.active{display:block;}
         .admin-panel-header{display:flex;justify-content:space-between;align-items:center;padding:16px;border-bottom:2px solid #0f0;margin-bottom:20px;}
@@ -1273,20 +1256,17 @@ HTML = '''<!DOCTYPE html>
         .admin-card table th{text-align:left;padding:6px;border-bottom:1px solid #1a1a2e;color:#666;}
         .admin-card table td{padding:6px;border-bottom:1px solid #1a1a2e;}
         .admin-card input{width:100%;padding:8px;margin:5px 0;background:#111;border:1px solid #0f0;border-radius:6px;color:#0f0;font-size:12px;}
-        .admin-card select{width:100%;padding:8px;margin:5px 0;background:#111;border:1px solid #0f0;border-radius:6px;color:#0f0;font-size:12px;}
-        .admin-card button{width:auto;padding:8px 16px;margin:5px;font-size:12px;position:relative;overflow:hidden;}
+        .admin-card button{width:auto;padding:8px 16px;margin:5px;font-size:12px;}
         .close-admin{background:#ff0041;border-color:#ff0041;color:white;padding:8px 16px;border-radius:8px;cursor:pointer;}
-        .close-admin:hover{background:#cc0033;}
         .admin-stats{display:grid;grid-template-columns:repeat(auto-fit, minmax(150px, 1fr));gap:12px;margin-bottom:20px;}
         .stat-box{background:#050508;border:1px solid #0f0;border-radius:10px;padding:16px;text-align:center;}
         .stat-number{font-size:24px;color:#0f0;}
         .stat-label{font-size:10px;color:#666;margin-top:4px;}
         .admin-table-wrap{max-height:200px;overflow-y:auto;}
-        .action-btn{background:transparent;border:1px solid #ff0041;color:#ff0041;padding:4px 8px;border-radius:4px;cursor:pointer;font-size:10px;margin:0 2px;position:relative;overflow:hidden;}
+        .action-btn{background:transparent;border:1px solid #ff0041;color:#ff0041;padding:4px 8px;border-radius:4px;cursor:pointer;font-size:10px;margin:0 2px;}
         .action-btn:hover{background:#ff0041;color:white;}
-        .action-btn-green{background:transparent;border:1px solid #0f0;color:#0f0;padding:4px 8px;border-radius:4px;cursor:pointer;font-size:10px;margin:0 2px;position:relative;overflow:hidden;}
+        .action-btn-green{background:transparent;border:1px solid #0f0;color:#0f0;padding:4px 8px;border-radius:4px;cursor:pointer;font-size:10px;margin:0 2px;}
         .action-btn-green:hover{background:#0f0;color:#000;}
-        .admin-close-area{display:flex;justify-content:flex-end;gap:10px;}
         .admin-username{color:#ffaa00;font-size:12px;margin-left:10px;}
         
         .gatekeeper-container{display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:#0a0a0f;z-index:900;padding:20px;justify-content:center;align-items:center;}
@@ -1302,30 +1282,25 @@ HTML = '''<!DOCTYPE html>
         .user-setup-card .sub{text-align:center;margin-bottom:24px;font-size:11px;color:#666;}
         .user-setup-card input[readonly]{opacity:0.7;cursor:not-allowed;}
 
-        /* ===== CHAT CONTAINER – 3-PART LAYOUT ===== */
+        /* CHAT */
         .chat-container{display:none;flex-direction:column;height:100dvh;background:#0a0a0f;}
         .chat-container.active{display:flex;}
 
-        /* HEADER (fixed) */
         .chat-header{padding:12px 16px;background:#050508;border-bottom:1px solid #0f0;display:flex;justify-content:space-between;align-items:center;flex-shrink:0;min-height:56px;gap:8px;}
         .chat-header-left{display:flex;align-items:center;gap:10px;flex:1;min-width:0;}
         .chat-header h2{font-size:16px;flex:1;text-align:center;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;}
         .online-badge{font-size:10px;padding:3px 10px;border:1px solid #0f0;border-radius:20px;background:rgba(0,255,0,0.05);white-space:nowrap;}
         .menu-btn,.logout-btn{background:transparent;border:1px solid #0f0;color:#0f0;padding:6px 12px;border-radius:8px;cursor:pointer;width:auto;margin:0;font-size:12px;flex-shrink:0;}
         .logout-btn:hover{border-color:#ff0041;color:#ff0041;}
-        .logout-btn:active{background:#ff0041;border-color:#ff0041;color:white;}
-        .notification-btn{background:transparent;border:1px solid #0f0;color:#0f0;padding:4px 12px;border-radius:20px;cursor:pointer;font-size:10px;font-family:monospace;transition:all 0.3s;white-space:nowrap;flex-shrink:0;}
+        .notification-btn{background:transparent;border:1px solid #0f0;color:#0f0;padding:4px 12px;border-radius:20px;cursor:pointer;font-size:10px;white-space:nowrap;flex-shrink:0;}
         .notification-btn.enabled{background:#0f0;color:#000;}
 
-        /* OFFLINE BAR */
         .offline-bar{display:none;background:#ff0041;color:white;text-align:center;padding:4px;font-size:10px;font-weight:bold;flex-shrink:0;}
         .offline-bar.active{display:block;}
         .offline-bar .reconnect-btn{background:white;color:#ff0041;border:none;padding:1px 10px;border-radius:4px;cursor:pointer;font-weight:bold;font-size:10px;}
 
-        /* MAIN CONTENT (messages area + sidebar) */
         .main-content{display:flex;flex:1;min-height:0;position:relative;}
 
-        /* SIDEBAR */
         .sidebar{width:260px;background:#050508;border-right:1px solid #0f0;display:flex;flex-direction:column;flex-shrink:0;overflow:hidden;z-index:10;}
         .sidebar-header{padding:16px;border-bottom:1px solid #0f0;font-size:14px;font-weight:bold;}
         .users-list{flex:1;padding:12px;overflow-y:auto;}
@@ -1338,17 +1313,12 @@ HTML = '''<!DOCTYPE html>
         @media (max-width:768px){
             .sidebar{position:fixed;left:-260px;top:0;bottom:0;z-index:20;transition:left 0.3s;width:260px;}
             .sidebar.open{left:0;}
-            .overlay.active{display:block;}
         }
         @media (min-width:769px){.menu-btn,.overlay{display:none;}}
 
-        /* CHAT AREA – THIS CONTAINS THE SCROLLABLE MESSAGES */
         .chat-area{flex:1;display:flex;flex-direction:column;min-width:0;width:100%;position:relative;}
-
-        /* MESSAGES CONTAINER – SCROLLABLE */
         .messages-container{flex:1;overflow-y:auto;padding:12px;display:flex;flex-direction:column;gap:8px;min-height:0;overscroll-behavior:contain;}
 
-        /* "NEW MESSAGES" BUTTON (floating) */
         .new-msgs-btn{
             position:absolute;
             bottom:100px;
@@ -1365,13 +1335,10 @@ HTML = '''<!DOCTYPE html>
             z-index:30;
             display:none;
             border:2px solid #0f0;
-            transition:transform 0.2s;
             font-family:monospace;
         }
-        .new-msgs-btn:hover{transform:translateX(-50%) scale(1.05);}
         .new-msgs-btn.show{display:block;}
 
-        /* MESSAGE ITEMS – FLEX ALIGNMENT (WhatsApp style) */
         .message{
             display:flex;
             flex-direction:column;
@@ -1382,16 +1349,8 @@ HTML = '''<!DOCTYPE html>
             overflow-wrap:anywhere;
             animation:fadeIn 0.2s ease;
         }
-        .message.sent{
-            align-self:flex-end;
-            margin-left:auto;
-            margin-right:0;
-        }
-        .message.received{
-            align-self:flex-start;
-            margin-left:0;
-            margin-right:auto;
-        }
+        .message.sent{align-self:flex-end;margin-left:auto;}
+        .message.received{align-self:flex-start;margin-right:auto;}
         @media (max-width:600px){ .message { max-width:90%; } }
 
         .message-bubble{
@@ -1402,21 +1361,12 @@ HTML = '''<!DOCTYPE html>
             word-wrap:break-word;
             max-width:100%;
         }
-        .sent .message-bubble{
-            background:#0f0;
-            color:#000;
-            border-bottom-right-radius:4px;
-        }
-        .received .message-bubble{
-            background:#1a1a2e;
-            border:1px solid #0f0;
-            border-bottom-left-radius:4px;
-        }
+        .sent .message-bubble{background:#0f0;color:#000;border-bottom-right-radius:4px;}
+        .received .message-bubble{background:#1a1a2e;border:1px solid #0f0;border-bottom-left-radius:4px;}
 
         .message-sender{font-size:9px;opacity:0.7;padding-left:4px;margin-bottom:2px;}
         .message-time{font-size:8px;opacity:0.5;margin-top:2px;}
 
-        /* REPLY PREVIEW */
         .message-reply-preview{
             font-size:10px;
             color:#ffaa00;
@@ -1431,77 +1381,130 @@ HTML = '''<!DOCTYPE html>
         .message-reply-preview .reply-sender{color:#ffaa00;font-weight:bold;}
         .message-reply-preview .reply-text{color:#888;}
 
-        /* SYSTEM MESSAGE */
         .system-message{text-align:center;font-size:10px;color:#ffaa00;margin:4px 0;font-style:italic;}
-
-        /* TYPING INDICATOR */
         .typing-indicator{padding:2px 16px 6px;font-size:10px;color:#0f0;font-style:italic;min-height:24px;flex-shrink:0;}
 
-        /* ===== VOICE PLAYER (custom) ===== */
+        /* ===== WHATSAPP-STYLE VOICE PLAYER ===== */
         .voice-player{
             display:flex;
             align-items:center;
             gap:10px;
             background:#0f0;
-            padding:6px 12px;
-            border-radius:30px;
-            min-width:180px;
-            width:fit-content;
-            max-width:100%;
+            padding:6px 10px;
+            border-radius:20px;
+            min-width:200px;
+            max-width:min(90vw, 340px);
+            position:relative;
         }
-        .voice-play-btn{
-            border:none;
+        .received .voice-player{background:#1a1a2e;border:1px solid #0f0;}
+
+        .voice-avatar{
+            flex:0 0 34px;
+            width:34px;
+            height:34px;
+            border-radius:50%;
             background:#0a0a0f;
             color:#0f0;
-            width:44px;
-            height:44px;
+            display:flex;
+            align-items:center;
+            justify-content:center;
+            font-size:12px;
+            font-weight:bold;
+            overflow:hidden;
+            position:relative;
+        }
+        .voice-avatar .mic-badge{
+            position:absolute;
+            bottom:-2px;
+            right:-2px;
+            background:#0a0a0f;
+            border:1px solid #0f0;
             border-radius:50%;
-            font-size:20px;
+            width:14px;
+            height:14px;
+            font-size:9px;
+            display:flex;
+            align-items:center;
+            justify-content:center;
+            color:#0f0;
+        }
+
+        .voice-play-btn{
+            flex:0 0 32px;
+            width:32px;
+            height:32px;
+            border:none;
+            background:transparent;
+            color:#0a0a0f;
+            font-size:22px;
             cursor:pointer;
             display:flex;
             align-items:center;
             justify-content:center;
-            flex-shrink:0;
-            transition:0.2s;
+            padding:0;
         }
-        .voice-play-btn:hover{background:#1a1a2e;}
-        .voice-play-btn.playing{color:#ffaa00;}
-        .voice-progress{
+        .received .voice-play-btn{color:#0f0;}
+
+        .voice-waveform{
             flex:1;
-            min-width:60px;
-            height:4px;
-            background:#1a1a2e;
-            border-radius:2px;
-            overflow:hidden;
+            display:flex;
+            align-items:center;
+            gap:2px;
+            height:24px;
             cursor:pointer;
+            min-width:80px;
+            overflow:hidden;
         }
-        .voice-progress-bar{
-            height:100%;
-            width:0%;
+        .voice-wave-bar{
+            flex:0 0 2px;
+            width:2px;
             background:#0a0a0f;
             border-radius:2px;
-            transition:width 0.1s;
+            opacity:0.55;
         }
-        .voice-duration{
-            font-size:11px;
-            color:#0a0a0f;
-            min-width:40px;
-            text-align:center;
-            font-weight:bold;
-            font-family:monospace;
+        .received .voice-wave-bar{background:#0f0;}
+        .voice-wave-bar.played{opacity:1;}
+
+        .voice-ball{
+            position:absolute;
+            top:50%;
+            transform:translateY(-50%);
+            width:10px;
+            height:10px;
+            border-radius:50%;
+            background:#0a0a0f;
+            pointer-events:none;
+            left:60px;
+            display:none;
         }
-        .voice-caption{
-            font-size:11px;
-            color:#888;
+        .received .voice-ball{background:#0f0;}
+        .voice-player.playing .voice-ball{display:block;}
+
+        .voice-info{
+            display:flex;
+            justify-content:space-between;
+            align-items:center;
+            font-size:10px;
             margin-top:2px;
+            color:#888;
+            padding:0 4px;
+            max-width:min(90vw, 340px);
         }
+        .voice-duration{color:#0a0a0f;font-weight:bold;}
+        .received ~ .voice-info .voice-duration,
+        .voice-info .voice-duration{color:#0f0;}
+        .voice-time{color:#888;font-size:10px;}
+        .voice-tick{color:#0f0;font-size:11px;margin-left:4px;}
+
         .voice-download{
+            flex:0 0 auto;
             font-size:14px;
             color:#0a0a0f;
             text-decoration:none;
             margin-left:4px;
             cursor:pointer;
         }
+        .received .voice-download{color:#0f0;}
 
         /* ===== IMAGE MESSAGE ===== */
         .image-bubble{
@@ -1559,12 +1562,12 @@ HTML = '''<!DOCTYPE html>
         @keyframes spin{0%{transform:translate(-50%,-50%) rotate(0);}100%{transform:translate(-50%,-50%) rotate(360deg);}}
         .image-bubble.placeholder img{filter:blur(2px);}
 
-        /* MESSAGE ACTIONS (Reply only) */
         .message-actions{
             display:flex;
             gap:6px;
             margin-top:4px;
             flex-wrap:wrap;
+            align-items:center;
         }
         .message-actions button{
             background:transparent;
@@ -1576,7 +1579,7 @@ HTML = '''<!DOCTYPE html>
         }
         .message-actions button:hover{color:#0f0;}
 
-        /* ===== COMPOSER (fixed at bottom) ===== */
+        /* ===== COMPOSER ===== */
         .input-area{
             padding:8px 12px;
             background:#050508;
@@ -1641,16 +1644,13 @@ HTML = '''<!DOCTYPE html>
             display:flex;
             align-items:center;
             justify-content:center;
-            transition:all 0.2s;
             flex-shrink:0;
         }
         .input-row button:hover{background:rgba(0,255,0,0.1);}
         .input-row .send-btn{background:#0f0;color:#000;border-color:#0f0;}
-        .input-row .send-btn:hover{background:#00cc00;}
         .voice-btn.recording{border-color:#ff0041;background:rgba(255,0,65,0.15);animation:pulse-red 1s infinite;}
         @keyframes pulse-red{0%,100%{box-shadow:0 0 0 0 rgba(255,0,65,0.4);}50%{box-shadow:0 0 20px 10px rgba(255,0,65,0.15);}}
 
-        /* RECORDING STATUS – no cancel button */
         .recording-status{
             display:none;
             align-items:center;
@@ -1661,26 +1661,9 @@ HTML = '''<!DOCTYPE html>
             border:1px solid #ff0041;
         }
         .recording-status.active{display:flex;}
-        #recordingTimer{
-            color:#ff0041;
-            font-size:14px;
-            font-weight:bold;
-            font-family:monospace;
-            min-width:50px;
-        }
-        .wave{
-            flex:1;
-            display:flex;
-            align-items:center;
-            gap:2px;
-            height:20px;
-        }
-        .wave .bar{
-            width:3px;
-            background:#ff0041;
-            border-radius:2px;
-            animation:wave 0.6s ease-in-out infinite alternate;
-        }
+        #recordingTimer{color:#ff0041;font-size:14px;font-weight:bold;min-width:50px;}
+        .wave{flex:1;display:flex;align-items:center;gap:2px;height:20px;}
+        .wave .bar{width:3px;background:#ff0041;border-radius:2px;animation:wave 0.6s ease-in-out infinite alternate;}
         .wave .bar:nth-child(1){height:6px;animation-delay:0s;}
         .wave .bar:nth-child(2){height:14px;animation-delay:0.1s;}
         .wave .bar:nth-child(3){height:20px;animation-delay:0.2s;}
@@ -1690,36 +1673,25 @@ HTML = '''<!DOCTYPE html>
         .wave .bar:nth-child(7){height:8px;animation-delay:0.6s;}
         .wave .bar:nth-child(8){height:18px;animation-delay:0.7s;}
         @keyframes wave{0%{transform:scaleY(0.3);}100%{transform:scaleY(1);}}
-        #recordingText{
-            font-size:10px;
-            color:#ff0041;
-            font-weight:bold;
-            min-width:60px;
-            animation:pulse 1.5s infinite;
-        }
+        #recordingText{font-size:10px;color:#ff0041;font-weight:bold;min-width:60px;}
 
         .footer{text-align:center;padding:4px 0 2px;font-size:7px;color:#333;border-top:1px solid #1a1a2e;margin-top:4px;}
 
-        /* SCROLLBAR */
         ::-webkit-scrollbar{width:4px;}
         ::-webkit-scrollbar-track{background:#1a1a2e;}
         ::-webkit-scrollbar-thumb{background:#0f0;border-radius:2px;}
 
-        /* INSTALL BUTTON */
-        .install-btn{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);z-index:100;padding:14px 28px;background:#0f0;color:#000;border:none;border-radius:14px;font-size:15px;font-weight:bold;cursor:pointer;display:none;box-shadow:0 4px 30px rgba(0,255,65,0.4);transition:all 0.3s;font-family:monospace;}
-        .install-btn:hover{transform:translateX(-50%) scale(1.05);}
+        .install-btn{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);z-index:100;padding:14px 28px;background:#0f0;color:#000;border:none;border-radius:14px;font-size:15px;font-weight:bold;cursor:pointer;display:none;box-shadow:0 4px 30px rgba(0,255,65,0.4);font-family:monospace;}
         .install-btn.show{display:block;}
 
-        /* LOADING OVERLAY */
         .loading-overlay{position:fixed;inset:0;background:rgba(10,10,15,0.92);z-index:9999;display:none;justify-content:center;align-items:center;flex-direction:column;gap:30px;}
         .loading-overlay.active{display:flex;}
         .loader{width:60px;height:60px;border:3px solid rgba(0,255,65,0.1);border-top:3px solid #0f0;border-radius:50%;animation:spin 0.8s cubic-bezier(0.4,0.0,0.2,1) infinite;}
         .loader-pulse{position:absolute;width:60px;height:60px;border-radius:50%;border:1px solid rgba(0,255,65,0.3);animation:pulse-ring 1.5s cubic-bezier(0.4,0.0,0.2,1) infinite;}
         .loader-container{position:relative;display:flex;justify-content:center;align-items:center;}
-        .loader-text{color:#0f0;font-size:16px;font-family:monospace;letter-spacing:2px;animation:text-pulse 1.5s ease-in-out infinite;}
+        .loader-text{color:#0f0;font-size:16px;font-family:monospace;letter-spacing:2px;}
         @keyframes spin{0%{transform:rotate(0);}100%{transform:rotate(360deg);}}
         @keyframes pulse-ring{0%{transform:scale(1);opacity:1;}100%{transform:scale(1.6);opacity:0;}}
-        @keyframes text-pulse{0%,100%{opacity:0.6;}50%{opacity:1;}}
         .loader-dots{display:inline-block;}
         .loader-dots span{display:inline-block;animation:dot-bounce 1.4s ease-in-out infinite;}
         .loader-dots span:nth-child(1){animation-delay:0s;}
@@ -1727,28 +1699,36 @@ HTML = '''<!DOCTYPE html>
         .loader-dots span:nth-child(3){animation-delay:0.4s;}
         @keyframes dot-bounce{0%,80%,100%{transform:scale(0);opacity:0.3;}40%{transform:scale(1);opacity:1;}}
 
-        /* OFFLINE OVERLAY */
         .offline-overlay{position:fixed;inset:0;background:#0a0a0f;z-index:99999;display:none;justify-content:center;align-items:center;flex-direction:column;gap:20px;padding:30px;}
         .offline-overlay.active{display:flex;}
         .offline-overlay .offline-icon{font-size:60px;}
         .offline-overlay h2{color:#ff4444;font-size:24px;text-align:center;}
         .offline-overlay p{color:#888;font-size:14px;text-align:center;}
-        .offline-overlay .retry-btn{background:transparent;border:2px solid #0f0;color:#0f0;padding:14px 40px;border-radius:12px;font-size:16px;font-weight:bold;cursor:pointer;transition:all 0.3s;}
-        .offline-overlay .retry-btn:hover{background:#0f0;color:#000;}
+        .offline-overlay .retry-btn{background:transparent;border:2px solid #0f0;color:#0f0;padding:14px 40px;border-radius:12px;font-size:16px;font-weight:bold;cursor:pointer;}
 
-        /* CONNECTION STATUS */
         .connection-status{position:fixed;bottom:80px;right:16px;padding:6px 12px;background:#050508;border:1px solid #0f0;border-radius:20px;font-size:9px;z-index:40;}
         .status-online{color:#0f0;}
         .status-offline{color:#ff4444;}
 
-        /* RESPONSIVE */
+        /* DELIVERY TICKS */
+        .msg-tick{
+            font-size:11px;
+            margin-left:4px;
+            color:#666;
+            display:inline-block;
+            vertical-align:middle;
+        }
+        .msg-tick.delivered{color:#888;}
+        .msg-tick.read{color:#00d4ff;}
+        .received .msg-tick{color:#666;}
+
         @media (max-width:480px){
             .input-row textarea{font-size:13px;padding:8px 12px;min-height:36px;}
             .input-row button{flex-basis:44px;width:44px;height:44px;font-size:16px;}
-            .voice-player{min-width:140px;padding:4px 10px;}
-            .voice-play-btn{width:38px;height:38px;font-size:16px;}
-            .voice-progress{min-width:40px;}
-            .voice-duration{font-size:10px;min-width:32px;}
+            .voice-player{min-width:180px;padding:5px 8px;}
+            .voice-avatar{flex-basis:30px;width:30px;height:30px;font-size:11px;}
+            .voice-play-btn{flex-basis:28px;width:28px;height:28px;font-size:18px;}
+            .voice-waveform{min-width:60px;}
             .message{max-width:90%;}
             .chat-header h2{font-size:14px;}
             .image-bubble img{max-height:280px;}
@@ -1758,9 +1738,8 @@ HTML = '''<!DOCTYPE html>
         }
         @media (max-width:380px){
             .input-row button{flex-basis:38px;width:38px;height:38px;font-size:14px;}
-            .voice-play-btn{width:34px;height:34px;font-size:14px;}
-            .voice-player{min-width:120px;padding:4px 8px;gap:6px;}
-            .voice-duration{font-size:9px;min-width:28px;}
+            .voice-avatar{flex-basis:26px;width:26px;height:26px;font-size:10px;}
+            .voice-play-btn{flex-basis:24px;width:24px;height:24px;font-size:16px;}
             .message{max-width:92%;}
             .new-msgs-btn{font-size:11px;padding:4px 14px;bottom:80px;}
         }
@@ -1780,7 +1759,7 @@ HTML = '''<!DOCTYPE html>
     </div>
 </div>
 
-<!-- OFFLINE OVERLAY -->
+<!-- OFFLINE -->
 <div class="offline-overlay" id="offlineOverlay">
     <div class="offline-icon">📶</div>
     <h2>No Internet Connection</h2>
@@ -1798,7 +1777,7 @@ HTML = '''<!DOCTYPE html>
             <input type="text" id="loginUsername" placeholder="Username" autocomplete="username">
             <input type="password" id="loginPassword" placeholder="Password" autocomplete="current-password">
             <button id="loginBtn">▶ Login</button>
-            <div class="separator"><span></span></div>
+            <div class="separator"><span>OR</span></div>
             <button class="btn-whatsapp" onclick="requestAccess()">💬 Request Access on WhatsApp</button>
             <div id="loginError" class="error-message"></div>
             <div id="loginSuccess" class="success-message"></div>
@@ -1858,7 +1837,7 @@ HTML = '''<!DOCTYPE html>
         <input type="password" id="gatekeeperPassword" placeholder="Password">
         <button id="gatekeeperBtn">▶ Verify</button>
         <div id="gatekeeperError" class="error-message"></div>
-        <div class="login-footer" style="margin-top:20px;padding-top:16px;border-top:1px solid #1a1a2e;">🔒 Credentials provided by admin</div>
+        <div class="login-footer" style="margin-top:20px;padding-top:16px;">🔒 Credentials provided by admin</div>
     </div>
 </div>
 
@@ -1873,7 +1852,7 @@ HTML = '''<!DOCTYPE html>
         <button id="enterChatBtn">▶ Enter Chat</button>
         <div id="setupError" class="error-message"></div>
         <div id="setupSuccess" class="success-message"></div>
-        <div class="login-footer" style="margin-top:20px;padding-top:16px;border-top:1px solid #1a1a2e;">🔐 You'll be able to see messages from others in your group</div>
+        <div class="login-footer" style="margin-top:20px;padding-top:16px;">🔐 You'll be able to see messages from others in your group</div>
     </div>
 </div>
 
@@ -1883,7 +1862,7 @@ HTML = '''<!DOCTYPE html>
         <div class="chat-header-left">
             <button class="menu-btn" onclick="toggleSidebar()">☰</button>
             <span class="online-badge" id="connectionBadge">● Online</span>
-            
+            <button class="notification-btn" id="notificationBtn" onclick="toggleNotifications()">🔔 Enable</button>
         </div>
         <h2 id="groupTitle"># LOADING</h2>
         <button class="logout-btn" onclick="logout()">Leave</button>
@@ -1897,7 +1876,6 @@ HTML = '''<!DOCTYPE html>
         <div class="overlay" id="overlay" onclick="toggleSidebar()"></div>
         <div class="chat-area">
             <div class="messages-container" id="messages"><div style="text-align:center;color:#666;padding:40px 0;">Connecting...</div></div>
-            <!-- New Messages Button -->
             <div class="new-msgs-btn" id="newMsgsBtn" onclick="scrollToBottom()">
                 <span id="newMsgsCount">0</span> new messages
             </div>
@@ -1924,7 +1902,7 @@ HTML = '''<!DOCTYPE html>
             <div class="footer">🔐 End-to-End Encrypted | Messages self-destruct after 24 hours</div>
         </div>
     </div>
-    
+    <div class="connection-status status-online" id="connectionStatus">🟢 Connected</div>
 </div>
 
 <!-- INSTALL BUTTON -->
@@ -1961,7 +1939,9 @@ let activeDurationSpan = null;
 // New messages counter
 let unreadCount = 0;
 let isAtBottom = true;
-let initialLoad = true;
+
+// Delivered messages tracking
+const deliveredMessages = new Set();
 
 // ========== LOADING ==========
 function showLoading(text, callback) {
@@ -2086,10 +2066,10 @@ async function toggleNotifications() {
 function updateNotificationButton() {
     const btn = document.getElementById('notificationBtn');
     if (notificationsEnabled) {
-        btn.textContent = '🔔';
+        btn.textContent = '🔔 Enabled';
         btn.classList.add('enabled');
     } else {
-        btn.textContent = '🔔';
+        btn.textContent = '🔔 Enable';
         btn.classList.remove('enabled');
     }
 }
@@ -2189,14 +2169,12 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     });
 
-    // Scroll event to detect if at bottom
     const messagesContainer = document.getElementById('messages');
     messagesContainer.addEventListener('scroll', function() {
-        const threshold = 100; // pixels from bottom
+        const threshold = 100;
         const atBottom = (this.scrollHeight - this.scrollTop - this.clientHeight) < threshold;
         if (atBottom && !isAtBottom) {
             isAtBottom = true;
-            // Reset unread count and hide button
             unreadCount = 0;
             updateNewMsgsButton();
         } else if (!atBottom && isAtBottom) {
@@ -2266,7 +2244,7 @@ function clearMessagesOffline() {
     if (ws && ws.readyState === WebSocket.OPEN) ws.close();
 }
 
-// ========== NEW MESSAGES BUTTON ==========
+// ========== NEW MSGS BUTTON ==========
 function updateNewMsgsButton() {
     const btn = document.getElementById('newMsgsBtn');
     const countSpan = document.getElementById('newMsgsCount');
@@ -2277,11 +2255,9 @@ function updateNewMsgsButton() {
         btn.classList.remove('show');
     }
 }
-
 function scrollToBottom() {
     const container = document.getElementById('messages');
     container.scrollTop = container.scrollHeight;
-    // Reset counter
     unreadCount = 0;
     updateNewMsgsButton();
     isAtBottom = true;
@@ -2324,7 +2300,7 @@ async function login() {
                 }
             }
         } else {
-            showError(data.message || 'Invalid credentials. Request access via WhatsApp if you need an account.');
+            showError(data.message || 'Invalid credentials.');
             hideLoading();
         }
     } catch(e) {
@@ -2420,11 +2396,9 @@ function connectToChat(username, group) {
         ws.send(JSON.stringify({type: 'join', username: username, group: group}));
         reconnectAttempts = 0;
         isManuallyReconnecting = false;
-        // Reset unread counter on new connection
         unreadCount = 0;
         updateNewMsgsButton();
         isAtBottom = true;
-        initialLoad = true;
     };
     ws.onmessage = async function(e) {
         try {
@@ -2441,50 +2415,82 @@ function connectToChat(username, group) {
                         try {
                             let dec = await decrypt(msg.ciphertext, window.groupPassword, msg.salt);
                             let isSent = msg.sender === window.chatUsername;
-                            messagesData[msg.id] = {sender: msg.sender, text: dec, timestamp: msg.created_at, voice_url: msg.voice_url, media_url: msg.media_url, media_type: msg.media_type};
-                            addMessage(msg.sender, dec, isSent, msg.timestamp, msg.id, msg.reply_to, msg.voice_url, msg.media_url, msg.media_type);
+                            messagesData[msg.id] = {
+                                sender: msg.sender, text: dec, timestamp: msg.created_at,
+                                voice_url: msg.voice_url, media_url: msg.media_url,
+                                media_type: msg.media_type, delivered: msg.delivered
+                            };
+                            if (msg.delivered) deliveredMessages.add(msg.id);
+                            addMessage(msg.sender, dec, isSent, msg.timestamp, msg.id, msg.reply_to, msg.voice_url, msg.media_url, msg.media_type, msg.delivered);
                         } catch(e) {
                             console.error('Decryption error:', e);
                             let isSent = msg.sender === window.chatUsername;
-                            messagesData[msg.id] = {sender: msg.sender, text: '🔒 Encrypted', timestamp: msg.created_at, voice_url: msg.voice_url, media_url: msg.media_url, media_type: msg.media_type};
-                            addMessage(msg.sender, '🔒 Encrypted', isSent, msg.timestamp, msg.id, msg.reply_to, msg.voice_url, msg.media_url, msg.media_type);
+                            messagesData[msg.id] = {
+                                sender: msg.sender, text: '🔒 Encrypted', timestamp: msg.created_at,
+                                voice_url: msg.voice_url, media_url: msg.media_url,
+                                media_type: msg.media_type, delivered: msg.delivered
+                            };
+                            addMessage(msg.sender, '🔒 Encrypted', isSent, msg.timestamp, msg.id, msg.reply_to, msg.voice_url, msg.media_url, msg.media_type, msg.delivered);
                         }
                     }
                 }
-                // On history load, scroll to bottom and reset unread count
                 setTimeout(() => {
-                    const container = document.getElementById('messages');
-                    container.scrollTop = container.scrollHeight;
+                    const c = document.getElementById('messages');
+                    c.scrollTop = c.scrollHeight;
                     isAtBottom = true;
                     unreadCount = 0;
                     updateNewMsgsButton();
-                    initialLoad = false;
                 }, 100);
             } else if(d.type === 'message') {
-                // If this message has a temp_id, remove the placeholder DOM element
                 if (d.temp_id) {
                     const placeholderEl = document.querySelector(`.message[data-message-id="${d.temp_id}"]`);
-                    if (placeholderEl) {
-                        placeholderEl.remove();
-                    }
+                    if (placeholderEl) placeholderEl.remove();
                     delete messagesData[d.temp_id];
                 }
                 try {
                     let dec = await decrypt(d.ciphertext, window.groupPassword, d.salt);
                     let isSent = d.sender === window.chatUsername;
-                    messagesData[d.message_id] = {sender: d.sender, text: dec, timestamp: d.timestamp, voice_url: d.voice_url, media_url: d.media_url, media_type: d.media_type};
-                    addMessage(d.sender, dec, isSent, d.timestamp, d.message_id, d.reply_to, d.voice_url, d.media_url, d.media_type);
+                    messagesData[d.message_id] = {
+                        sender: d.sender, text: dec, timestamp: d.timestamp,
+                        voice_url: d.voice_url, media_url: d.media_url,
+                        media_type: d.media_type, delivered: d.delivered || false
+                    };
+                    addMessage(d.sender, dec, isSent, d.timestamp, d.message_id, d.reply_to, d.voice_url, d.media_url, d.media_type, d.delivered);
+                    // Send delivered confirmation back to sender
+                    if (!isSent && ws && ws.readyState === WebSocket.OPEN) {
+                        ws.send(JSON.stringify({ type: 'delivered', message_id: d.message_id }));
+                    }
                 } catch(e) {
-                    messagesData[d.message_id] = {sender: d.sender, text: '🔒 Encrypted', timestamp: d.timestamp, voice_url: d.voice_url, media_url: d.media_url, media_type: d.media_type};
-                    addMessage(d.sender, '🔒 Encrypted', false, d.timestamp, d.message_id, d.reply_to, d.voice_url, d.media_url, d.media_type);
+                    console.error(e);
+                    messagesData[d.message_id] = {
+                        sender: d.sender, text: '🔒 Encrypted', timestamp: d.timestamp,
+                        voice_url: d.voice_url, media_url: d.media_url,
+                        media_type: d.media_type, delivered: d.delivered || false
+                    };
+                    addMessage(d.sender, '🔒 Encrypted', false, d.timestamp, d.message_id, d.reply_to, d.voice_url, d.media_url, d.media_type, d.delivered);
+                    if (ws && ws.readyState === WebSocket.OPEN) {
+                        ws.send(JSON.stringify({ type: 'delivered', message_id: d.message_id }));
+                    }
                 }
-                // Check if we're at bottom; if not, increment unread count
-                const container = document.getElementById('messages');
+                const c = document.getElementById('messages');
                 const threshold = 100;
-                const atBottom = (container.scrollHeight - container.scrollTop - container.clientHeight) < threshold;
-                if (!atBottom && !d.temp_id) { // don't count placeholders as new
+                const atBottom = (c.scrollHeight - c.scrollTop - c.clientHeight) < threshold;
+                if (!atBottom && !d.temp_id) {
                     unreadCount++;
                     updateNewMsgsButton();
+                }
+            } else if(d.type === 'message_delivered') {
+                // Update the tick on the original message
+                if (d.message_id) {
+                    deliveredMessages.add(d.message_id);
+                    const msgEl = document.querySelector(`.message[data-message-id="${d.message_id}"]`);
+                    if (msgEl) {
+                        const tick = msgEl.querySelector('.msg-tick');
+                        if (tick) {
+                            tick.textContent = '✓✓';
+                            tick.classList.add('delivered');
+                        }
+                    }
                 }
             } else if(d.type === 'users') {
                 updateUsers(d.users);
@@ -2536,13 +2542,13 @@ function updateStatus(online) {
     let status = document.getElementById('connectionStatus');
     let badge = document.getElementById('connectionBadge');
     if(online) {
-        
+        status.innerHTML = '🟢 Connected';
         status.className = 'connection-status status-online';
         badge.innerHTML = '● Online';
         badge.style.color = '#0f0';
         document.getElementById('offlineBar').classList.remove('active');
     } else {
-      
+        status.innerHTML = '🔴 Disconnected';
         status.className = 'connection-status status-offline';
         badge.innerHTML = '● Offline';
         badge.style.color = '#ff4444';
@@ -2559,7 +2565,8 @@ function addSystemMessage(text) {
     msgs.scrollTop = msgs.scrollHeight;
 }
 
-function addMessage(sender, text, isSent, timestamp, messageId, replyTo, voiceUrl, mediaUrl, mediaType) {
+// ========== ADD MESSAGE ==========
+function addMessage(sender, text, isSent, timestamp, messageId, replyTo, voiceUrl, mediaUrl, mediaType, delivered) {
     let msgs = document.getElementById('messages');
     const offlineMsg = document.querySelector('.offline-message');
     if (offlineMsg) offlineMsg.remove();
@@ -2571,6 +2578,13 @@ function addMessage(sender, text, isSent, timestamp, messageId, replyTo, voiceUr
     if (voiceUrl) div.classList.add('voice-message');
 
     let time = timestamp ? new Date(timestamp * 1000).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}) : '';
+
+    // Tick html (only for sent)
+    let tickHtml = '';
+    if (isSent) {
+        const isDelivered = delivered || deliveredMessages.has(messageId);
+        tickHtml = `<span class="msg-tick ${isDelivered ? 'delivered' : ''}">${isDelivered ? '✓✓' : '✓'}</span>`;
+    }
 
     // Reply preview
     let replyHtml = '';
@@ -2585,20 +2599,42 @@ function addMessage(sender, text, isSent, timestamp, messageId, replyTo, voiceUr
 
     let messageContent = '';
     if (voiceUrl) {
-        // Custom audio player with download link
+        // WhatsApp-style voice player
         const downloadLink = voiceUrl + '?download=1';
+        // Generate deterministic waveform bars
+        const bars = [];
+        const seed = (messageId || Date.now()).toString();
+        let seedNum = 0;
+        for (let i = 0; i < seed.length; i++) seedNum += seed.charCodeAt(i);
+        for (let i = 0; i < 28; i++) {
+            const h = 5 + ((seedNum * (i + 3) * 13) % 18);
+            bars.push(h);
+        }
+        const waveHtml = bars.map(h => 
+            `<span class="voice-wave-bar" style="height:${h}px;"></span>`
+        ).join('');
+        const initial = (sender || '?').charAt(0).toUpperCase();
+        
         messageContent = `
-            <div class="voice-player">
-                <button class="voice-play-btn" onclick="playVoice(this, '${voiceUrl}')">
-                    <span class="play-icon">▶️</span>
-                </button>
-                <div class="voice-progress" onclick="seekAudio(event, this)">
-                    <div class="voice-progress-bar" style="width:0%"></div>
+            <div class="voice-player" data-voice-url="${voiceUrl}" data-message-id="${messageId}">
+                <div class="voice-avatar">
+                    ${initial}
+                    <span class="mic-badge">🎤</span>
                 </div>
-                <span class="voice-duration">00:00</span>
-                <a href="${downloadLink}" download class="voice-download" title="Download audio">⬇️</a>
+                <button class="voice-play-btn" onclick="playVoice(this, '${voiceUrl}')">
+                    <span class="play-icon">▶</span>
+                </button>
+                <div class="voice-waveform" onclick="seekAudio(event, this)">
+                    ${waveHtml}
+                </div>
+                <div class="voice-ball"></div>
+                <a href="${downloadLink}" download class="voice-download" title="Download audio">⬇</a>
             </div>
-            ${text !== '🎤 Voice message' ? '<div class="voice-caption">' + escapeHtml(text) + '</div>' : ''}
+            <div class="voice-info">
+                <span class="voice-duration">0:00</span>
+                <span class="voice-time">${time}${isSent ? tickHtml : ''}</span>
+            </div>
+            ${text && text !== '🎤 Voice message' ? '<div class="voice-caption" style="font-size:11px;color:#888;margin-top:2px;">' + escapeHtml(text) + '</div>' : ''}
         `;
     } else if (mediaUrl) {
         if (mediaType && mediaType.startsWith('image/')) {
@@ -2611,9 +2647,10 @@ function addMessage(sender, text, isSent, timestamp, messageId, replyTo, voiceUr
                     ${isPlaceholder ? '<div class="spinner"></div>' : ''}
                     <div class="file-name">
                         <span>📎 ${escapeHtml(text.replace('📎 ',''))}</span>
-                        <a href="${downloadLink}" download class="download-link" title="Download image">⬇️</a>
+                        <a href="${downloadLink}" download class="download-link" title="Download image">⬇</a>
                     </div>
                 </div>
+                <div class="message-time">${time}${isSent ? tickHtml : ''}</div>
             `;
         } else {
             const downloadLink = mediaUrl + '?download=1';
@@ -2626,10 +2663,12 @@ function addMessage(sender, text, isSent, timestamp, messageId, replyTo, voiceUr
                         <a href="${downloadLink}" download style="color:#0f0;text-decoration:underline;">⬇️ Download</a>
                     </div>
                 </div>
+                <div class="message-time">${time}${isSent ? tickHtml : ''}</div>
             `;
         }
     } else {
-        messageContent = '<div class="message-bubble">' + escapeHtml(text) + '</div>';
+        messageContent = '<div class="message-bubble">' + escapeHtml(text) + '</div>' +
+                         '<div class="message-time">' + time + (isSent ? tickHtml : '') + '</div>';
     }
 
     // Actions – only Reply
@@ -2642,10 +2681,9 @@ function addMessage(sender, text, isSent, timestamp, messageId, replyTo, voiceUr
     div.innerHTML = '<div class="message-sender">' + (isSent ? 'YOU' : escapeHtml(sender)) + '</div>' + 
                     replyHtml +
                     messageContent + 
-                    actionsHtml +
-                    '<div class="message-time">' + time + '</div>';
+                    actionsHtml;
 
-    // Swipe to reply (touch)
+    // Swipe to reply
     let touchStartX = 0, touchCurrentX = 0, touchStartY = 0;
     div.addEventListener('touchstart', function(e) {
         touchStartX = e.touches[0].clientX;
@@ -2663,50 +2701,12 @@ function addMessage(sender, text, isSent, timestamp, messageId, replyTo, voiceUr
     div.addEventListener('touchend', function(e) {
         let diffX = touchCurrentX - touchStartX;
         div.style.transform = '';
-        if (diffX >= 60) {
-            replyToMessage(messageId);
-        }
+        if (diffX >= 60) replyToMessage(messageId);
         touchStartX = 0; touchCurrentX = 0; touchStartY = 0;
     }, {passive: true});
-    
-    // Mouse swipe for desktop
-    let mouseStartX = 0, mouseCurrentX = 0, mouseStartY = 0, isMouseDown = false;
-    div.addEventListener('mousedown', function(e) {
-        mouseStartX = e.clientX;
-        mouseStartY = e.clientY;
-        mouseCurrentX = mouseStartX;
-        isMouseDown = true;
-    });
-    div.addEventListener('mousemove', function(e) {
-        if (!isMouseDown) return;
-        mouseCurrentX = e.clientX;
-        let diffX = mouseCurrentX - mouseStartX;
-        let diffY = e.clientY - mouseStartY;
-        if (diffX > 0 && diffX < 80 && Math.abs(diffY) < 30) {
-            div.style.transform = 'translateX(' + diffX + 'px)';
-        }
-    });
-    div.addEventListener('mouseup', function(e) {
-        if (!isMouseDown) return;
-        let diffX = mouseCurrentX - mouseStartX;
-        div.style.transform = '';
-        if (diffX >= 60) {
-            replyToMessage(messageId);
-        }
-        isMouseDown = false;
-    });
-    div.addEventListener('mouseleave', function() {
-        if (isMouseDown) {
-            div.style.transform = '';
-            isMouseDown = false;
-        }
-    });
 
     msgs.appendChild(div);
-    // If we're at bottom, scroll to bottom; else, the button will handle it
-    if (isAtBottom) {
-        msgs.scrollTop = msgs.scrollHeight;
-    }
+    if (isAtBottom) msgs.scrollTop = msgs.scrollHeight;
 }
 
 function replyToMessage(messageId) {
@@ -2735,11 +2735,8 @@ function scrollToMessage(messageId) {
 }
 function updateUsers(users) {
     let ul = document.getElementById('usersList');
-    if(!users || users.length === 0) {
-        ul.innerHTML = '<div class="user-item">No users online</div>';
-    } else {
-        ul.innerHTML = users.map(u => '<div class="user-item">' + escapeHtml(u) + '</div>').join('');
-    }
+    if(!users || users.length === 0) ul.innerHTML = '<div class="user-item">No users online</div>';
+    else ul.innerHTML = users.map(u => '<div class="user-item">' + escapeHtml(u) + '</div>').join('');
 }
 function escapeHtml(t) { let d = document.createElement('div'); d.textContent = t; return d.innerHTML; }
 
@@ -2749,10 +2746,7 @@ async function encrypt(text, password, salt) {
     const keyMaterial = await crypto.subtle.importKey('raw', enc.encode(password), 'PBKDF2', false, ['deriveKey']);
     const key = await crypto.subtle.deriveKey(
         {name: 'PBKDF2', salt: enc.encode(salt), iterations: 100000, hash: 'SHA-256'},
-        keyMaterial,
-        {name: 'AES-GCM', length: 256},
-        true,
-        ['encrypt', 'decrypt']
+        keyMaterial, {name: 'AES-GCM', length: 256}, true, ['encrypt', 'decrypt']
     );
     const iv = crypto.getRandomValues(new Uint8Array(12));
     const encrypted = await crypto.subtle.encrypt({name: 'AES-GCM', iv: iv}, key, enc.encode(text));
@@ -2767,10 +2761,7 @@ async function decrypt(encrypted, password, salt) {
     const keyMaterial = await crypto.subtle.importKey('raw', enc.encode(password), 'PBKDF2', false, ['deriveKey']);
     const key = await crypto.subtle.deriveKey(
         {name: 'PBKDF2', salt: enc.encode(salt), iterations: 100000, hash: 'SHA-256'},
-        keyMaterial,
-        {name: 'AES-GCM', length: 256},
-        true,
-        ['encrypt', 'decrypt']
+        keyMaterial, {name: 'AES-GCM', length: 256}, true, ['encrypt', 'decrypt']
     );
     const data = Uint8Array.from(atob(encrypted), c => c.charCodeAt(0));
     const iv = data.slice(0, 12);
@@ -2789,7 +2780,7 @@ async function sendMessage() {
     const input = document.getElementById('messageInput');
     const text = input.value.trim();
     if (!text) return;
-    if (!ws || ws.readyState !== WebSocket.OPEN) { alert('Not connected to server.'); return; }
+    if (!ws || ws.readyState !== WebSocket.OPEN) { alert('Not connected.'); return; }
     if (!window.groupPassword) { alert('Group password not set.'); return; }
     try {
         const salt = generateSalt();
@@ -2803,31 +2794,21 @@ async function sendMessage() {
         input.value = '';
         input.style.height = 'auto';
         cancelReply();
-    } catch (error) {
-        console.error('Error sending message:', error);
-        alert('Error sending message. Please try again.');
-    }
+    } catch (error) { alert('Error sending message.'); }
 }
 
-// ========== VOICE RECORDING (auto-send on release) ==========
+// ========== VOICE RECORDING ==========
 function startHoldRecording() {
     if (isRecording) return;
     isHolding = true;
-    holdTimer = setTimeout(() => {
-        if (isHolding) {
-            startRecording();
-        }
-    }, 300);
+    holdTimer = setTimeout(() => { if (isHolding) startRecording(); }, 300);
 }
 function stopHoldRecording() {
     isHolding = false;
     clearTimeout(holdTimer);
     if (isRecording) {
-        if (recordingSeconds < 1) {
-            cancelRecording();
-        } else {
-            stopRecordingAndSend();
-        }
+        if (recordingSeconds < 1) cancelRecording();
+        else stopRecordingAndSend();
     }
 }
 async function startRecording() {
@@ -2862,10 +2843,7 @@ async function startRecording() {
         recordingSeconds = 0;
         updateRecordingTimer();
         recordingTimer = setInterval(updateRecordingTimer, 1000);
-    } catch (error) {
-        console.error('Error accessing microphone:', error);
-        alert('Could not access microphone. Please allow microphone permissions.');
-    }
+    } catch (error) { alert('Could not access microphone.'); }
 }
 function updateRecordingTimer() {
     recordingSeconds++;
@@ -2873,9 +2851,7 @@ function updateRecordingTimer() {
     const secs = recordingSeconds % 60;
     document.getElementById('recordingTimer').textContent = `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
 }
-function stopRecordingAndSend() {
-    if (mediaRecorder && isRecording) mediaRecorder.stop();
-}
+function stopRecordingAndSend() { if (mediaRecorder && isRecording) mediaRecorder.stop(); }
 function cancelRecording() {
     if (mediaRecorder && isRecording) {
         mediaRecorder.stop();
@@ -2896,27 +2872,17 @@ async function uploadVoice(audioBlob) {
     try {
         const response = await fetch('/api/upload_voice', { method: 'POST', body: formData });
         const data = await response.json();
-        if (data.success) {
-            await sendVoiceMessage(data.url);
-        } else {
-            alert('Failed to upload voice message: ' + (data.error || 'Unknown error'));
-        }
-    } catch (error) {
-        console.error('Upload error:', error);
-        alert('Failed to upload voice message. Please try again.');
-    }
+        if (data.success) await sendVoiceMessage(data.url);
+        else alert('Failed to upload voice: ' + (data.error || 'Unknown error'));
+    } catch (error) { alert('Failed to upload voice.'); }
 }
 async function sendVoiceMessage(voiceUrl) {
     const input = document.getElementById('messageInput');
     const text = input.value.trim();
-    if (text) {
-        await sendMessageWithVoice(text, voiceUrl);
-    } else {
-        await sendMessageWithVoice('🎤 Voice message', voiceUrl);
-    }
+    await sendMessageWithVoice(text || '🎤 Voice message', voiceUrl);
 }
 async function sendMessageWithVoice(text, voiceUrl) {
-    if (!ws || ws.readyState !== WebSocket.OPEN) { alert('Not connected to server.'); return; }
+    if (!ws || ws.readyState !== WebSocket.OPEN) { alert('Not connected.'); return; }
     if (!window.groupPassword) { alert('Group password not set.'); return; }
     try {
         const salt = generateSalt();
@@ -2934,99 +2900,92 @@ async function sendMessageWithVoice(text, voiceUrl) {
         document.getElementById('recordingStatus').classList.remove('active');
         document.getElementById('voiceBtn').classList.remove('recording');
         document.getElementById('voiceIcon').textContent = '🎙️';
-    } catch (error) {
-        console.error('Error sending voice message:', error);
-        alert('Error sending voice message. Please try again.');
-    }
+    } catch (error) { alert('Error sending voice.'); }
 }
 
-// ========== CUSTOM AUDIO PLAYER (with toggle play/pause, no reset on pause) ==========
+// ========== WHATSAPP-STYLE AUDIO PLAYER ==========
 function playVoice(button, url) {
-    // If there's already an active audio and it's not this button, stop it
+    const player = button.closest('.voice-player');
+    const waveform = player.querySelector('.voice-waveform');
+    const ball = player.querySelector('.voice-ball');
+    const durationSpan = player.parentElement.querySelector('.voice-duration');
+    const bars = waveform.querySelectorAll('.voice-wave-bar');
+
     if (activeAudio && activeButton !== button) {
         activeAudio.pause();
         if (activeButton) {
-            activeButton.classList.remove('playing');
-            activeButton.querySelector('.play-icon').textContent = '▶️';
+            activeButton.querySelector('.play-icon').textContent = '▶';
+            activeButton.closest('.voice-player').classList.remove('playing');
         }
-        // Don't reset progress for the old one; we just pause it
-        // The new one will take over
     }
 
-    // If this button is already playing, toggle pause
     if (activeButton === button && activeAudio) {
         if (activeAudio.paused) {
             activeAudio.play();
-            button.querySelector('.play-icon').textContent = '⏸️';
-            button.classList.add('playing');
+            button.querySelector('.play-icon').textContent = '❚❚';
+            player.classList.add('playing');
         } else {
             activeAudio.pause();
-            button.querySelector('.play-icon').textContent = '▶️';
-            button.classList.remove('playing');
+            button.querySelector('.play-icon').textContent = '▶';
+            player.classList.remove('playing');
         }
         return;
     }
 
-    // New audio – create and play
     const audio = new Audio(url);
-    const progressBar = button.parentElement.querySelector('.voice-progress-bar');
-    const durationSpan = button.parentElement.querySelector('.voice-duration');
-
-    // Stop any previously active audio
-    if (activeAudio) {
-        activeAudio.pause();
-        if (activeButton) {
-            activeButton.querySelector('.play-icon').textContent = '▶️';
-            activeButton.classList.remove('playing');
-        }
-        // Reset progress for the old one? No, leave it as is.
-    }
-
     activeAudio = audio;
     activeButton = button;
-    activeProgressBar = progressBar;
+    activeProgressBar = waveform;
     activeDurationSpan = durationSpan;
+
+    if (activeAudio) activeAudio.pause();
 
     audio.onloadedmetadata = function() {
         const mins = Math.floor(this.duration / 60);
         const secs = Math.floor(this.duration % 60);
-        durationSpan.textContent = String(mins).padStart(2,'0') + ':' + String(secs).padStart(2,'0');
+        durationSpan.textContent = mins + ':' + String(secs).padStart(2, '0');
     };
 
     audio.ontimeupdate = function() {
-        const pct = (this.currentTime / this.duration) * 100;
-        progressBar.style.width = pct + '%';
+        const pct = this.currentTime / this.duration;
+        const playedBars = Math.floor(pct * bars.length);
+        bars.forEach((bar, i) => {
+            if (i < playedBars) bar.classList.add('played');
+            else bar.classList.remove('played');
+        });
+        const ballX = pct * waveform.offsetWidth;
+        ball.style.left = (waveform.offsetLeft + ballX) + 'px';
         const mins = Math.floor(this.currentTime / 60);
         const secs = Math.floor(this.currentTime % 60);
-        durationSpan.textContent = String(mins).padStart(2,'0') + ':' + String(secs).padStart(2,'0');
+        durationSpan.textContent = mins + ':' + String(secs).padStart(2, '0');
     };
 
     audio.onended = function() {
-        button.querySelector('.play-icon').textContent = '▶️';
-        button.classList.remove('playing');
-        progressBar.style.width = '0%';
-        durationSpan.textContent = '00:00';
+        button.querySelector('.play-icon').textContent = '▶';
+        player.classList.remove('playing');
+        bars.forEach(bar => bar.classList.remove('played'));
+        ball.style.left = waveform.offsetLeft + 'px';
+        durationSpan.textContent = '0:00';
         activeAudio = null;
         activeButton = null;
         activeProgressBar = null;
-        activeDurationSpan = null;
     };
 
     audio.play();
-    button.querySelector('.play-icon').textContent = '⏸️';
-    button.classList.add('playing');
+    button.querySelector('.play-icon').textContent = '❚❚';
+    player.classList.add('playing');
 }
 
-function seekAudio(event, progressWrap) {
-    const rect = progressWrap.getBoundingClientRect();
+function seekAudio(event, waveform) {
+    const rect = waveform.getBoundingClientRect();
     const x = event.clientX - rect.left;
     const pct = Math.min(1, Math.max(0, x / rect.width));
-    if (activeAudio && activeProgressBar === progressWrap.querySelector('.voice-progress-bar')) {
+    if (activeAudio && activeProgressBar === waveform) {
         activeAudio.currentTime = activeAudio.duration * pct;
     }
 }
 
-// ========== MEDIA SHARING (instant image placeholder) ==========
+// ========== MEDIA SHARING ==========
 async function shareMedia() {
     const input = document.createElement('input');
     input.type = 'file';
@@ -3034,15 +2993,13 @@ async function shareMedia() {
     input.onchange = async (e) => {
         const file = e.target.files[0];
         if (!file) return;
-        if (file.size > 10 * 1024 * 1024) { alert('File too large (max 10MB)'); return; }
+        if (file.size > 10 * 1024 * 1024) { alert('Max 10MB'); return; }
         const tempId = 'temp_' + Date.now();
         const localUrl = URL.createObjectURL(file);
         const text = '📎 ' + file.name;
         const timestamp = Date.now() / 1000;
-        // Show placeholder
         messagesData[tempId] = { sender: window.chatUsername, text: text, timestamp: timestamp, media_url: localUrl, media_type: file.type };
         addMessage(window.chatUsername, text, true, timestamp, tempId, null, null, localUrl, file.type);
-        // Upload
         const formData = new FormData();
         formData.append('file', file);
         try {
@@ -3060,13 +3017,8 @@ async function shareMedia() {
                     media_type: data.type || file.type,
                     temp_id: tempId
                 }));
-            } else {
-                alert('Upload failed: ' + (data.error || 'Unknown error'));
-            }
-        } catch (error) {
-            console.error('Upload error:', error);
-            alert('Failed to upload image. Please try again.');
-        }
+            } else alert('Upload failed: ' + (data.error || 'Unknown error'));
+        } catch (error) { alert('Failed to upload image.'); }
         setTimeout(() => URL.revokeObjectURL(localUrl), 5000);
     };
     input.click();
@@ -3117,32 +3069,29 @@ async function loadAdminData() {
                 logsBody.appendChild(tr);
             });
         }
-    } catch (error) { console.error('Error loading admin data:', error); }
+    } catch (error) { console.error('Admin load error:', error); }
 }
 async function createUser() {
     const username = document.getElementById('newUsername').value.trim();
     const password = document.getElementById('newPassword').value;
     const groupName = document.getElementById('newGroupName').value.trim();
     const groupPassword = document.getElementById('newGroupPassword').value;
-    if (!username || !password || !groupName || !groupPassword) { alert('Please fill all fields'); return; }
+    if (!username || !password || !groupName || !groupPassword) { alert('Fill all fields'); return; }
     try {
         const response = await fetch('/admin/create_user', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ username, password, group_name: groupName, group_password: groupPassword })
         });
         const data = await response.json();
         if (data.success) {
-            alert('✅ User created successfully!');
+            alert('✅ User created!');
             document.getElementById('newUsername').value = '';
             document.getElementById('newPassword').value = '';
             document.getElementById('newGroupName').value = '';
             document.getElementById('newGroupPassword').value = '';
             loadAdminData();
-        } else {
-            alert('❌ Failed to create user: ' + (data.error || 'Unknown error'));
-        }
-    } catch (error) { console.error('Error creating user:', error); alert('Error creating user. Please try again.'); }
+        } else alert('❌ ' + (data.error || 'Failed'));
+    } catch (error) { alert('Error creating user.'); }
 }
 async function deleteUser(username) {
     if (!confirm(`Delete user "${username}"?`)) return;
@@ -3150,26 +3099,26 @@ async function deleteUser(username) {
         const response = await fetch('/admin/delete_user', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username }) });
         const data = await response.json();
         if (data.success) { alert('✅ User deleted'); loadAdminData(); }
-        else { alert('❌ Failed to delete user: ' + (data.message || 'Unknown error')); }
-    } catch (error) { console.error('Error deleting user:', error); alert('Error deleting user. Please try again.'); }
+        else alert('❌ ' + (data.message || 'Failed'));
+    } catch (error) { alert('Error.'); }
 }
 async function deleteGroup(groupName) {
-    if (!confirm(`Delete group "${groupName}" and all its users?`)) return;
+    if (!confirm(`Delete group "${groupName}"?`)) return;
     try {
         const response = await fetch('/admin/delete_group', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: groupName }) });
         const data = await response.json();
         if (data.success) { alert('✅ Group deleted'); loadAdminData(); }
-        else { alert('❌ Failed to delete group: ' + (data.message || 'Unknown error')); }
-    } catch (error) { console.error('Error deleting group:', error); alert('Error deleting group. Please try again.'); }
+        else alert('❌ ' + (data.message || 'Failed'));
+    } catch (error) { alert('Error.'); }
 }
 async function deleteMessage(messageId) {
     if (!confirm('Delete this message?')) return;
     try {
         const response = await fetch('/admin/delete_message', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: messageId }) });
         const data = await response.json();
-        if (data.success) { alert('✅ Message deleted'); loadAdminData(); }
-        else { alert('❌ Failed to delete message'); }
-    } catch (error) { console.error('Error deleting message:', error); alert('Error deleting message. Please try again.'); }
+        if (data.success) { alert('✅ Deleted'); loadAdminData(); }
+        else alert('❌ Failed');
+    } catch (error) { alert('Error.'); }
 }
 
 // ========== AUTH ==========
@@ -3234,10 +3183,11 @@ if __name__ == "__main__":
 ║                                                            ║
 ║           📱 PWA Ready - Install as App!                   ║
 ║           🔔 Push Notifications Enabled!                   ║
-║           🎙️ Voice Messages (auto-send)                   ║
+║           🎙️ WhatsApp-Style Voice Player                   ║
 ║           🖼️ Instant Image Sharing                        ║
+║           ✓✓ Delivery Ticks                                ║
 ║           ⬇️ Download Audio & Images                       ║
-║           📬 New Messages Counter (floating button)        ║
+║           📬 New Messages Counter                          ║
 ║                                                            ║
 ╚════════════════════════════════════════════════════════════╝
 """)
