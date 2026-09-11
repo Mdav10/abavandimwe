@@ -36,6 +36,9 @@ from cryptography.hazmat.backends import default_backend
 
 app = FastAPI()
 
+# ========== APP VERSION (bump this to force update prompt) ==========
+APP_VERSION = "v7.0"
+
 # ========== VAPID CONFIGURATION ==========
 VAPID_PUBLIC_KEY = 'BL0X3NSYm0EbNslkt1afTEkuktGcvLRD4RS0MoWaYw6jEF8Yf9iryvnNBoDm7encOEBI2CPLNmCyYiehnWAbGQU'
 VAPID_CLAIMS = {
@@ -93,6 +96,11 @@ async def serve_offline():
             return Response(content=f.read(), media_type="text/html")
     except FileNotFoundError:
         return JSONResponse({"error": "offline.html not found"}, status_code=404)
+
+# ========== VERSION ENDPOINT (for auto-update) ==========
+@app.get("/api/version")
+async def get_version():
+    return {"version": APP_VERSION}
 
 # ========== DATABASE CONFIG ==========
 DATABASE_URL = os.getenv('DATABASE_URL', 'postgresql://neondb_owner:npg_CmR51yqfMxNZ@ep-plain-salad-axxvh942-pooler.c-4.us-east-2.aws.neon.tech/neondb?sslmode=require')
@@ -224,7 +232,6 @@ async def get_push_subscriptions(username: str) -> List[Dict]:
 async def send_push_notification(subscription: Dict, message: str, badge_count: int = 0):
     private_key = get_vapid_private_key()
     if not private_key:
-        print("[❌] No VAPID private key found!")
         return False
     try:
         data = json.dumps({
@@ -241,10 +248,8 @@ async def send_push_notification(subscription: Dict, message: str, badge_count: 
             subscription_info={"endpoint": subscription['endpoint'], "keys": subscription['keys']},
             data=data, vapid_private_key=private_key, vapid_claims=VAPID_CLAIMS
         )
-        print(f"[✅] Push notification sent successfully")
         return True
     except WebPushException as e:
-        print(f"[❌] Push notification failed: {e}")
         if "expired" in str(e).lower() or "410" in str(e):
             for user, subs in push_subscriptions.items():
                 push_subscriptions[user] = [s for s in subs if s.get('endpoint') != subscription.get('endpoint')]
@@ -260,16 +265,10 @@ async def send_notification_to_group(group_name: str, sender: str):
         users = [row['username'] for row in rows]
     finally:
         await return_db_connection(conn)
-    notification_sent = 0
     for username in users:
         subs = await get_push_subscriptions(username)
         for sub in subs:
-            success = await send_push_notification(sub, "You have a new message on ABAVANDIMWE.", 1)
-            if success:
-                notification_sent += 1
-    if notification_sent > 0:
-        print(f"[🔔] Sent {notification_sent} notifications to group {group_name}")
-    return notification_sent
+            await send_push_notification(sub, "You have a new message on ABAVANDIMWE.", 1)
 
 # ========== CRYPTO FUNCTIONS ==========
 ph = PasswordHasher()
@@ -416,7 +415,6 @@ async def init_db():
         ''')
         print("[✓] PostgreSQL database ready")
 
-        # Add columns if missing
         try:
             columns = await conn.fetch("""
                 SELECT column_name FROM information_schema.columns WHERE table_name = 'messages'
@@ -951,7 +949,7 @@ async def logout(request: Request):
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "system": "ABAVANDIMWE", "author": "Mugisha Pc"}
+    return {"status": "ok", "system": "ABAVANDIMWE", "author": "Mugisha Pc", "version": APP_VERSION}
 
 # ========== WEBSOCKET ==========
 @app.websocket("/ws")
@@ -1115,20 +1113,25 @@ HTML = '''<!DOCTYPE html>
         *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent;}
         html,body{width:100%;height:100%;overflow:hidden;background:#0a0a0f;font-family:monospace;color:#0f0;}
 
-        /* ===================== BACKGROUND (WHATSAPP-STYLE) ===================== */
-        /* Base dark + doodle pattern + centered ABAVANDIMWE wordmark */
-        .chat-area{
-            flex:1;display:flex;flex-direction:column;min-width:0;width:100%;position:relative;
-            background-color:#0a0a0f;
-            background-image:
-                /* Centered ABAVANDIMWE wordmark */
-                url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='900' height='900' viewBox='0 0 900 900'><text x='50%' y='50%' font-family='monospace' font-size='70' font-weight='bold' fill='rgba(0,255,65,0.045)' text-anchor='middle' dominant-baseline='middle' letter-spacing='6'>ABAVANDIMWE</text></svg>"),
-                /* Doodle icons pattern (subtle) */
-                url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='200' height='200' viewBox='0 0 200 200'><g fill='none' stroke='rgba(0,255,65,0.055)' stroke-width='1.5'><circle cx='30' cy='30' r='6'/><path d='M80 20 Q90 10 100 20 Q110 30 100 40 Q90 50 80 40 Q70 30 80 20 Z'/><rect x='120' y='15' width='20' height='14' rx='3'/><path d='M150 30 L170 30 M150 35 L165 35'/><circle cx='40' cy='90' r='4'/><path d='M20 120 L20 140 M25 120 L25 140'/><circle cx='70' cy='100' r='8'/><path d='M60 140 L80 140 L75 160 L65 160 Z'/><path d='M150 90 L170 110 M170 90 L150 110'/><circle cx='100' cy='180' r='5'/><rect x='140' y='160' width='30' height='20' rx='4'/><path d='M30 170 L50 170 M30 175 L45 175'/><path d='M120 60 L140 60 L140 80'/></g></svg>");
-            background-repeat: repeat;
-            background-position: center, top left;
-            background-size: 100% 100%, 200px 200px;
+        /* ===================== UPDATE BANNER ===================== */
+        .update-banner{
+            position:fixed;
+            top:0;
+            left:0;
+            right:0;
+            background:linear-gradient(90deg, #ffaa00, #ff6600);
+            color:#000;
+            text-align:center;
+            padding:12px;
+            font-size:13px;
+            font-weight:bold;
+            z-index:999999;
+            display:none;
+            cursor:pointer;
+            box-shadow:0 4px 20px rgba(255,170,0,0.5);
         }
+        .update-banner.show{display:block;}
+        .update-banner:active{opacity:0.85;}
 
         /* LOGIN */
         .login-container{position:fixed;top:0;left:0;right:0;bottom:0;display:flex;justify-content:center;align-items:center;background:#0a0a0f;z-index:1000;padding:20px;}
@@ -1223,6 +1226,22 @@ HTML = '''<!DOCTYPE html>
         }
         @media (min-width:769px){.menu-btn,.overlay{display:none;}}
 
+        /* ===================== CHAT BACKGROUND ===================== */
+        /* Visible doodle pattern + big centered ABAVANDIMWE wordmark */
+        .chat-area{
+            flex:1;display:flex;flex-direction:column;min-width:0;width:100%;position:relative;
+            background-color:#0a0a0f;
+            background-image:
+                /* Big centered ABAVANDIMWE wordmark (visible) */
+                url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='1000' height='1000' viewBox='0 0 1000 1000'><text x='50%' y='50%' font-family='monospace' font-size='88' font-weight='bold' fill='rgba(0,255,65,0.10)' text-anchor='middle' dominant-baseline='middle' letter-spacing='8'>ABAVANDIMWE</text></svg>"),
+                /* Doodle pattern (visible) */
+                url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='240' height='240' viewBox='0 0 240 240'><g fill='none' stroke='rgba(0,255,65,0.10)' stroke-width='1.6'><circle cx='30' cy='30' r='7'/><path d='M85 22 Q95 12 105 22 Q115 32 105 42 Q95 52 85 42 Q75 32 85 22 Z'/><rect x='130' y='18' width='24' height='16' rx='3'/><path d='M170 30 L195 30 M170 36 L190 36'/><circle cx='45' cy='95' r='5'/><path d='M25 130 L25 155 M30 130 L30 155'/><circle cx='80' cy='105' r='9'/><path d='M68 145 L92 145 L86 168 L74 168 Z'/><path d='M165 95 L190 120 M190 95 L165 120'/><circle cx='110' cy='195' r='6'/><rect x='150' y='170' width='35' height='24' rx='4'/><path d='M35 185 L58 185 M35 191 L52 191'/><path d='M135 65 L160 65 L160 90'/><path d='M100 45 Q110 35 120 45'/><path d='M55 60 L70 75'/><circle cx='195' cy='175' r='4'/><path d='M200 55 L215 70 M215 55 L200 70'/></g></svg>");
+            background-repeat: no-repeat, repeat;
+            background-position: center center, top left;
+            background-size: 100% 100%, 240px 240px;
+            background-attachment: scroll, scroll;
+        }
+
         .messages-container{flex:1;overflow-y:auto;padding:12px;display:flex;flex-direction:column;gap:8px;min-height:0;overscroll-behavior:contain;}
 
         .new-msgs-btn{
@@ -1302,7 +1321,7 @@ HTML = '''<!DOCTYPE html>
             flex:0 0 34px;width:34px;height:34px;border-radius:50%;
             background:#0a0a0f;color:#0f0;display:flex;align-items:center;
             justify-content:center;font-size:12px;font-weight:bold;overflow:hidden;
-            position:relative; /* No mic badge now */
+            position:relative;
         }
         .received .voice-avatar{background:#0f0;color:#0a0a0f;}
 
@@ -1315,7 +1334,8 @@ HTML = '''<!DOCTYPE html>
 
         .voice-waveform{
             flex:1;display:flex;align-items:center;gap:2px;height:24px;
-            cursor:pointer;min-width:80px;overflow:hidden;
+            cursor:pointer;min-width:80px;overflow:hidden;padding:4px 0;
+            user-select:none;
         }
         .voice-wave-bar{
             flex:0 0 2px;width:2px;background:#0a0a0f;border-radius:2px;opacity:0.55;
@@ -1472,7 +1492,6 @@ HTML = '''<!DOCTYPE html>
         .status-online{color:#0f0;}
         .status-offline{color:#ff4444;}
 
-        /* DELIVERY TICKS */
         .msg-tick{
             font-size:11px;margin-left:4px;color:#666;display:inline-block;vertical-align:middle;
         }
@@ -1503,6 +1522,11 @@ HTML = '''<!DOCTYPE html>
     </style>
 </head>
 <body>
+
+<!-- UPDATE BANNER -->
+<div class="update-banner" id="updateBanner" onclick="applyUpdate()">
+    🚀 New version available! Tap to update
+</div>
 
 <!-- Loading Overlay -->
 <div class="loading-overlay" id="loadingOverlay">
@@ -1701,6 +1725,72 @@ let isAtBottom = true;
 const deliveredMessages = new Set();
 const readMessages = new Set();
 
+// App version tracking (for auto-update)
+let currentAppVersion = null;
+
+// ========== AUTO-UPDATE SYSTEM ==========
+async function checkForUpdates() {
+    try {
+        const res = await fetch('/api/version', { cache: 'no-store' });
+        const data = await res.json();
+        const serverVersion = data.version;
+        const storedVersion = localStorage.getItem('abavandimwe_version');
+        if (!storedVersion) {
+            // First time — just record
+            localStorage.setItem('abavandimwe_version', serverVersion);
+            currentAppVersion = serverVersion;
+            return;
+        }
+        if (storedVersion !== serverVersion) {
+            // New version available
+            currentAppVersion = serverVersion;
+            const banner = document.getElementById('updateBanner');
+            banner.classList.add('show');
+            console.log('🚀 Update available:', serverVersion);
+        }
+    } catch(e) {
+        // ignore network errors
+    }
+}
+
+async function applyUpdate() {
+    const banner = document.getElementById('updateBanner');
+    banner.textContent = '⏳ Updating...';
+    try {
+        // Clear all caches
+        if ('caches' in window) {
+            const cacheNames = await caches.keys();
+            await Promise.all(cacheNames.map(name => caches.delete(name)));
+        }
+        // Unregister old service workers
+        if ('serviceWorker' in navigator) {
+            const registrations = await navigator.serviceWorker.getRegistrations();
+            for (let reg of registrations) {
+                await reg.unregister();
+            }
+        }
+        // Save new version
+        const res = await fetch('/api/version', { cache: 'no-store' });
+        const data = await res.json();
+        localStorage.setItem('abavandimwe_version', data.version);
+        // Hard reload bypassing cache
+        window.location.reload(true);
+    } catch(e) {
+        window.location.reload(true);
+    }
+}
+
+// Check for updates on page load + every 60 seconds
+window.addEventListener('load', () => {
+    checkForUpdates();
+    setInterval(checkForUpdates, 60000);
+});
+
+// Also check when tab becomes visible
+document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') checkForUpdates();
+});
+
 // ========== LOADING ==========
 function showLoading(text, callback) {
     const overlay = document.getElementById('loadingOverlay');
@@ -1725,7 +1815,12 @@ function hideLoading() { document.getElementById('loadingOverlay').classList.rem
 if ('serviceWorker' in navigator) {
     window.addEventListener('load', () => {
         navigator.serviceWorker.register('/sw.js')
-            .then(reg => { console.log('✅ Service Worker registered'); window.swRegistration = reg; })
+            .then(reg => {
+                console.log('✅ Service Worker registered');
+                window.swRegistration = reg;
+                // Check for SW updates periodically
+                setInterval(() => reg.update().catch(() => {}), 60000);
+            })
             .catch(err => console.log('❌ Service Worker failed:', err));
     });
 }
@@ -2208,7 +2303,6 @@ function connectToChat(username, group) {
                         read_by: d.read_by || []
                     };
                     addMessage(d.sender, dec, isSent, d.timestamp, d.message_id, d.reply_to, d.voice_url, d.media_url, d.media_type, d.delivered, d.read_by);
-                    // Send delivered + read confirmation
                     if (!isSent && ws && ws.readyState === WebSocket.OPEN) {
                         ws.send(JSON.stringify({ type: 'delivered', message_id: d.message_id }));
                         ws.send(JSON.stringify({ type: 'read', message_id: d.message_id }));
@@ -2239,7 +2333,7 @@ function connectToChat(username, group) {
                     const msgEl = document.querySelector(`.message[data-message-id="${d.message_id}"]`);
                     if (msgEl) {
                         const tick = msgEl.querySelector('.msg-tick');
-                        if (tick) {
+                        if (tick && !tick.classList.contains('read')) {
                             tick.textContent = '✓✓';
                             tick.classList.add('delivered');
                         }
@@ -2374,6 +2468,7 @@ function addMessage(sender, text, isSent, timestamp, messageId, replyTo, voiceUr
     let messageContent = '';
     if (voiceUrl) {
         const downloadLink = voiceUrl + '?download=1';
+        // Deterministic waveform
         const bars = [];
         const seed = (messageId || Date.now()).toString();
         let seedNum = 0;
@@ -2480,16 +2575,23 @@ function addMessage(sender, text, isSent, timestamp, messageId, replyTo, voiceUr
     
     // Immediately load the audio duration
     if (voiceUrl) {
-        const tempAudio = new Audio(voiceUrl);
+        const tempAudio = new Audio();
         tempAudio.preload = 'metadata';
         tempAudio.addEventListener('loadedmetadata', function() {
-            const mins = Math.floor(this.duration / 60);
-            const secs = Math.floor(this.duration % 60);
-            const durationSpan = div.querySelector(`.voice-duration[data-duration-for="${messageId}"]`);
-            if (durationSpan) {
-                durationSpan.textContent = mins + ':' + String(secs).padStart(2, '0');
+            if (isFinite(this.duration) && this.duration > 0) {
+                const mins = Math.floor(this.duration / 60);
+                const secs = Math.floor(this.duration % 60);
+                const durationSpan = div.querySelector(`.voice-duration[data-duration-for="${messageId}"]`);
+                if (durationSpan) {
+                    durationSpan.textContent = mins + ':' + String(secs).padStart(2, '0');
+                }
             }
         });
+        tempAudio.addEventListener('error', function() {
+            const durationSpan = div.querySelector(`.voice-duration[data-duration-for="${messageId}"]`);
+            if (durationSpan) durationSpan.textContent = '0:00';
+        });
+        tempAudio.src = voiceUrl;
     }
 }
 
@@ -2687,7 +2789,7 @@ async function sendMessageWithVoice(text, voiceUrl) {
     } catch (error) { alert('Error sending voice.'); }
 }
 
-// ========== AUDIO PLAYER ==========
+// ========== AUDIO PLAYER (with clickable waveform) ==========
 function playVoice(button, url) {
     const player = button.closest('.voice-player');
     const waveform = player.querySelector('.voice-waveform');
@@ -2725,12 +2827,15 @@ function playVoice(button, url) {
     if (activeAudio) activeAudio.pause();
 
     audio.onloadedmetadata = function() {
-        const mins = Math.floor(this.duration / 60);
-        const secs = Math.floor(this.duration % 60);
-        durationSpan.textContent = mins + ':' + String(secs).padStart(2, '0');
+        if (isFinite(this.duration) && this.duration > 0) {
+            const mins = Math.floor(this.duration / 60);
+            const secs = Math.floor(this.duration % 60);
+            durationSpan.textContent = mins + ':' + String(secs).padStart(2, '0');
+        }
     };
 
     audio.ontimeupdate = function() {
+        if (!isFinite(this.duration) || this.duration <= 0) return;
         const pct = this.currentTime / this.duration;
         const playedBars = Math.floor(pct * bars.length);
         bars.forEach((bar, i) => {
@@ -2749,10 +2854,20 @@ function playVoice(button, url) {
         player.classList.remove('playing');
         bars.forEach(bar => bar.classList.remove('played'));
         ball.style.left = waveform.offsetLeft + 'px';
-        durationSpan.textContent = '0:00';
+        const mins = Math.floor(this.duration / 60);
+        const secs = Math.floor(this.duration % 60);
+        durationSpan.textContent = mins + ':' + String(secs).padStart(2, '0');
         activeAudio = null;
         activeButton = null;
         activeProgressBar = null;
+    };
+
+    audio.onerror = function() {
+        button.querySelector('.play-icon').textContent = '▶';
+        player.classList.remove('playing');
+        durationSpan.textContent = '0:00';
+        activeAudio = null;
+        activeButton = null;
     };
 
     audio.play();
@@ -2760,11 +2875,16 @@ function playVoice(button, url) {
     player.classList.add('playing');
 }
 
+// Clickable waveform — tap anywhere on the bars to seek
 function seekAudio(event, waveform) {
+    if (!activeAudio) return;
+    if (activeProgressBar !== waveform) return;
     const rect = waveform.getBoundingClientRect();
-    const x = event.clientX - rect.left;
+    let clientX = event.clientX;
+    if (event.touches && event.touches.length > 0) clientX = event.touches[0].clientX;
+    const x = clientX - rect.left;
     const pct = Math.min(1, Math.max(0, x / rect.width));
-    if (activeAudio && activeProgressBar === waveform) {
+    if (isFinite(activeAudio.duration) && activeAudio.duration > 0) {
         activeAudio.currentTime = activeAudio.duration * pct;
     }
 }
@@ -2941,7 +3061,7 @@ function requestAccess() {
     window.open('https://wa.me/250788495861?text=I%20need%20access%20to%20ABAVANDIMWE', '_blank');
 }
 
-console.log('✅ ABAVANDIMWE loaded');
+console.log('✅ ABAVANDIMWE loaded (v7.0)');
 </script>
 </body>
 </html>
@@ -2956,13 +3076,17 @@ if __name__ == "__main__":
 ║              ABAVANDIMWE SECURE MESSAGING                  ║
 ║           Messages auto-delete after 24 hours              ║
 ║                    Author: Mugisha Pc                      ║
+║                    Version: v7.0                            ║
 ║                                                            ║
 ║           ✓✓ Read Receipts (like WhatsApp)                 ║
 ║           🎙️ Voice Player with Real Duration               ║
-║           🖼️ WhatsApp-Style Doodle Background              ║
+║           👆 Tap Waveform to Seek                          ║
+║           🖼️ Visible Doodle Background                     ║
+║           🚀 Auto-Update Banner                            ║
 ╚════════════════════════════════════════════════════════════╝
 """)
     print(f"[✓] Server running on port {port}")
+    print(f"[✓] App Version: {APP_VERSION}")
     print(f"[✓] Admin: {ADMIN_USERNAME} / {ADMIN_PASSWORD}")
     print(f"[✓] Database: PostgreSQL (Neon) with asyncpg")
     uvicorn.run(app, host="0.0.0.0", port=port)
