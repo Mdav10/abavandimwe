@@ -37,7 +37,7 @@ from cryptography.hazmat.backends import default_backend
 app = FastAPI()
 
 # ========== APP VERSION (bump this to force update prompt) ==========
-APP_VERSION = "v7.0"
+APP_VERSION = "v8.0"
 
 # ========== VAPID CONFIGURATION ==========
 VAPID_PUBLIC_KEY = 'BL0X3NSYm0EbNslkt1afTEkuktGcvLRD4RS0MoWaYw6jEF8Yf9iryvnNBoDm7encOEBI2CPLNmCyYiehnWAbGQU'
@@ -97,7 +97,6 @@ async def serve_offline():
     except FileNotFoundError:
         return JSONResponse({"error": "offline.html not found"}, status_code=404)
 
-# ========== VERSION ENDPOINT (for auto-update) ==========
 @app.get("/api/version")
 async def get_version():
     return {"version": APP_VERSION}
@@ -1113,21 +1112,13 @@ HTML = '''<!DOCTYPE html>
         *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent;}
         html,body{width:100%;height:100%;overflow:hidden;background:#0a0a0f;font-family:monospace;color:#0f0;}
 
-        /* ===================== UPDATE BANNER ===================== */
+        /* UPDATE BANNER */
         .update-banner{
-            position:fixed;
-            top:0;
-            left:0;
-            right:0;
+            position:fixed;top:0;left:0;right:0;
             background:linear-gradient(90deg, #ffaa00, #ff6600);
-            color:#000;
-            text-align:center;
-            padding:12px;
-            font-size:13px;
-            font-weight:bold;
-            z-index:999999;
-            display:none;
-            cursor:pointer;
+            color:#000;text-align:center;padding:12px;
+            font-size:13px;font-weight:bold;
+            z-index:999999;display:none;cursor:pointer;
             box-shadow:0 4px 20px rgba(255,170,0,0.5);
         }
         .update-banner.show{display:block;}
@@ -1226,65 +1217,41 @@ HTML = '''<!DOCTYPE html>
         }
         @media (min-width:769px){.menu-btn,.overlay{display:none;}}
 
-        /* ===================== CHAT BACKGROUND ===================== */
-        /* Visible doodle pattern + big centered ABAVANDIMWE wordmark */
+        /* CHAT BACKGROUND */
         .chat-area{
             flex:1;display:flex;flex-direction:column;min-width:0;width:100%;position:relative;
             background-color:#0a0a0f;
             background-image:
-                /* Big centered ABAVANDIMWE wordmark (visible) */
                 url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='1000' height='1000' viewBox='0 0 1000 1000'><text x='50%' y='50%' font-family='monospace' font-size='88' font-weight='bold' fill='rgba(0,255,65,0.10)' text-anchor='middle' dominant-baseline='middle' letter-spacing='8'>ABAVANDIMWE</text></svg>"),
-                /* Doodle pattern (visible) */
                 url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='240' height='240' viewBox='0 0 240 240'><g fill='none' stroke='rgba(0,255,65,0.10)' stroke-width='1.6'><circle cx='30' cy='30' r='7'/><path d='M85 22 Q95 12 105 22 Q115 32 105 42 Q95 52 85 42 Q75 32 85 22 Z'/><rect x='130' y='18' width='24' height='16' rx='3'/><path d='M170 30 L195 30 M170 36 L190 36'/><circle cx='45' cy='95' r='5'/><path d='M25 130 L25 155 M30 130 L30 155'/><circle cx='80' cy='105' r='9'/><path d='M68 145 L92 145 L86 168 L74 168 Z'/><path d='M165 95 L190 120 M190 95 L165 120'/><circle cx='110' cy='195' r='6'/><rect x='150' y='170' width='35' height='24' rx='4'/><path d='M35 185 L58 185 M35 191 L52 191'/><path d='M135 65 L160 65 L160 90'/><path d='M100 45 Q110 35 120 45'/><path d='M55 60 L70 75'/><circle cx='195' cy='175' r='4'/><path d='M200 55 L215 70 M215 55 L200 70'/></g></svg>");
             background-repeat: no-repeat, repeat;
             background-position: center center, top left;
             background-size: 100% 100%, 240px 240px;
-            background-attachment: scroll, scroll;
         }
 
         .messages-container{flex:1;overflow-y:auto;padding:12px;display:flex;flex-direction:column;gap:8px;min-height:0;overscroll-behavior:contain;}
 
         .new-msgs-btn{
-            position:absolute;
-            bottom:100px;
-            left:50%;
-            transform:translateX(-50%);
-            background:#0f0;
-            color:#000;
-            padding:8px 20px;
-            border-radius:30px;
-            font-size:14px;
-            font-weight:bold;
-            cursor:pointer;
+            position:absolute;bottom:100px;left:50%;transform:translateX(-50%);
+            background:#0f0;color:#000;padding:8px 20px;border-radius:30px;
+            font-size:14px;font-weight:bold;cursor:pointer;
             box-shadow:0 4px 15px rgba(0,255,65,0.4);
-            z-index:30;
-            display:none;
-            border:2px solid #0f0;
-            font-family:monospace;
+            z-index:30;display:none;border:2px solid #0f0;font-family:monospace;
         }
         .new-msgs-btn.show{display:block;}
 
         .message{
-            display:flex;
-            flex-direction:column;
-            width:fit-content;
-            max-width:85%;
-            padding:4px 0;
-            word-break:break-word;
-            overflow-wrap:anywhere;
-            animation:fadeIn 0.2s ease;
+            display:flex;flex-direction:column;width:fit-content;
+            max-width:85%;padding:4px 0;word-break:break-word;
+            overflow-wrap:anywhere;animation:fadeIn 0.2s ease;
         }
         .message.sent{align-self:flex-end;margin-left:auto;}
         .message.received{align-self:flex-start;margin-right:auto;}
         @media (max-width:600px){ .message { max-width:90%; } }
 
         .message-bubble{
-            padding:8px 14px;
-            border-radius:18px;
-            font-size:14px;
-            line-height:1.5;
-            word-wrap:break-word;
-            max-width:100%;
+            padding:8px 14px;border-radius:18px;font-size:14px;
+            line-height:1.5;word-wrap:break-word;max-width:100%;
         }
         .sent .message-bubble{background:#0f0;color:#000;border-bottom-right-radius:4px;}
         .received .message-bubble{background:#1a1a2e;border:1px solid #0f0;border-bottom-left-radius:4px;}
@@ -1293,15 +1260,10 @@ HTML = '''<!DOCTYPE html>
         .message-time{font-size:8px;opacity:0.5;margin-top:2px;}
 
         .message-reply-preview{
-            font-size:10px;
-            color:#ffaa00;
-            margin-bottom:4px;
-            padding:4px 8px;
-            background:rgba(255,170,0,0.08);
-            border-left:2px solid #ffaa00;
-            border-radius:4px;
-            cursor:pointer;
-            max-width:100%;
+            font-size:10px;color:#ffaa00;margin-bottom:4px;
+            padding:4px 8px;background:rgba(255,170,0,0.08);
+            border-left:2px solid #ffaa00;border-radius:4px;
+            cursor:pointer;max-width:100%;
         }
         .message-reply-preview .reply-sender{color:#ffaa00;font-weight:bold;}
         .message-reply-preview .reply-text{color:#888;}
@@ -1309,40 +1271,35 @@ HTML = '''<!DOCTYPE html>
         .system-message{text-align:center;font-size:10px;color:#ffaa00;margin:4px 0;font-style:italic;}
         .typing-indicator{padding:2px 16px 6px;font-size:10px;color:#0f0;font-style:italic;min-height:24px;flex-shrink:0;}
 
-        /* ===== VOICE PLAYER ===== */
+        /* VOICE PLAYER */
         .voice-player{
             display:flex;align-items:center;gap:10px;
             background:#0f0;padding:6px 10px;border-radius:20px;
             min-width:200px;max-width:min(90vw, 340px);position:relative;
         }
         .received .voice-player{background:#1a1a2e;border:1px solid #0f0;}
-
         .voice-avatar{
             flex:0 0 34px;width:34px;height:34px;border-radius:50%;
             background:#0a0a0f;color:#0f0;display:flex;align-items:center;
-            justify-content:center;font-size:12px;font-weight:bold;overflow:hidden;
-            position:relative;
+            justify-content:center;font-size:12px;font-weight:bold;
+            overflow:hidden;position:relative;
         }
         .received .voice-avatar{background:#0f0;color:#0a0a0f;}
-
         .voice-play-btn{
-            flex:0 0 32px;width:32px;height:32px;border:none;background:transparent;
-            color:#0a0a0f;font-size:22px;cursor:pointer;display:flex;
-            align-items:center;justify-content:center;padding:0;
+            flex:0 0 32px;width:32px;height:32px;border:none;
+            background:transparent;color:#0a0a0f;font-size:22px;
+            cursor:pointer;display:flex;align-items:center;justify-content:center;padding:0;
         }
         .received .voice-play-btn{color:#0f0;}
-
         .voice-waveform{
             flex:1;display:flex;align-items:center;gap:2px;height:24px;
-            cursor:pointer;min-width:80px;overflow:hidden;padding:4px 0;
-            user-select:none;
+            cursor:pointer;min-width:80px;overflow:hidden;padding:4px 0;user-select:none;
         }
         .voice-wave-bar{
             flex:0 0 2px;width:2px;background:#0a0a0f;border-radius:2px;opacity:0.55;
         }
         .received .voice-wave-bar{background:#0f0;}
         .voice-wave-bar.played{opacity:1;}
-
         .voice-ball{
             position:absolute;top:50%;transform:translateY(-50%);
             width:10px;height:10px;border-radius:50%;background:#0a0a0f;
@@ -1350,7 +1307,6 @@ HTML = '''<!DOCTYPE html>
         }
         .received .voice-ball{background:#0f0;}
         .voice-player.playing .voice-ball{display:block;}
-
         .voice-info{
             display:flex;justify-content:space-between;align-items:center;
             font-size:10px;margin-top:2px;color:#888;padding:0 4px;
@@ -1359,15 +1315,13 @@ HTML = '''<!DOCTYPE html>
         .voice-duration{color:#0a0a0f;font-weight:bold;}
         .sent .voice-info .voice-duration{color:#0f0;}
         .voice-time{color:#888;font-size:10px;}
-        .voice-tick{color:#0f0;font-size:11px;margin-left:4px;}
-
         .voice-download{
             flex:0 0 auto;font-size:14px;color:#0a0a0f;
             text-decoration:none;margin-left:4px;cursor:pointer;
         }
         .received .voice-download{color:#0f0;}
 
-        /* ===== IMAGE MESSAGE ===== */
+        /* IMAGE */
         .image-bubble{
             background:#0f0;border-radius:18px;overflow:hidden;
             border:2px solid #0f0;max-width:100%;display:flex;
@@ -1435,27 +1389,57 @@ HTML = '''<!DOCTYPE html>
         }
         .input-row button:hover{background:rgba(0,255,0,0.1);}
         .input-row .send-btn{background:#0f0;color:#000;border-color:#0f0;}
-        .voice-btn.recording{border-color:#ff0041;background:rgba(255,0,65,0.15);animation:pulse-red 1s infinite;}
-        @keyframes pulse-red{0%,100%{box-shadow:0 0 0 0 rgba(255,0,65,0.4);}50%{box-shadow:0 0 20px 10px rgba(255,0,65,0.15);}}
 
-        .recording-status{
-            display:none;align-items:center;gap:12px;padding:6px 12px;
-            background:#1a1a2e;border-radius:8px;border:1px solid #ff0041;
+        /* ===== WHATSAPP-STYLE RECORDING BAR ===== */
+        .recording-bar{
+            display:none;
+            align-items:center;
+            gap:12px;
+            padding:8px 12px;
+            background:#1a1a2e;
+            border-radius:30px;
+            border:1px solid #ff0041;
+            flex-shrink:0;
         }
-        .recording-status.active{display:flex;}
-        #recordingTimer{color:#ff0041;font-size:14px;font-weight:bold;min-width:50px;}
-        .wave{flex:1;display:flex;align-items:center;gap:2px;height:20px;}
-        .wave .bar{width:3px;background:#ff0041;border-radius:2px;animation:wave 0.6s ease-in-out infinite alternate;}
-        .wave .bar:nth-child(1){height:6px;animation-delay:0s;}
-        .wave .bar:nth-child(2){height:14px;animation-delay:0.1s;}
-        .wave .bar:nth-child(3){height:20px;animation-delay:0.2s;}
-        .wave .bar:nth-child(4){height:12px;animation-delay:0.3s;}
-        .wave .bar:nth-child(5){height:22px;animation-delay:0.4s;}
-        .wave .bar:nth-child(6){height:16px;animation-delay:0.5s;}
-        .wave .bar:nth-child(7){height:8px;animation-delay:0.6s;}
-        .wave .bar:nth-child(8){height:18px;animation-delay:0.7s;}
+        .recording-bar.active{display:flex;}
+        .recording-trash{
+            flex:0 0 44px;width:44px;height:44px;border-radius:50%;
+            background:rgba(255,0,65,0.15);border:2px solid #ff0041;
+            color:#ff0041;font-size:20px;cursor:pointer;
+            display:flex;align-items:center;justify-content:center;
+            transition:all 0.2s;
+        }
+        .recording-trash:hover{background:#ff0041;color:#fff;}
+        .recording-timer{
+            color:#ff0041;font-size:16px;font-weight:bold;
+            font-family:monospace;min-width:50px;
+        }
+        .recording-live-wave{
+            flex:1;display:flex;align-items:center;gap:2px;height:24px;
+            overflow:hidden;min-width:60px;
+        }
+        .recording-live-wave .bar{
+            width:3px;background:#ff0041;border-radius:2px;
+            animation:wave 0.6s ease-in-out infinite alternate;
+            flex:0 0 3px;
+        }
+        .recording-live-wave .bar:nth-child(1){height:6px;animation-delay:0s;}
+        .recording-live-wave .bar:nth-child(2){height:14px;animation-delay:0.1s;}
+        .recording-live-wave .bar:nth-child(3){height:20px;animation-delay:0.2s;}
+        .recording-live-wave .bar:nth-child(4){height:12px;animation-delay:0.3s;}
+        .recording-live-wave .bar:nth-child(5){height:22px;animation-delay:0.4s;}
+        .recording-live-wave .bar:nth-child(6){height:16px;animation-delay:0.5s;}
+        .recording-live-wave .bar:nth-child(7){height:8px;animation-delay:0.6s;}
+        .recording-live-wave .bar:nth-child(8){height:18px;animation-delay:0.7s;}
         @keyframes wave{0%{transform:scaleY(0.3);}100%{transform:scaleY(1);}}
-        #recordingText{font-size:10px;color:#ff0041;font-weight:bold;min-width:60px;}
+        .recording-send{
+            flex:0 0 44px;width:44px;height:44px;border-radius:50%;
+            background:#0f0;border:none;color:#000;font-size:20px;
+            cursor:pointer;display:flex;align-items:center;justify-content:center;
+            transition:all 0.2s;
+        }
+        .recording-send:hover{background:#00cc00;transform:scale(1.05);}
+        .recording-send:active{transform:scale(0.95);}
 
         .footer{text-align:center;padding:4px 0 2px;font-size:7px;color:#333;border-top:1px solid #1a1a2e;margin-top:4px;}
 
@@ -1511,6 +1495,8 @@ HTML = '''<!DOCTYPE html>
             .sidebar{width:240px;}
             @media (max-width:768px){.sidebar{width:240px;left:-240px;}}
             .new-msgs-btn{font-size:12px;padding:6px 16px;bottom:90px;}
+            .recording-trash{flex-basis:40px;width:40px;height:40px;font-size:18px;}
+            .recording-send{flex-basis:40px;width:40px;height:40px;font-size:18px;}
         }
         @media (max-width:380px){
             .input-row button{flex-basis:38px;width:38px;height:38px;font-size:14px;}
@@ -1666,18 +1652,22 @@ HTML = '''<!DOCTYPE html>
                     <span>↩️ Replying to <span id="replyPreviewSender" style="color:#ffaa00;font-weight:bold;"></span>: <span id="replyPreviewText" style="color:#888;"></span></span>
                     <span class="reply-cancel" onclick="cancelReply()">✕</span>
                 </div>
-                <div class="input-row">
+                <div class="input-row" id="normalInputRow">
                     <textarea id="messageInput" placeholder="Type a message..." rows="2"></textarea>
-                    <button class="voice-btn" id="voiceBtn" onmousedown="startHoldRecording()" onmouseup="stopHoldRecording()" onmouseleave="stopHoldRecording()" ontouchstart="startHoldRecording()" ontouchend="stopHoldRecording()" ontouchcancel="stopHoldRecording()">
-                        <span id="voiceIcon">🎙️</span>
-                    </button>
+                    <button class="voice-btn" id="voiceBtn" onclick="startRecording()">🎙️</button>
                     <button class="media-btn" onclick="shareMedia()">📎</button>
                     <button class="send-btn" onclick="sendMessage()"><span class="btn-text">➥</span></button>
                 </div>
-                <div class="recording-status" id="recordingStatus">
-                    <span id="recordingTimer">00:00</span>
-                    <div class="wave"><span class="bar"></span><span class="bar"></span><span class="bar"></span><span class="bar"></span><span class="bar"></span><span class="bar"></span><span class="bar"></span><span class="bar"></span></div>
-                    <span id="recordingText">🔴 Recording</span>
+                <!-- WhatsApp-style recording bar -->
+                <div class="recording-bar" id="recordingBar">
+                    <button class="recording-trash" onclick="cancelRecording()" title="Cancel">🗑️</button>
+                    <span class="recording-timer" id="recordingTimer">0:00</span>
+                    <div class="recording-live-wave">
+                        <span class="bar"></span><span class="bar"></span><span class="bar"></span>
+                        <span class="bar"></span><span class="bar"></span><span class="bar"></span>
+                        <span class="bar"></span><span class="bar"></span>
+                    </div>
+                    <button class="recording-send" onclick="stopAndSendRecording()" title="Send">➤</button>
                 </div>
             </div>
             <div class="footer">🔐 End-to-End Encrypted | Messages self-destruct after 24 hours</div>
@@ -1702,14 +1692,12 @@ let pushSubscription = null;
 let vapidPublicKey = null;
 let notificationsEnabled = false;
 
-// VOICE RECORDING
+// VOICE RECORDING (now tap-to-start, tap-to-send)
 let mediaRecorder = null;
 let audioChunks = [];
 let isRecording = false;
 let recordingTimer = null;
 let recordingSeconds = 0;
-let holdTimer = null;
-let isHolding = false;
 
 // Audio player state
 let activeAudio = null;
@@ -1725,10 +1713,7 @@ let isAtBottom = true;
 const deliveredMessages = new Set();
 const readMessages = new Set();
 
-// App version tracking (for auto-update)
-let currentAppVersion = null;
-
-// ========== AUTO-UPDATE SYSTEM ==========
+// ========== AUTO-UPDATE ==========
 async function checkForUpdates() {
     try {
         const res = await fetch('/api/version', { cache: 'no-store' });
@@ -1736,57 +1721,33 @@ async function checkForUpdates() {
         const serverVersion = data.version;
         const storedVersion = localStorage.getItem('abavandimwe_version');
         if (!storedVersion) {
-            // First time — just record
             localStorage.setItem('abavandimwe_version', serverVersion);
-            currentAppVersion = serverVersion;
             return;
         }
         if (storedVersion !== serverVersion) {
-            // New version available
-            currentAppVersion = serverVersion;
-            const banner = document.getElementById('updateBanner');
-            banner.classList.add('show');
-            console.log('🚀 Update available:', serverVersion);
+            document.getElementById('updateBanner').classList.add('show');
         }
-    } catch(e) {
-        // ignore network errors
-    }
+    } catch(e) {}
 }
-
 async function applyUpdate() {
     const banner = document.getElementById('updateBanner');
     banner.textContent = '⏳ Updating...';
     try {
-        // Clear all caches
         if ('caches' in window) {
             const cacheNames = await caches.keys();
             await Promise.all(cacheNames.map(name => caches.delete(name)));
         }
-        // Unregister old service workers
         if ('serviceWorker' in navigator) {
             const registrations = await navigator.serviceWorker.getRegistrations();
-            for (let reg of registrations) {
-                await reg.unregister();
-            }
+            for (let reg of registrations) await reg.unregister();
         }
-        // Save new version
         const res = await fetch('/api/version', { cache: 'no-store' });
         const data = await res.json();
         localStorage.setItem('abavandimwe_version', data.version);
-        // Hard reload bypassing cache
-        window.location.reload(true);
-    } catch(e) {
-        window.location.reload(true);
-    }
+    } catch(e) {}
+    window.location.reload(true);
 }
-
-// Check for updates on page load + every 60 seconds
-window.addEventListener('load', () => {
-    checkForUpdates();
-    setInterval(checkForUpdates, 60000);
-});
-
-// Also check when tab becomes visible
+window.addEventListener('load', () => { checkForUpdates(); setInterval(checkForUpdates, 60000); });
 document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'visible') checkForUpdates();
 });
@@ -1815,21 +1776,14 @@ function hideLoading() { document.getElementById('loadingOverlay').classList.rem
 if ('serviceWorker' in navigator) {
     window.addEventListener('load', () => {
         navigator.serviceWorker.register('/sw.js')
-            .then(reg => {
-                console.log('✅ Service Worker registered');
-                window.swRegistration = reg;
-                // Check for SW updates periodically
-                setInterval(() => reg.update().catch(() => {}), 60000);
-            })
-            .catch(err => console.log('❌ Service Worker failed:', err));
+            .then(reg => { window.swRegistration = reg; setInterval(() => reg.update().catch(() => {}), 60000); })
+            .catch(err => console.log('❌ SW failed:', err));
     });
 }
 let deferredPrompt;
 const installBtn = document.getElementById('installBtn');
 window.addEventListener('beforeinstallprompt', (e) => {
-    e.preventDefault();
-    deferredPrompt = e;
-    installBtn.classList.add('show');
+    e.preventDefault(); deferredPrompt = e; installBtn.classList.add('show');
 });
 async function installApp() {
     if (deferredPrompt) {
@@ -1873,8 +1827,7 @@ async function subscribeToPush() {
         });
         pushSubscription = subscription;
         await fetch('/api/push/subscribe', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 subscription: {
                     endpoint: subscription.endpoint,
@@ -1885,8 +1838,7 @@ async function subscribeToPush() {
                 }
             })
         });
-        notificationsEnabled = true;
-        updateNotificationButton();
+        notificationsEnabled = true; updateNotificationButton();
         return true;
     } catch(e) { return false; }
 }
@@ -1900,9 +1852,7 @@ async function unsubscribeFromPush() {
     if (!pushSubscription) return;
     try {
         await pushSubscription.unsubscribe();
-        pushSubscription = null;
-        notificationsEnabled = false;
-        updateNotificationButton();
+        pushSubscription = null; notificationsEnabled = false; updateNotificationButton();
     } catch(e) {}
 }
 async function toggleNotifications() {
@@ -1918,13 +1868,8 @@ async function toggleNotifications() {
 }
 function updateNotificationButton() {
     const btn = document.getElementById('notificationBtn');
-    if (notificationsEnabled) {
-        btn.textContent = '🔔 Enabled';
-        btn.classList.add('enabled');
-    } else {
-        btn.textContent = '🔔 Enable';
-        btn.classList.remove('enabled');
-    }
+    if (notificationsEnabled) { btn.textContent = '🔔 Enabled'; btn.classList.add('enabled'); }
+    else { btn.textContent = '🔔 Enable'; btn.classList.remove('enabled'); }
 }
 function isPushSupported() {
     return 'PushManager' in window && 'serviceWorker' in navigator && 'Notification' in window;
@@ -1958,54 +1903,40 @@ function hideOfflineOverlay() {
         if (window.chatUsername && window.chatGroup) {
             document.getElementById('chatScreen').classList.add('active');
             connectToChat(window.chatUsername, window.chatGroup);
-        } else {
-            document.getElementById('loginScreen').style.display = 'flex';
-        }
+        } else document.getElementById('loginScreen').style.display = 'flex';
     } else if (lastActiveScreen === 'admin') {
-        document.getElementById('adminPanel').classList.add('active');
-        loadAdminData();
+        document.getElementById('adminPanel').classList.add('active'); loadAdminData();
     } else if (lastActiveScreen === 'gatekeeper') {
         document.getElementById('gatekeeperScreen').classList.add('active');
     } else if (lastActiveScreen === 'userSetup') {
         document.getElementById('userSetupScreen').classList.add('active');
-    } else {
-        document.getElementById('loginScreen').style.display = 'flex';
-    }
+    } else document.getElementById('loginScreen').style.display = 'flex';
     lastActiveScreen = null;
 }
 document.getElementById('retryOfflineBtn').addEventListener('click', function() {
     if (navigator.onLine) hideOfflineOverlay();
-    else {
-        this.textContent = '⏳ Still offline...';
-        setTimeout(() => this.textContent = '↻ Retry', 1000);
-    }
+    else { this.textContent = '⏳ Still offline...'; setTimeout(() => this.textContent = '↻ Retry', 1000); }
 });
 
 // ========== DOM READY ==========
 document.addEventListener('DOMContentLoaded', function() {
     if (!navigator.onLine) showOfflineOverlay();
 
-    document.getElementById('loginBtn').addEventListener('click', function(e) {
+    document.getElementById('loginBtn').addEventListener('click', function() {
         if (this.classList.contains('btn-loading')) return;
         showLoading('Logging in', login);
     });
-    document.getElementById('gatekeeperBtn').addEventListener('click', function(e) {
+    document.getElementById('gatekeeperBtn').addEventListener('click', function() {
         if (this.classList.contains('btn-loading')) return;
         showLoading('Verifying', gatekeeperLogin);
     });
-    document.getElementById('enterChatBtn').addEventListener('click', function(e) {
+    document.getElementById('enterChatBtn').addEventListener('click', function() {
         if (this.classList.contains('btn-loading')) return;
         showLoading('Entering Chat', enterChat);
     });
-    document.getElementById('loginPassword').addEventListener('keypress', function(e) {
-        if(e.key === 'Enter') showLoading('Logging in', login);
-    });
-    document.getElementById('gatekeeperPassword').addEventListener('keypress', function(e) {
-        if(e.key === 'Enter') showLoading('Verifying', gatekeeperLogin);
-    });
-    document.getElementById('userDisplayName').addEventListener('keypress', function(e) {
-        if(e.key === 'Enter') showLoading('Entering Chat', enterChat);
-    });
+    document.getElementById('loginPassword').addEventListener('keypress', function(e) { if(e.key === 'Enter') showLoading('Logging in', login); });
+    document.getElementById('gatekeeperPassword').addEventListener('keypress', function(e) { if(e.key === 'Enter') showLoading('Verifying', gatekeeperLogin); });
+    document.getElementById('userDisplayName').addEventListener('keypress', function(e) { if(e.key === 'Enter') showLoading('Entering Chat', enterChat); });
     
     document.getElementById('messageInput').addEventListener('input', function() {
         this.style.height = 'auto';
@@ -2025,12 +1956,8 @@ document.addEventListener('DOMContentLoaded', function() {
         const threshold = 100;
         const atBottom = (this.scrollHeight - this.scrollTop - this.clientHeight) < threshold;
         if (atBottom && !isAtBottom) {
-            isAtBottom = true;
-            unreadCount = 0;
-            updateNewMsgsButton();
-        } else if (!atBottom && isAtBottom) {
-            isAtBottom = false;
-        }
+            isAtBottom = true; unreadCount = 0; updateNewMsgsButton();
+        } else if (!atBottom && isAtBottom) isAtBottom = false;
     });
 
     document.addEventListener('visibilitychange', function() {
@@ -2050,12 +1977,8 @@ document.addEventListener('DOMContentLoaded', function() {
                 document.getElementById('offlineBar').classList.remove('active');
                 connectToChat(window.chatUsername, window.chatGroup);
                 lastActiveScreen = null;
-            } else {
-                hideOfflineOverlay();
-            }
-        } else {
-            document.getElementById('offlineBar').classList.remove('active');
-        }
+            } else hideOfflineOverlay();
+        } else document.getElementById('offlineBar').classList.remove('active');
     });
 
     window.addEventListener('offline', function() {
@@ -2067,13 +1990,8 @@ document.addEventListener('DOMContentLoaded', function() {
         getVapidPublicKey();
         if (window.swRegistration) {
             window.swRegistration.pushManager.getSubscription()
-                .then(sub => {
-                    if (sub) {
-                        pushSubscription = sub;
-                        notificationsEnabled = true;
-                        updateNotificationButton();
-                    }
-                }).catch(e => console.error(e));
+                .then(sub => { if (sub) { pushSubscription = sub; notificationsEnabled = true; updateNotificationButton(); } })
+                .catch(e => console.error(e));
         }
     } else {
         const btn = document.getElementById('notificationBtn');
@@ -2094,19 +2012,13 @@ function clearMessagesOffline() {
 function updateNewMsgsButton() {
     const btn = document.getElementById('newMsgsBtn');
     const countSpan = document.getElementById('newMsgsCount');
-    if (unreadCount > 0) {
-        countSpan.textContent = unreadCount;
-        btn.classList.add('show');
-    } else {
-        btn.classList.remove('show');
-    }
+    if (unreadCount > 0) { countSpan.textContent = unreadCount; btn.classList.add('show'); }
+    else btn.classList.remove('show');
 }
 function scrollToBottom() {
     const container = document.getElementById('messages');
     container.scrollTop = container.scrollHeight;
-    unreadCount = 0;
-    updateNewMsgsButton();
-    isAtBottom = true;
+    unreadCount = 0; updateNewMsgsButton(); isAtBottom = true;
 }
 
 // ========== LOGIN ==========
@@ -2116,8 +2028,7 @@ async function login() {
     if(!username || !password) { showError('Please enter username and password'); hideLoading(); return; }
     try {
         const response = await fetch('/login', {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
+            method: 'POST', headers: {'Content-Type': 'application/json'},
             body: JSON.stringify({username, password})
         });
         const data = await response.json();
@@ -2145,14 +2056,8 @@ async function login() {
                     successDiv.style.display = 'block';
                 }
             }
-        } else {
-            showError(data.message || 'Invalid credentials.');
-            hideLoading();
-        }
-    } catch(e) {
-        showError('Connection error. Please try again.');
-        hideLoading();
-    }
+        } else { showError(data.message || 'Invalid credentials.'); hideLoading(); }
+    } catch(e) { showError('Connection error. Please try again.'); hideLoading(); }
 }
 
 // ========== GATEKEEPER ==========
@@ -2162,8 +2067,7 @@ async function gatekeeperLogin() {
     if(!username || !password) { showGatekeeperError('Please enter your password'); hideLoading(); return; }
     try {
         const response = await fetch('/gatekeeper', {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
+            method: 'POST', headers: {'Content-Type': 'application/json'},
             body: JSON.stringify({username, password})
         });
         const data = await response.json();
@@ -2182,14 +2086,8 @@ async function gatekeeperLogin() {
                 showSetupSuccess('✅ Verified! Enter your display name to start chatting.');
             }
             hideLoading();
-        } else {
-            showGatekeeperError(data.message || 'Invalid credentials');
-            hideLoading();
-        }
-    } catch(e) {
-        showGatekeeperError('Connection error. Please try again.');
-        hideLoading();
-    }
+        } else { showGatekeeperError(data.message || 'Invalid credentials'); hideLoading(); }
+    } catch(e) { showGatekeeperError('Connection error. Please try again.'); hideLoading(); }
 }
 
 // ========== ENTER CHAT ==========
@@ -2200,8 +2098,7 @@ async function enterChat() {
     if(!groupName) { showSetupError('Group missing. Please contact admin.'); hideLoading(); return; }
     try {
         await fetch('/save_display_name', {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
+            method: 'POST', headers: {'Content-Type': 'application/json'},
             body: JSON.stringify({username: gatekeeperData.username, display_name: displayName})
         });
     } catch(e) {}
@@ -2238,11 +2135,8 @@ function connectToChat(username, group) {
         const offlineMsg = document.querySelector('.offline-message');
         if (offlineMsg) offlineMsg.remove();
         ws.send(JSON.stringify({type: 'join', username: username, group: group}));
-        reconnectAttempts = 0;
-        isManuallyReconnecting = false;
-        unreadCount = 0;
-        updateNewMsgsButton();
-        isAtBottom = true;
+        reconnectAttempts = 0; isManuallyReconnecting = false;
+        unreadCount = 0; updateNewMsgsButton(); isAtBottom = true;
     };
     ws.onmessage = async function(e) {
         try {
@@ -2283,9 +2177,7 @@ function connectToChat(username, group) {
                 setTimeout(() => {
                     const c = document.getElementById('messages');
                     c.scrollTop = c.scrollHeight;
-                    isAtBottom = true;
-                    unreadCount = 0;
-                    updateNewMsgsButton();
+                    isAtBottom = true; unreadCount = 0; updateNewMsgsButton();
                 }, 100);
             } else if(d.type === 'message') {
                 if (d.temp_id) {
@@ -2323,10 +2215,7 @@ function connectToChat(username, group) {
                 const c = document.getElementById('messages');
                 const threshold = 100;
                 const atBottom = (c.scrollHeight - c.scrollTop - c.clientHeight) < threshold;
-                if (!atBottom && !d.temp_id) {
-                    unreadCount++;
-                    updateNewMsgsButton();
-                }
+                if (!atBottom && !d.temp_id) { unreadCount++; updateNewMsgsButton(); }
             } else if(d.type === 'message_delivered') {
                 if (d.message_id) {
                     deliveredMessages.add(d.message_id);
@@ -2334,8 +2223,7 @@ function connectToChat(username, group) {
                     if (msgEl) {
                         const tick = msgEl.querySelector('.msg-tick');
                         if (tick && !tick.classList.contains('read')) {
-                            tick.textContent = '✓✓';
-                            tick.classList.add('delivered');
+                            tick.textContent = '✓✓'; tick.classList.add('delivered');
                         }
                     }
                 }
@@ -2347,28 +2235,19 @@ function connectToChat(username, group) {
                     if (msgEl) {
                         const tick = msgEl.querySelector('.msg-tick');
                         if (tick) {
-                            tick.textContent = '✓✓';
-                            tick.classList.remove('delivered');
-                            tick.classList.add('read');
+                            tick.textContent = '✓✓'; tick.classList.remove('delivered'); tick.classList.add('read');
                         }
                     }
                 }
-            } else if(d.type === 'users') {
-                updateUsers(d.users);
-            } else if(d.type === 'user_joined') {
-                addSystemMessage('👤 ' + d.user + ' joined');
-            } else if(d.type === 'user_left') {
-                addSystemMessage('👋 ' + d.user + ' left');
-            } else if(d.type === 'typing') {
-                document.getElementById('typingIndicator').innerHTML = '✏️ ' + d.user + ' typing...';
-            } else if(d.type === 'stop_typing') {
-                document.getElementById('typingIndicator').innerHTML = '';
-            } else if(d.type === 'pong') {
-                updateStatus(true);
-            }
+            } else if(d.type === 'users') { updateUsers(d.users); }
+            else if(d.type === 'user_joined') { addSystemMessage('👤 ' + d.user + ' joined'); }
+            else if(d.type === 'user_left') { addSystemMessage('👋 ' + d.user + ' left'); }
+            else if(d.type === 'typing') { document.getElementById('typingIndicator').innerHTML = '✏️ ' + d.user + ' typing...'; }
+            else if(d.type === 'stop_typing') { document.getElementById('typingIndicator').innerHTML = ''; }
+            else if(d.type === 'pong') { updateStatus(true); }
         } catch(e) { console.error('Error processing message:', e); }
     };
-    ws.onerror = function(e) { updateStatus(false); };
+    ws.onerror = function() { updateStatus(false); };
     ws.onclose = function() {
         updateStatus(false);
         document.getElementById('offlineBar').classList.add('active');
@@ -2403,16 +2282,12 @@ function updateStatus(online) {
     let status = document.getElementById('connectionStatus');
     let badge = document.getElementById('connectionBadge');
     if(online) {
-        status.innerHTML = '🟢 Connected';
-        status.className = 'connection-status status-online';
-        badge.innerHTML = '● Online';
-        badge.style.color = '#0f0';
+        status.innerHTML = '🟢 Connected'; status.className = 'connection-status status-online';
+        badge.innerHTML = '● Online'; badge.style.color = '#0f0';
         document.getElementById('offlineBar').classList.remove('active');
     } else {
-        status.innerHTML = '🔴 Disconnected';
-        status.className = 'connection-status status-offline';
-        badge.innerHTML = '● Offline';
-        badge.style.color = '#ff4444';
+        status.innerHTML = '🔴 Disconnected'; status.className = 'connection-status status-offline';
+        badge.innerHTML = '● Offline'; badge.style.color = '#ff4444';
     }
 }
 function addSystemMessage(text) {
@@ -2420,10 +2295,8 @@ function addSystemMessage(text) {
     const offlineMsg = document.querySelector('.offline-message');
     if (offlineMsg) offlineMsg.remove();
     let div = document.createElement('div');
-    div.className = 'system-message';
-    div.textContent = text;
-    msgs.appendChild(div);
-    msgs.scrollTop = msgs.scrollHeight;
+    div.className = 'system-message'; div.textContent = text;
+    msgs.appendChild(div); msgs.scrollTop = msgs.scrollHeight;
 }
 
 // ========== ADD MESSAGE ==========
@@ -2440,21 +2313,15 @@ function addMessage(sender, text, isSent, timestamp, messageId, replyTo, voiceUr
 
     let time = timestamp ? new Date(timestamp * 1000).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}) : '';
 
-    // Determine tick
     let tickHtml = '';
     if (isSent) {
         const isRead = (readBy && readBy.length > 0) || readMessages.has(messageId);
         const isDelivered = delivered || deliveredMessages.has(messageId) || isRead;
-        if (isRead) {
-            tickHtml = `<span class="msg-tick read">✓✓</span>`;
-        } else if (isDelivered) {
-            tickHtml = `<span class="msg-tick delivered">✓✓</span>`;
-        } else {
-            tickHtml = `<span class="msg-tick">✓</span>`;
-        }
+        if (isRead) tickHtml = `<span class="msg-tick read">✓✓</span>`;
+        else if (isDelivered) tickHtml = `<span class="msg-tick delivered">✓✓</span>`;
+        else tickHtml = `<span class="msg-tick">✓</span>`;
     }
 
-    // Reply preview
     let replyHtml = '';
     if(replyTo && messagesData[replyTo]) {
         let original = messagesData[replyTo];
@@ -2468,7 +2335,6 @@ function addMessage(sender, text, isSent, timestamp, messageId, replyTo, voiceUr
     let messageContent = '';
     if (voiceUrl) {
         const downloadLink = voiceUrl + '?download=1';
-        // Deterministic waveform
         const bars = [];
         const seed = (messageId || Date.now()).toString();
         let seedNum = 0;
@@ -2477,16 +2343,12 @@ function addMessage(sender, text, isSent, timestamp, messageId, replyTo, voiceUr
             const h = 5 + ((seedNum * (i + 3) * 13) % 18);
             bars.push(h);
         }
-        const waveHtml = bars.map(h => 
-            `<span class="voice-wave-bar" style="height:${h}px;"></span>`
-        ).join('');
+        const waveHtml = bars.map(h => `<span class="voice-wave-bar" style="height:${h}px;"></span>`).join('');
         const initial = (sender || '?').charAt(0).toUpperCase();
         
         messageContent = `
             <div class="voice-player" data-voice-url="${voiceUrl}" data-message-id="${messageId}">
-                <div class="voice-avatar">
-                    ${initial}
-                </div>
+                <div class="voice-avatar">${initial}</div>
                 <button class="voice-play-btn" onclick="playVoice(this, '${voiceUrl}')">
                     <span class="play-icon">▶</span>
                 </button>
@@ -2544,26 +2406,19 @@ function addMessage(sender, text, isSent, timestamp, messageId, replyTo, voiceUr
     `;
 
     div.innerHTML = '<div class="message-sender">' + (isSent ? 'YOU' : escapeHtml(sender)) + '</div>' + 
-                    replyHtml +
-                    messageContent + 
-                    actionsHtml;
+                    replyHtml + messageContent + actionsHtml;
 
-    // Swipe to reply
     let touchStartX = 0, touchCurrentX = 0, touchStartY = 0;
     div.addEventListener('touchstart', function(e) {
-        touchStartX = e.touches[0].clientX;
-        touchStartY = e.touches[0].clientY;
-        touchCurrentX = touchStartX;
+        touchStartX = e.touches[0].clientX; touchStartY = e.touches[0].clientY; touchCurrentX = touchStartX;
     }, {passive: true});
     div.addEventListener('touchmove', function(e) {
         touchCurrentX = e.touches[0].clientX;
         let diffX = touchCurrentX - touchStartX;
         let diffY = e.touches[0].clientY - touchStartY;
-        if (diffX > 0 && diffX < 80 && Math.abs(diffY) < 30) {
-            div.style.transform = 'translateX(' + diffX + 'px)';
-        }
+        if (diffX > 0 && diffX < 80 && Math.abs(diffY) < 30) div.style.transform = 'translateX(' + diffX + 'px)';
     }, {passive: true});
-    div.addEventListener('touchend', function(e) {
+    div.addEventListener('touchend', function() {
         let diffX = touchCurrentX - touchStartX;
         div.style.transform = '';
         if (diffX >= 60) replyToMessage(messageId);
@@ -2573,7 +2428,6 @@ function addMessage(sender, text, isSent, timestamp, messageId, replyTo, voiceUr
     msgs.appendChild(div);
     if (isAtBottom) msgs.scrollTop = msgs.scrollHeight;
     
-    // Immediately load the audio duration
     if (voiceUrl) {
         const tempAudio = new Audio();
         tempAudio.preload = 'metadata';
@@ -2582,9 +2436,7 @@ function addMessage(sender, text, isSent, timestamp, messageId, replyTo, voiceUr
                 const mins = Math.floor(this.duration / 60);
                 const secs = Math.floor(this.duration % 60);
                 const durationSpan = div.querySelector(`.voice-duration[data-duration-for="${messageId}"]`);
-                if (durationSpan) {
-                    durationSpan.textContent = mins + ':' + String(secs).padStart(2, '0');
-                }
+                if (durationSpan) durationSpan.textContent = mins + ':' + String(secs).padStart(2, '0');
             }
         });
         tempAudio.addEventListener('error', function() {
@@ -2672,32 +2524,30 @@ async function sendMessage() {
         const salt = generateSalt();
         const encrypted = await encrypt(text, window.groupPassword, salt);
         ws.send(JSON.stringify({
-            type: 'message',
-            ciphertext: encrypted,
-            salt: salt,
+            type: 'message', ciphertext: encrypted, salt: salt,
             reply_to: replyingToMessageId || null
         }));
-        input.value = '';
-        input.style.height = 'auto';
-        cancelReply();
+        input.value = ''; input.style.height = 'auto'; cancelReply();
     } catch (error) { alert('Error sending message.'); }
 }
 
-// ========== VOICE RECORDING ==========
-function startHoldRecording() {
-    if (isRecording) return;
-    isHolding = true;
-    holdTimer = setTimeout(() => { if (isHolding) startRecording(); }, 300);
+// ========== WHATSAPP-STYLE VOICE RECORDING ==========
+// Tap the mic → recording bar replaces the input row
+// Tap trash → cancel
+// Tap send → send the audio
+
+function showRecordingBar() {
+    document.getElementById('normalInputRow').style.display = 'none';
+    document.getElementById('recordingBar').classList.add('active');
 }
-function stopHoldRecording() {
-    isHolding = false;
-    clearTimeout(holdTimer);
-    if (isRecording) {
-        if (recordingSeconds < 1) cancelRecording();
-        else stopRecordingAndSend();
-    }
+
+function hideRecordingBar() {
+    document.getElementById('normalInputRow').style.display = 'flex';
+    document.getElementById('recordingBar').classList.remove('active');
 }
+
 async function startRecording() {
+    if (isRecording) return;
     try {
         const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
         let mimeType = 'audio/webm;codecs=opus';
@@ -2707,51 +2557,68 @@ async function startRecording() {
         audioChunks = [];
         mediaRecorder.ondataavailable = (event) => { if (event.data.size > 0) audioChunks.push(event.data); };
         mediaRecorder.onstop = async () => {
-            if (audioChunks.length > 0 && recordingSeconds >= 1) {
-                const audioBlob = new Blob(audioChunks, { type: mediaRecorder.mimeType || 'audio/webm' });
-                await uploadVoice(audioBlob);
-            }
-            stream.getTracks().forEach(track => track.stop());
-            document.getElementById('voiceBtn').classList.remove('recording');
-            document.getElementById('voiceIcon').textContent = '🎙️';
-            document.getElementById('recordingStatus').classList.remove('active');
-            clearInterval(recordingTimer);
-            recordingTimer = null;
-            isRecording = false;
-            recordingSeconds = 0;
-            document.getElementById('recordingTimer').textContent = '00:00';
+            // handled by stopAndSendRecording or cancelRecording
         };
         mediaRecorder.start(1000);
         isRecording = true;
-        document.getElementById('voiceBtn').classList.add('recording');
-        document.getElementById('voiceIcon').textContent = '⏺️';
-        document.getElementById('recordingStatus').classList.add('active');
         recordingSeconds = 0;
         updateRecordingTimer();
+        clearInterval(recordingTimer);
         recordingTimer = setInterval(updateRecordingTimer, 1000);
-    } catch (error) { alert('Could not access microphone.'); }
+        // Show the WhatsApp-style recording bar and hide the normal input row
+        showRecordingBar();
+    } catch (error) {
+        alert('Could not access microphone. Please allow microphone permissions.');
+        hideRecordingBar();
+    }
 }
+
 function updateRecordingTimer() {
     recordingSeconds++;
     const mins = Math.floor(recordingSeconds / 60);
     const secs = recordingSeconds % 60;
-    document.getElementById('recordingTimer').textContent = `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+    document.getElementById('recordingTimer').textContent = mins + ':' + String(secs).padStart(2, '0');
 }
-function stopRecordingAndSend() { if (mediaRecorder && isRecording) mediaRecorder.stop(); }
+
+async function stopAndSendRecording() {
+    if (!mediaRecorder || !isRecording) {
+        hideRecordingBar();
+        return;
+    }
+    // Stop the recorder — onstop will fire and we handle upload
+    mediaRecorder.onstop = async () => {
+        if (audioChunks.length > 0 && recordingSeconds >= 1) {
+            const audioBlob = new Blob(audioChunks, { type: mediaRecorder.mimeType || 'audio/webm' });
+            await uploadVoice(audioBlob);
+        }
+        // Cleanup
+        try { mediaRecorder.stream.getTracks().forEach(track => track.stop()); } catch(e) {}
+        clearInterval(recordingTimer);
+        recordingTimer = null;
+        isRecording = false;
+        recordingSeconds = 0;
+        hideRecordingBar();
+    };
+    mediaRecorder.stop();
+}
+
 function cancelRecording() {
     if (mediaRecorder && isRecording) {
+        mediaRecorder.onstop = () => {
+            try { mediaRecorder.stream.getTracks().forEach(track => track.stop()); } catch(e) {}
+        };
         mediaRecorder.stop();
         isRecording = false;
         audioChunks = [];
         clearInterval(recordingTimer);
         recordingTimer = null;
         recordingSeconds = 0;
-        document.getElementById('recordingTimer').textContent = '00:00';
+        hideRecordingBar();
+    } else {
+        hideRecordingBar();
     }
-    document.getElementById('voiceBtn').classList.remove('recording');
-    document.getElementById('voiceIcon').textContent = '🎙️';
-    document.getElementById('recordingStatus').classList.remove('active');
 }
+
 async function uploadVoice(audioBlob) {
     const formData = new FormData();
     formData.append('file', audioBlob, 'voice.webm');
@@ -2762,11 +2629,13 @@ async function uploadVoice(audioBlob) {
         else alert('Failed to upload voice: ' + (data.error || 'Unknown error'));
     } catch (error) { alert('Failed to upload voice.'); }
 }
+
 async function sendVoiceMessage(voiceUrl) {
     const input = document.getElementById('messageInput');
     const text = input.value.trim();
     await sendMessageWithVoice(text || '🎤 Voice message', voiceUrl);
 }
+
 async function sendMessageWithVoice(text, voiceUrl) {
     if (!ws || ws.readyState !== WebSocket.OPEN) { alert('Not connected.'); return; }
     if (!window.groupPassword) { alert('Group password not set.'); return; }
@@ -2774,22 +2643,17 @@ async function sendMessageWithVoice(text, voiceUrl) {
         const salt = generateSalt();
         const encrypted = await encrypt(text, window.groupPassword, salt);
         ws.send(JSON.stringify({
-            type: 'message',
-            ciphertext: encrypted,
-            salt: salt,
+            type: 'message', ciphertext: encrypted, salt: salt,
             reply_to: replyingToMessageId || null,
             voice_url: voiceUrl
         }));
         document.getElementById('messageInput').value = '';
         document.getElementById('messageInput').style.height = 'auto';
         cancelReply();
-        document.getElementById('recordingStatus').classList.remove('active');
-        document.getElementById('voiceBtn').classList.remove('recording');
-        document.getElementById('voiceIcon').textContent = '🎙️';
     } catch (error) { alert('Error sending voice.'); }
 }
 
-// ========== AUDIO PLAYER (with clickable waveform) ==========
+// ========== AUDIO PLAYER ==========
 function playVoice(button, url) {
     const player = button.closest('.voice-player');
     const waveform = player.querySelector('.voice-waveform');
@@ -2857,17 +2721,14 @@ function playVoice(button, url) {
         const mins = Math.floor(this.duration / 60);
         const secs = Math.floor(this.duration % 60);
         durationSpan.textContent = mins + ':' + String(secs).padStart(2, '0');
-        activeAudio = null;
-        activeButton = null;
-        activeProgressBar = null;
+        activeAudio = null; activeButton = null; activeProgressBar = null;
     };
 
     audio.onerror = function() {
         button.querySelector('.play-icon').textContent = '▶';
         player.classList.remove('playing');
         durationSpan.textContent = '0:00';
-        activeAudio = null;
-        activeButton = null;
+        activeAudio = null; activeButton = null;
     };
 
     audio.play();
@@ -2875,7 +2736,6 @@ function playVoice(button, url) {
     player.classList.add('playing');
 }
 
-// Clickable waveform — tap anywhere on the bars to seek
 function seekAudio(event, waveform) {
     if (!activeAudio) return;
     if (activeProgressBar !== waveform) return;
@@ -2913,9 +2773,7 @@ async function shareMedia() {
                 const salt = generateSalt();
                 const encrypted = await encrypt(text, window.groupPassword, salt);
                 ws.send(JSON.stringify({
-                    type: 'message',
-                    ciphertext: encrypted,
-                    salt: salt,
+                    type: 'message', ciphertext: encrypted, salt: salt,
                     reply_to: replyingToMessageId || null,
                     media_url: data.url,
                     media_type: data.type || file.type,
@@ -3061,7 +2919,7 @@ function requestAccess() {
     window.open('https://wa.me/250788495861?text=I%20need%20access%20to%20ABAVANDIMWE', '_blank');
 }
 
-console.log('✅ ABAVANDIMWE loaded (v7.0)');
+console.log('✅ ABAVANDIMWE loaded (v8.0)');
 </script>
 </body>
 </html>
@@ -3076,11 +2934,11 @@ if __name__ == "__main__":
 ║              ABAVANDIMWE SECURE MESSAGING                  ║
 ║           Messages auto-delete after 24 hours              ║
 ║                    Author: Mugisha Pc                      ║
-║                    Version: v7.0                            ║
+║                    Version: v8.0                            ║
 ║                                                            ║
-║           ✓✓ Read Receipts (like WhatsApp)                 ║
-║           🎙️ Voice Player with Real Duration               ║
-║           👆 Tap Waveform to Seek                          ║
+║           🎙️ WhatsApp-Style Voice Recording                ║
+║           Tap 🎙️ to start, tap 🗑️ to cancel, tap ➤ to send ║
+║           ✓✓ Read Receipts                                 ║
 ║           🖼️ Visible Doodle Background                     ║
 ║           🚀 Auto-Update Banner                            ║
 ╚════════════════════════════════════════════════════════════╝
