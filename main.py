@@ -1629,7 +1629,6 @@ HTML = '''<!DOCTYPE html>
         <div class="chat-header-left">
             <button class="menu-btn" onclick="toggleSidebar()">☰</button>
             <span class="online-badge" id="connectionBadge">● Online</span>
-            <button class="notification-btn" id="notificationBtn" onclick="toggleNotifications()">🔔</button>
         </div>
         <h2 id="groupTitle"># LOADING</h2>
         <button class="logout-btn" onclick="logout()">Leave</button>
