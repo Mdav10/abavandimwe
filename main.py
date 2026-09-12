@@ -1629,7 +1629,7 @@ HTML = '''<!DOCTYPE html>
         <div class="chat-header-left">
             <button class="menu-btn" onclick="toggleSidebar()">☰</button>
             <span class="online-badge" id="connectionBadge">● Online</span>
-            <button class="notification-btn" id="notificationBtn" onclick="toggleNotifications()">🔔 Enable</button>
+            <button class="notification-btn" id="notificationBtn" onclick="toggleNotifications()">🔔</button>
         </div>
         <h2 id="groupTitle"># LOADING</h2>
         <button class="logout-btn" onclick="logout()">Leave</button>
@@ -1649,7 +1649,7 @@ HTML = '''<!DOCTYPE html>
             <div class="typing-indicator" id="typingIndicator"></div>
             <div class="input-area">
                 <div class="reply-preview" id="replyPreview">
-                    <span>↩️ Replying to <span id="replyPreviewSender" style="color:#ffaa00;font-weight:bold;"></span>: <span id="replyPreviewText" style="color:#888;"></span></span>
+                    <span>Replying to <span id="replyPreviewSender" style="color:#ffaa00;font-weight:bold;"></span>: <span id="replyPreviewText" style="color:#888;"></span></span>
                     <span class="reply-cancel" onclick="cancelReply()">✕</span>
                 </div>
                 <div class="input-row" id="normalInputRow">
@@ -1673,11 +1673,11 @@ HTML = '''<!DOCTYPE html>
             <div class="footer">🔐 End-to-End Encrypted | Messages self-destruct after 24 hours</div>
         </div>
     </div>
-    <div class="connection-status status-online" id="connectionStatus">🟢 Connected</div>
+    
 </div>
 
 <!-- INSTALL BUTTON -->
-<button id="installBtn" class="install-btn">📲 Install ABAVANDIMWE App</button>
+<button id="installBtn" class="install-btn">📲 Install The  App</button>
 
 <script>
 // ========== GLOBALS ==========
@@ -1868,8 +1868,8 @@ async function toggleNotifications() {
 }
 function updateNotificationButton() {
     const btn = document.getElementById('notificationBtn');
-    if (notificationsEnabled) { btn.textContent = '🔔 Enabled'; btn.classList.add('enabled'); }
-    else { btn.textContent = '🔔 Enable'; btn.classList.remove('enabled'); }
+    if (notificationsEnabled) { btn.textContent = '🔔'; btn.classList.add('enabled'); }
+    else { btn.textContent = '🔔'; btn.classList.remove('enabled'); }
 }
 function isPushSupported() {
     return 'PushManager' in window && 'serviceWorker' in navigator && 'Notification' in window;
@@ -2242,7 +2242,7 @@ function connectToChat(username, group) {
             } else if(d.type === 'users') { updateUsers(d.users); }
             else if(d.type === 'user_joined') { addSystemMessage('👤 ' + d.user + ' joined'); }
             else if(d.type === 'user_left') { addSystemMessage('👋 ' + d.user + ' left'); }
-            else if(d.type === 'typing') { document.getElementById('typingIndicator').innerHTML = '✏️ ' + d.user + ' typing...'; }
+            else if(d.type === 'typing') { document.getElementById('typingIndicator').innerHTML = d.user + ' typing...'; }
             else if(d.type === 'stop_typing') { document.getElementById('typingIndicator').innerHTML = ''; }
             else if(d.type === 'pong') { updateStatus(true); }
         } catch(e) { console.error('Error processing message:', e); }
@@ -2282,11 +2282,11 @@ function updateStatus(online) {
     let status = document.getElementById('connectionStatus');
     let badge = document.getElementById('connectionBadge');
     if(online) {
-        status.innerHTML = '🟢 Connected'; status.className = 'connection-status status-online';
+        
         badge.innerHTML = '● Online'; badge.style.color = '#0f0';
         document.getElementById('offlineBar').classList.remove('active');
     } else {
-        status.innerHTML = '🔴 Disconnected'; status.className = 'connection-status status-offline';
+    
         badge.innerHTML = '● Offline'; badge.style.color = '#ff4444';
     }
 }
@@ -2327,7 +2327,7 @@ function addMessage(sender, text, isSent, timestamp, messageId, replyTo, voiceUr
         let original = messagesData[replyTo];
         let originalText = original.text || 'Message';
         replyHtml = '<div class="message-reply-preview" onclick="scrollToMessage(' + replyTo + ')">' +
-                    '↩️ <span class="reply-sender">' + escapeHtml(original.sender) + '</span>: ' +
+                    ' <span class="reply-sender">' + escapeHtml(original.sender) + '</span>: ' +
                     '<span class="reply-text">' + escapeHtml(originalText.substring(0, 60)) + (originalText.length > 60 ? '...' : '') + '</span>' +
                     '</div>';
     }
@@ -2350,7 +2350,7 @@ function addMessage(sender, text, isSent, timestamp, messageId, replyTo, voiceUr
             <div class="voice-player" data-voice-url="${voiceUrl}" data-message-id="${messageId}">
                 <div class="voice-avatar">${initial}</div>
                 <button class="voice-play-btn" onclick="playVoice(this, '${voiceUrl}')">
-                    <span class="play-icon">▶</span>
+                    <span class="play-icon">▶️</span>
                 </button>
                 <div class="voice-waveform" onclick="seekAudio(event, this)">
                     ${waveHtml}
@@ -2362,7 +2362,7 @@ function addMessage(sender, text, isSent, timestamp, messageId, replyTo, voiceUr
                 <span class="voice-duration" data-duration-for="${messageId}">0:00</span>
                 <span class="voice-time">${time}${isSent ? tickHtml : ''}</span>
             </div>
-            ${text && text !== '🎤 Voice message' ? '<div class="voice-caption" style="font-size:11px;color:#888;margin-top:2px;">' + escapeHtml(text) + '</div>' : ''}
+            ${text && text !== ' Voice message' ? '<div class="voice-caption" style="font-size:11px;color:#888;margin-top:2px;">' + escapeHtml(text) + '</div>' : ''}
         `;
     } else if (mediaUrl) {
         if (mediaType && mediaType.startsWith('image/')) {
@@ -2401,7 +2401,7 @@ function addMessage(sender, text, isSent, timestamp, messageId, replyTo, voiceUr
 
     const actionsHtml = `
         <div class="message-actions">
-            <button onclick="replyToMessage(${messageId})">↩️ Reply</button>
+            
         </div>
     `;
 
@@ -2633,7 +2633,7 @@ async function uploadVoice(audioBlob) {
 async function sendVoiceMessage(voiceUrl) {
     const input = document.getElementById('messageInput');
     const text = input.value.trim();
-    await sendMessageWithVoice(text || '🎤 Voice message', voiceUrl);
+    await sendMessageWithVoice(text || 'Voice message', voiceUrl);
 }
 
 async function sendMessageWithVoice(text, voiceUrl) {
@@ -2676,7 +2676,7 @@ function playVoice(button, url) {
             player.classList.add('playing');
         } else {
             activeAudio.pause();
-            button.querySelector('.play-icon').textContent = '▶';
+            button.querySelector('.play-icon').textContent = '▶️';
             player.classList.remove('playing');
         }
         return;
@@ -2725,7 +2725,7 @@ function playVoice(button, url) {
     };
 
     audio.onerror = function() {
-        button.querySelector('.play-icon').textContent = '▶';
+        button.querySelector('.play-icon').textContent = '▶️';
         player.classList.remove('playing');
         durationSpan.textContent = '0:00';
         activeAudio = null; activeButton = null;
