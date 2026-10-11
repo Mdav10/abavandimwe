@@ -1,8 +1,8 @@
 """
 ABAVANDIMWE - Secure Messaging System
 Author: Mugisha Pc
-Version: v9.3 — Fixed audio player (WhatsApp-style, tap-to-seek, pause/resume)
-Messages stay for 24 hours then auto-delete
+Version: v9.4 — Fixed offline logic, audio, admin messages, Kirundi
+Messages stay for 24 hours then auto-delete (from chat, but stay in Admin Panel)
 Database: PostgreSQL (Neon) with asyncpg
 PWA Ready - Install as Android App with one click
 Push Notifications: Web Push API with VAPID
@@ -36,8 +36,8 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.backends import default_backend
 
 # ========== APP VERSION ==========
-APP_VERSION = "v9.3"
-CACHE_VERSION = "v9.3"
+APP_VERSION = "v9.4"
+CACHE_VERSION = "v9.4"
 
 # ========== VAPID CONFIGURATION ==========
 VAPID_PUBLIC_KEY = 'BL0X3NSYm0EbNslkt1afTEkuktGcvLRD4RS0MoWaYw6jEF8Yf9iryvnNBoDm7encOEBI2CPLNmCyYiehnWAbGQU'
@@ -440,11 +440,17 @@ async def get_admin_logs(limit=50):
         return [dict(r) for r in rows]
     finally: await return_db_connection(conn)
 
+# FIX 3: Mark messages as expired instead of deleting them, so admin panel keeps them forever.
 async def cleanup_old_messages():
     now = time.time()
     conn = await get_db_connection()
     try:
-        await conn.execute("DELETE FROM messages WHERE created_at < $1 OR expires_at < $2", now - 86400, now)
+        # Instead of DELETE, we update expires_at to now. The chat view will filter them out.
+        # This keeps the data in the DB for the Admin Panel.
+        await conn.execute(
+            "UPDATE messages SET expires_at = $1 WHERE expires_at < $2", 
+            now, now
+        )
     finally: await return_db_connection(conn)
 
 async def cleanup_old_files():
@@ -556,17 +562,19 @@ async def mark_message_read(mid, username):
         )
     finally: await return_db_connection(conn)
 
+# FIX 3: Filter out expired messages for the chat view only. Admin uses get_all_messages
 async def get_messages(group):
     cutoff = time.time() - 86400
     conn = await get_db_connection()
     try:
         rows = await conn.fetch(
-            "SELECT * FROM messages WHERE group_name = $1 AND created_at > $2 ORDER BY id ASC",
-            group, cutoff
+            "SELECT * FROM messages WHERE group_name = $1 AND created_at > $2 AND expires_at > $3 ORDER BY id ASC",
+            group, cutoff, time.time()
         )
         return [dict(r) for r in rows]
     finally: await return_db_connection(conn)
 
+# FIX 3: Admin panel fetches ALL messages, regardless of expiry
 async def get_all_messages(limit=100):
     conn = await get_db_connection()
     try:
@@ -761,7 +769,7 @@ async def admin_delete_user(data: DeleteUserRequest, request: Request):
 async def admin_delete_group(data: DeleteGroupRequest, request: Request):
     session = await require_admin(request)
     if await delete_group(data.name):
-        await admin_log_action(session["username"], "delete_group", data.name, "Deleted group")
+        await log_admin_action(session["username"], "delete_group", data.name, "Deleted group")
         return {"success": True}
     return {"success": False, "message": "Group not found"}
 
@@ -1142,9 +1150,9 @@ button:hover{background:#0f0;color:#000;}
 </div>
 
 <div class="offline-overlay" id="offlineOverlay">
-  <h2>📶 No Internet Connection</h2>
-  <p>Please check your network settings and try again.</p>
-  <button class="retry-btn" id="retryOfflineBtn">↻ Retry</button>
+  <h2 id="offlineTitle">📶 No Internet Connection</h2>
+  <p id="offlineSub">Please check your network settings and try again.</p>
+  <button class="retry-btn" id="retryOfflineBtn" data-translate="retry">↻ Retry</button>
 </div>
 
 <div id="loginScreen" class="login-container">
@@ -1154,8 +1162,8 @@ button:hover{background:#0f0;color:#000;}
     <div style="text-align:center;"><span class="admin-badge">🔐 Gatekeeper</span></div>
     <input type="text" id="loginUsername" placeholder="Username" autocomplete="username">
     <input type="password" id="loginPassword" placeholder="Password" autocomplete="current-password">
-    <button id="loginBtn">▶ Login</button>
-    <button class="btn-whatsapp" onclick="requestAccess()">💬 Request Access on WhatsApp</button>
+    <button id="loginBtn" data-translate="login">▶ Login</button>
+    <button class="btn-whatsapp" onclick="requestAccess()" data-translate="request_access">💬 Request Access on WhatsApp</button>
     <div id="loginError" class="error-message"></div>
     <div class="login-footer">🔒 AES-256 | ⏰ Messages auto-delete after 24 hours<br>Developed by Mugisha Pc</div>
   </div>
@@ -1163,30 +1171,30 @@ button:hover{background:#0f0;color:#000;}
 
 <div id="adminPanel" class="admin-panel">
   <div class="admin-panel-header">
-    <h2>⚙️ Admin Dashboard <span class="admin-username">(Logged in as: <span id="adminUsername">Mpc</span>)</span></h2>
-    <button class="close-admin" onclick="logout()">🚪 Logout</button>
+    <h2>⚙️ <span data-translate="admin_dashboard">Admin Dashboard</span> <span class="admin-username">(Logged in as: <span id="adminUsername">Mpc</span>)</span></h2>
+    <button class="close-admin" onclick="logout()" data-translate="leave">🚪 Logout</button>
   </div>
   <div class="admin-stats">
-    <div class="stat-box"><div class="stat-number" id="statUsers">0</div><div class="stat-label">Total Users</div></div>
-    <div class="stat-box"><div class="stat-number" id="statMessages">0</div><div class="stat-label">Total Messages</div></div>
-    <div class="stat-box"><div class="stat-number" id="statGroups">0</div><div class="stat-label">Total Groups</div></div>
+    <div class="stat-box"><div class="stat-number" id="statUsers">0</div><div class="stat-label" data-translate="users">Total Users</div></div>
+    <div class="stat-box"><div class="stat-number" id="statMessages">0</div><div class="stat-label" data-translate="messages">Total Messages</div></div>
+    <div class="stat-box"><div class="stat-number" id="statGroups">0</div><div class="stat-label" data-translate="groups">Total Groups</div></div>
   </div>
   <div class="admin-content">
     <div class="admin-card">
-      <h3>👤 Create User</h3>
+      <h3 data-translate="create_user">👤 Create User</h3>
       <input type="text" id="newUsername" placeholder="Username">
       <input type="text" id="newPassword" placeholder="Password">
       <input type="text" id="newGroupName" placeholder="Group Name">
       <input type="text" id="newGroupPassword" placeholder="Group Password">
-      <button onclick="createUser()" class="action-btn-green">➕ Create User</button>
+      <button onclick="createUser()" class="action-btn-green" data-translate="create_user">➕ Create User</button>
     </div>
-    <div class="admin-card"><h3>📋 Users</h3>
+    <div class="admin-card"><h3 data-translate="users">📋 Users</h3>
       <div class="admin-table-wrap"><table><thead><tr><th>User</th><th>Group</th><th>Action</th></tr></thead><tbody id="usersTableBody"></tbody></table></div>
     </div>
-    <div class="admin-card"><h3>📁 Groups</h3>
+    <div class="admin-card"><h3 data-translate="groups">📁 Groups</h3>
       <div class="admin-table-wrap"><table><thead><tr><th>Group</th><th>By</th><th>Action</th></tr></thead><tbody id="groupsTableBody"></tbody></table></div>
     </div>
-    <div class="admin-card"><h3>📨 Messages</h3>
+    <div class="admin-card"><h3 data-translate="messages">📨 Messages</h3>
       <div class="admin-table-wrap"><table><thead><tr><th>Sender</th><th>Group</th><th>Action</th></tr></thead><tbody id="messagesTableBody"></tbody></table></div>
     </div>
   </div>
@@ -1210,7 +1218,7 @@ button:hover{background:#0f0;color:#000;}
     <input type="text" id="userDisplayName" placeholder="Your Display Name">
     <input type="text" id="userGroupName" placeholder="Group Name" readonly>
     <input type="password" id="userGroupPassword" placeholder="Group Password" readonly>
-    <button id="enterChatBtn">▶ Enter Chat</button>
+    <button id="enterChatBtn" data-translate="enter_chat">▶ Enter Chat</button>
     <div id="setupError" class="error-message"></div>
     <div id="setupSuccess" class="success-message"></div>
   </div>
@@ -1224,9 +1232,9 @@ button:hover{background:#0f0;color:#000;}
       <button class="notification-btn" id="notificationBtn" onclick="toggleNotifications()">🔔 Enable</button>
     </div>
     <h2 id="groupTitle"># LOADING</h2>
-    <button class="logout-btn" onclick="logout()">Leave</button>
+    <button class="logout-btn" onclick="logout()" data-translate="leave">Leave</button>
   </div>
-  <div class="offline-bar" id="offlineBar">⚠️ No internet <button class="reconnect-btn" onclick="reconnectManually()">↻ Retry</button></div>
+  <div class="offline-bar" id="offlineBar">⚠️ <span data-translate="no_internet">No internet</span> <button class="reconnect-btn" onclick="reconnectManually()" data-translate="retry">↻ Retry</button></div>
   <div class="main-content">
     <div class="sidebar" id="sidebar">
       <div class="sidebar-header">● Online Users</div>
@@ -1239,14 +1247,15 @@ button:hover{background:#0f0;color:#000;}
       <div class="typing-indicator" id="typingIndicator"></div>
       <div class="input-area">
         <div class="reply-preview" id="replyPreview">
-          <span>↩️ Replying to <span id="replyPreviewSender" style="color:#ffaa00;font-weight:bold;"></span>: <span id="replyPreviewText" style="color:#888;"></span></span>
+          <span>↩️ <span data-translate="reply">Replying</span> to <span id="replyPreviewSender" style="color:#ffaa00;font-weight:bold;"></span>: <span id="replyPreviewText" style="color:#888;"></span></span>
           <span class="reply-cancel" onclick="cancelReply()">✕</span>
         </div>
         <div class="input-row" id="typingRow">
           <textarea id="messageInput" placeholder="Type a message..." rows="1"></textarea>
-          <button id="voiceBtn" onclick="startRecordingTap()"><span id="voiceIcon">🎙️</span></button>
-          <button id="mediaBtn" onclick="shareMedia()">📎</button>
-          <button class="send-btn" onclick="sendMessage()">➥</button>
+          <!-- FIX 1: Added type="button" to prevent Google Search popup -->
+          <button type="button" id="voiceBtn" onclick="startRecordingTap()"><span id="voiceIcon">🎙️</span></button>
+          <button type="button" id="mediaBtn" onclick="shareMedia()">📎</button>
+          <button type="button" class="send-btn" onclick="sendMessage()">➥</button>
         </div>
         <div class="recording-row" id="recordingRow">
           <div class="rec-delete" onclick="cancelRecording()">🗑️</div>
@@ -1267,6 +1276,56 @@ button:hover{background:#0f0;color:#000;}
 <button id="installBtn" class="install-btn">📲 Install ABAVANDIMWE App</button>
 
 <script>
+// ===== KIRUNDI TRANSLATIONS (FIX 5) =====
+const translations = {
+    en: {
+        online: "Online", enable: "Enable", leave: "Leave",
+        connected: "Connected", reply: "Replying",
+        typing: "typing...", joined: "joined", left: "left",
+        no_internet: "No internet", retry: "Retry",
+        disconnected: "Disconnected", enter_chat: "Enter Chat",
+        display_name: "Your Display Name", group_name: "Group Name",
+        group_password: "Group Password", login: "Login",
+        request_access: "Request Access on WhatsApp",
+        admin_dashboard: "Admin Dashboard", create_user: "Create User",
+        users: "Total Users", groups: "Total Groups", messages: "Total Messages",
+        send: "Send", voice_message: "Voice message",
+        recording: "Recording...", delete: "Delete",
+        cancel: "Cancel", confirm: "Are you sure?"
+    },
+    rn: { // Kirundi
+        online: "Kuri interineti", enable: "Emeza", leave: "Sohoka",
+        connected: "Wahujwe", reply: "Subiza",
+        typing: "arandika...", joined: "yinjiye", left: "yasohotse",
+        no_internet: "Nta murongo w'interineti", retry: "Gerageza",
+        disconnected: "Ntuhujwe", enter_chat: "Injira mu kiganiro",
+        display_name: "Izina ryawe", group_name: "Izina ry'itsinda",
+        group_password: "Ijambo ry'ibanga ry'itsinda", login: "Injira",
+        request_access: "Saba uruhushya kuri WhatsApp",
+        admin_dashboard: "Ikibaho cy'Umuyobozi", create_user: "Kora umukoresha",
+        users: "Abakoresha", groups: "Amatsinda", messages: "Ubutumwa",
+        send: "Ohereza", voice_message: "Ubutumwa bw'ijwi",
+        recording: "Birafatwa...", delete: "Siba",
+        cancel: "Reka", confirm: "Urabyemeza?"
+    }
+};
+
+let currentLang = 'rn'; // Default to Kirundi
+function applyLanguage(lang) {
+    currentLang = lang;
+    document.querySelectorAll('[data-translate]').forEach(el => {
+        const key = el.getAttribute('data-translate');
+        if (translations[lang][key]) {
+            el.innerText = translations[lang][key];
+        }
+    });
+    const connBadge = document.getElementById('connectionBadge');
+    if (connBadge && ws && ws.readyState === WebSocket.OPEN) connBadge.innerText = '● ' + translations[lang].online;
+    const notifBtn = document.getElementById('notificationBtn');
+    if (notifBtn) notifBtn.innerText = '🔔 ' + translations[lang].enable;
+    localStorage.setItem('abavandimwe_lang', lang);
+}
+
 let ws, username, groupName, groupPassword, groupSalt, typingTimeout, reconnectAttempts = 0;
 let currentUser = null, gatekeeperData = null, replyingToMessageId = null, messagesData = {};
 let isManuallyReconnecting = false, lastActiveScreen = null;
@@ -1277,6 +1336,12 @@ let activeAudio = null, activeButton = null, activeProgressBar = null, activeDur
 let unreadCount = 0, isAtBottom = true;
 const deliveredMessages = new Set();
 const readMessages = new Set();
+
+// Run on load
+document.addEventListener('DOMContentLoaded', () => {
+    const savedLang = localStorage.getItem('abavandimwe_lang') || 'rn';
+    applyLanguage(savedLang);
+});
 
 async function checkForUpdates() {
   try {
@@ -1389,20 +1454,24 @@ async function toggleNotifications() {
 }
 function updateNotificationButton() {
   const b = document.getElementById('notificationBtn');
-  if (notificationsEnabled) { b.textContent = '🔔 Enabled'; b.classList.add('enabled'); }
-  else { b.textContent = '🔔 Enable'; b.classList.remove('enabled'); }
+  if (notificationsEnabled) { b.textContent = '🔔 ' + translations[currentLang].enable; b.classList.add('enabled'); }
+  else { b.textContent = '🔔 ' + translations[currentLang].enable; b.classList.remove('enabled'); }
 }
 
 const offlineOverlay = document.getElementById('offlineOverlay');
+// FIX 4: Modified to only show full overlay on login/admin screens, not in chat.
 function showOfflineOverlay() {
-  const ca = document.getElementById('chatScreen').classList.contains('active');
+  // If we are in the chat, don't show the full overlay, just the offline bar
+  if (document.getElementById('chatScreen').classList.contains('active')) {
+      document.getElementById('offlineBar').classList.add('active');
+      updateStatus(false);
+      return;
+  }
+  // For other screens (Login, Admin), show the overlay
   const aa = document.getElementById('adminPanel').classList.contains('active');
-  const ga = document.getElementById('gatekeeperScreen').classList.contains('active');
-  const ua = document.getElementById('userSetupScreen').classList.contains('active');
-  const lv = document.getElementById('loginScreen').style.display !== 'none';
-  if (ca) lastActiveScreen = 'chat'; else if (aa) lastActiveScreen = 'admin';
-  else if (ga) lastActiveScreen = 'gatekeeper'; else if (ua) lastActiveScreen = 'userSetup';
-  else if (lv) lastActiveScreen = 'login'; else lastActiveScreen = null;
+  if (aa) lastActiveScreen = 'admin';
+  else lastActiveScreen = 'login';
+  
   document.getElementById('loginScreen').style.display = 'none';
   document.getElementById('adminPanel').classList.remove('active');
   document.getElementById('gatekeeperScreen').classList.remove('active');
@@ -1424,7 +1493,7 @@ function hideOfflineOverlay() {
 }
 document.getElementById('retryOfflineBtn').addEventListener('click', function() {
   if (navigator.onLine) hideOfflineOverlay();
-  else { this.textContent = '⏳ Still offline...'; setTimeout(() => this.textContent = '↻ Retry', 1000); }
+  else { this.textContent = '⏳ Still offline...'; setTimeout(() => this.textContent = translations[currentLang].retry, 1000); }
 });
 
 document.addEventListener('DOMContentLoaded', function() {
@@ -1468,12 +1537,20 @@ document.addEventListener('DOMContentLoaded', function() {
       if (!ws || ws.readyState !== WebSocket.OPEN) { if (window.chatUsername && window.chatGroup) connectToChat(window.chatUsername, window.chatGroup); }
     }
   });
+  // FIX 4: Modified offline handler
   window.addEventListener('offline', () => {
     clearTimeout(offlineTimer);
     offlineTimer = setTimeout(() => {
       if (!navigator.onLine) {
         showOfflineOverlay();
-        if (document.getElementById('chatScreen').classList.contains('active')) clearMessagesOffline();
+        // Only clear messages if we are NOT on the chat screen
+        if (!document.getElementById('chatScreen').classList.contains('active')) {
+            // just show the overlay, don't clear chat
+        } else {
+            // In chat, just show the offline bar, keep the messages
+            document.getElementById('offlineBar').classList.add('active');
+            updateStatus(false);
+        }
       }
     }, 3000);
   });
@@ -1578,7 +1655,7 @@ function connectToChat(user, group) {
     try {
       const d = JSON.parse(e.data);
       if (d.type === 'error') { showError(d.message); ws.close(); return; }
-      if (d.type === 'ready') { groupSalt = d.salt; addSystemMessage('🔐 Connected'); }
+      if (d.type === 'ready') { groupSalt = d.salt; addSystemMessage('🔐 ' + translations[currentLang].connected); }
       else if (d.type === 'history') {
         document.getElementById('messages').innerHTML = '';
         messagesData = {};
@@ -1623,9 +1700,9 @@ function connectToChat(user, group) {
           if (m) { const t = m.querySelector('.msg-tick'); if (t) { t.textContent = '✓✓'; t.classList.remove('delivered'); t.classList.add('read'); } }
         }
       } else if (d.type === 'users') updateUsers(d.users);
-      else if (d.type === 'user_joined') addSystemMessage('👤 ' + d.user + ' joined');
-      else if (d.type === 'user_left') addSystemMessage('👋 ' + d.user + ' left');
-      else if (d.type === 'typing') document.getElementById('typingIndicator').textContent = '✏️ ' + d.user + ' typing...';
+      else if (d.type === 'user_joined') addSystemMessage('👤 ' + d.user + ' ' + translations[currentLang].joined);
+      else if (d.type === 'user_left') addSystemMessage('👋 ' + d.user + ' ' + translations[currentLang].left);
+      else if (d.type === 'typing') document.getElementById('typingIndicator').textContent = '✏️ ' + d.user + ' ' + translations[currentLang].typing;
       else if (d.type === 'stop_typing') document.getElementById('typingIndicator').textContent = '';
       else if (d.type === 'pong') updateStatus(true);
     } catch(e) { console.error(e); }
@@ -1634,7 +1711,7 @@ function connectToChat(user, group) {
   ws.onclose = () => {
     updateStatus(false);
     document.getElementById('offlineBar').classList.add('active');
-    document.getElementById('messages').innerHTML = '<div style="text-align:center;color:#ff4444;padding:20px;">🔴 Disconnected.</div>';
+    document.getElementById('messages').innerHTML = '<div style="text-align:center;color:#ff4444;padding:20px;">🔴 ' + translations[currentLang].disconnected + '.</div>';
     messagesData = {};
     if (document.getElementById('chatScreen').classList.contains('active') && !isManuallyReconnecting) {
       reconnectAttempts++;
@@ -1660,12 +1737,12 @@ function updateStatus(online) {
   const s = document.getElementById('connectionStatus');
   const b = document.getElementById('connectionBadge');
   if (online) {
-    s.textContent = '🟢 Connected'; s.className = 'connection-status status-online';
-    b.textContent = '● Online'; b.style.color = '#0f0';
+    s.textContent = '🟢 ' + translations[currentLang].connected; s.className = 'connection-status status-online';
+    b.textContent = '● ' + translations[currentLang].online; b.style.color = '#0f0';
     document.getElementById('offlineBar').classList.remove('active');
   } else {
-    s.textContent = '🔴 Disconnected'; s.className = 'connection-status status-offline';
-    b.textContent = '● Offline'; b.style.color = '#ff4444';
+    s.textContent = '🔴 ' + translations[currentLang].disconnected; s.className = 'connection-status status-offline';
+    b.textContent = '● ' + translations[currentLang].disconnected; b.style.color = '#ff4444';
   }
 }
 function addSystemMessage(text) {
@@ -1716,7 +1793,7 @@ function addMessage(sender, text, isSent, timestamp, messageId, replyTo, voiceUr
     content = `
       <div class="voice-player" data-voice-url="${voiceUrl}" data-message-id="${messageId}">
         <div class="voice-avatar">${initial}</div>
-        <button class="voice-play-btn" onclick="playVoice(this, '${voiceUrl}')"><span class="play-icon">▶</span></button>
+        <button type="button" class="voice-play-btn" onclick="playVoice(this, '${voiceUrl}')"><span class="play-icon">▶</span></button>
         <div class="voice-waveform" onclick="seekAudio(event, this)" ontouchstart="seekAudio(event, this)" ontouchmove="seekAudio(event, this)">${waveHtml}</div>
         <div class="voice-ball"></div>
         <a href="${dl}" download class="voice-download">⬇</a>
@@ -1748,7 +1825,7 @@ function addMessage(sender, text, isSent, timestamp, messageId, replyTo, voiceUr
     content = `<div class="message-bubble">${escapeHtml(text)}</div><div class="message-time">${time}${isSent ? tickHtml : ''}</div>`;
   }
 
-  d.innerHTML = '<div class="message-sender">' + (isSent ? 'YOU' : escapeHtml(sender)) + '</div>' + replyHtml + content + '<div class="message-actions"><button onclick="replyToMessage(' + messageId + ')">↩️ Reply</button></div>';
+  d.innerHTML = '<div class="message-sender">' + (isSent ? 'YOU' : escapeHtml(sender)) + '</div>' + replyHtml + content + '<div class="message-actions"><button type="button" onclick="replyToMessage(' + messageId + ')">↩️ ' + translations[currentLang].reply + '</button></div>';
 
   let tsx = 0, tcx = 0, tsy = 0;
   d.addEventListener('touchstart', e => { tsx = e.touches[0].clientX; tsy = e.touches[0].clientY; tcx = tsx; }, { passive: true });
@@ -1940,7 +2017,7 @@ async function sendVoiceMessage(url) {
   } catch(e) { alert('Error sending voice.'); }
 }
 
-// ========== FIXED AUDIO PLAYER — tap to seek, pause/resume, always-visible button ==========
+// FIX 2: Fixed seekAudio to prevent scrolling on mobile and ensure smooth seeking
 function playVoice(button, url) {
   const player = button.closest('.voice-player');
   const waveform = player.querySelector('.voice-waveform');
@@ -2020,13 +2097,19 @@ function playVoice(button, url) {
   player.classList.add('playing');
 }
 
+// FIX 2: Modified seekAudio to handle touch events better and prevent scroll
 function seekAudio(event, waveform) {
   if (!activeAudio || activeProgressBar !== waveform) return;
+  // Prevent scrolling while seeking on mobile
+  if (event.cancelable) event.preventDefault(); 
+  
   const rect = waveform.getBoundingClientRect();
   let clientX = event.clientX;
   if (event.touches && event.touches.length) clientX = event.touches[0].clientX;
+  
   const x = clientX - rect.left;
   const pct = Math.min(1, Math.max(0, x / rect.width));
+  
   if (isFinite(activeAudio.duration) && activeAudio.duration > 0) {
     activeAudio.currentTime = activeAudio.duration * pct;
   }
@@ -2115,7 +2198,7 @@ async function logout() {
 }
 function requestAccess() { window.open('https://wa.me/250788495861?text=I%20need%20access%20to%20ABAVANDIMWE', '_blank'); }
 
-console.log('✅ ABAVANDIMWE v9.3 loaded');
+console.log('✅ ABAVANDIMWE v9.4 loaded');
 </script>
 </body>
 </html>
@@ -2128,13 +2211,14 @@ if __name__ == "__main__":
     print("""
 ╔════════════════════════════════════════════════════════════╗
 ║              ABAVANDIMWE SECURE MESSAGING                  ║
-║                    Version: v9.3                            ║
+║                    Version: v9.4                            ║
 ║                                                            ║
-║  ✅ Fixed WhatsApp-style audio player                      ║
-║  ✅ Play button always visible                              ║
-║  ✅ Tap or drag waveform to seek                            ║
-║  ✅ Pause keeps position                                    ║
-║  ✅ ✓✓ Read receipts                                        ║
+║  ✅ Fixed Google Search popup on audio send                ║
+║  ✅ WhatsApp-style audio player (tap to seek, pause)       ║
+║  ✅ Admin messages stay forever (chat auto-deletes)         ║
+║  ✅ Offline overlay only shows on login screen              ║
+║  ✅ Kirundi language integrated                             ║
+║  ✅ Full security (Argon2, AES-GCM, Rate Limiting)         ║
 ╚════════════════════════════════════════════════════════════╝
 """)
     print(f"[✓] Server running on port {port}")
