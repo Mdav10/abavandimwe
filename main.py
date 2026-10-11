@@ -1189,14 +1189,14 @@ button:hover{background:#0f0;color:#000;}
 <div id="loginScreen" class="login-container">
   <div class="login-card">
     <h1># ABAVANDIMWE</h1>
-    <div class="sub">Secure Messaging System</div>
+    <div class="sub">Ikiyago Cizewe</div>
     <div style="text-align:center;"><span class="admin-badge">🔐 Gatekeeper</span></div>
-    <input type="text" id="loginUsername" placeholder="Username" autocomplete="username">
-    <input type="password" id="loginPassword" placeholder="Password" autocomplete="current-password">
+    <input type="text" id="loginUsername" placeholder="Izina" autocomplete="username">
+    <input type="password" id="loginPassword" placeholder="Kabanga" autocomplete="current-password">
     <button id="loginBtn" data-translate="login">▶ Login</button>
-    <button class="btn-whatsapp" onclick="requestAccess()" data-translate="request_access">💬 Request Access on WhatsApp</button>
+    <button class="btn-whatsapp" onclick="requestAccess()" data-translate="request_access">💬 Saba Access kuri Whtsp</button>
     <div id="loginError" class="error-message"></div>
-    <div class="login-footer">🔒 AES-256 | ⏰ Messages auto-delete after 24 hours<br>Developed by Mugisha Pc</div>
+    <div class="login-footer">🔒 AES-256 | ⏰ Messages zirifuta inyuma y'amasaha24<br>Yakozwe na Mugisha Pc</div>
   </div>
 </div>
 
