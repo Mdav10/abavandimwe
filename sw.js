@@ -1,11 +1,10 @@
 // ABAVANDIMWE - Service Worker
-// Version: 9.0 — Auto-updating with cold-start tolerance
-const CACHE_VERSION = 'v9.0';  // ← BUMP THIS on every deploy
+// Version: 9.1 — Removed offline fallback that was blocking the app
+const CACHE_VERSION = 'v9.1';
 const CACHE_NAME = 'abavandimwe-' + CACHE_VERSION;
 
 const STATIC_ASSETS = [
     '/manifest.json',
-    '/offline.html',
     '/static/icons/icon-16x16.png',
     '/static/icons/icon-32x32.png',
     '/static/icons/icon-48x48.png',
@@ -20,9 +19,8 @@ const STATIC_ASSETS = [
     '/static/icons/icon-512x512.png'
 ];
 
-// ===== INSTALL =====
 self.addEventListener('install', (event) => {
-    console.log('✅ SW install v9.0');
+    console.log('✅ SW install v9.1');
     event.waitUntil(
         caches.open(CACHE_NAME)
             .then((cache) => cache.addAll(STATIC_ASSETS).catch(() => {}))
@@ -30,9 +28,8 @@ self.addEventListener('install', (event) => {
     );
 });
 
-// ===== ACTIVATE: wipe ALL old caches =====
 self.addEventListener('activate', (event) => {
-    console.log('✅ SW activate v9.0');
+    console.log('✅ SW activate v9.1');
     event.waitUntil(
         caches.keys()
             .then((names) => Promise.all(
@@ -45,11 +42,8 @@ self.addEventListener('activate', (event) => {
     );
 });
 
-// ===== MESSAGE =====
 self.addEventListener('message', (event) => {
-    if (event.data && event.data.type === 'SKIP_WAITING') {
-        self.skipWaiting();
-    }
+    if (event.data && event.data.type === 'SKIP_WAITING') self.skipWaiting();
 });
 
 // ===== PUSH =====
@@ -84,23 +78,15 @@ self.addEventListener('notificationclick', (event) => {
     );
 });
 
-// ===== FETCH =====
-// Helper: fetch with timeout (so Render cold start doesn't blow up)
-function fetchWithTimeout(request, ms) {
-    return new Promise((resolve, reject) => {
-        const timer = setTimeout(() => reject(new Error('timeout')), ms);
-        fetch(request).then(
-            (response) => { clearTimeout(timer); resolve(response); },
-            (err) => { clearTimeout(timer); reject(err); }
-        );
-    });
-}
-
+// ===== FETCH — Much simpler, no offline.html fallback for HTML =====
 self.addEventListener('fetch', (event) => {
     const request = event.request;
     const url = new URL(request.url);
 
-    // 1) API — never cache, long timeout (60s) for Render cold start
+    // WebSocket — passthrough
+    if (url.protocol === 'ws:' || url.protocol === 'wss:') return;
+
+    // API / dynamic — always network, no cache
     if (url.pathname.startsWith('/api/') ||
         url.pathname === '/login' ||
         url.pathname === '/gatekeeper' ||
@@ -109,35 +95,16 @@ self.addEventListener('fetch', (event) => {
         url.pathname === '/logout' ||
         url.pathname === '/health' ||
         url.pathname.startsWith('/admin/')) {
-        event.respondWith(
-            fetchWithTimeout(request, 60000)
-                .catch(() => new Response(JSON.stringify({ error: 'server waking up' }),
-                                          { status: 503, headers: { 'Content-Type': 'application/json' } }))
-        );
-        return;
+        return; // Let browser handle it naturally — no offline fallback
     }
 
-    // 2) WebSockets — passthrough
-    if (url.protocol === 'ws:' || url.protocol === 'wss:') return;
-
-    // 3) HTML navigation — network FIRST with 60s timeout, then offline page
-    if (request.mode === 'navigate' || url.pathname === '/' || url.pathname.endsWith('.html')) {
-        event.respondWith(
-            fetchWithTimeout(request, 60000)
-                .then((response) => response)
-                .catch(() => caches.match('/offline.html').then((c) => c || new Response(
-                    '<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Loading...</title></head>' +
-                    '<body style="background:#0a0a0f;color:#0f0;font-family:monospace;display:flex;justify-content:center;align-items:center;height:100vh;margin:0;">' +
-                    '<div style="text-align:center;padding:20px;max-width:400px;">' +
-                    '<h1 style="color:#ffaa00;font-size:22px;">⏳ Server waking up</h1>' +
-                    '<p style="color:#888;margin:16px 0;">Render is starting your server. This takes up to 60 seconds on first visit.</p>' +
-                    '<button onclick="location.reload()" style="background:transparent;border:2px solid #0f0;color:#0f0;padding:14px 32px;border-radius:12px;font-size:16px;font-weight:bold;cursor:pointer;font-family:monospace;">↻ Retry</button>' +
-                    '</div></body></html>', { headers: { 'Content-Type': 'text/html' } })))
-        );
-        return;
+    // HTML navigation — let the browser handle it directly.
+    // NO caching, NO offline.html fallback.
+    if (request.mode === 'navigate' || url.pathname === '/') {
+        return; // Browser goes straight to network
     }
 
-    // 4) Static assets — cache first, network fallback
+    // Static assets — cache first, network fallback
     event.respondWith(
         caches.match(request).then((cached) => {
             if (cached) return cached;
