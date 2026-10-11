@@ -1,6 +1,6 @@
 // ABAVANDIMWE - Service Worker
-// Version: 9.1 — Removed offline fallback that was blocking the app
-const CACHE_VERSION = 'v9.1';
+// Version: 9.2
+const CACHE_VERSION = 'v9.2';
 const CACHE_NAME = 'abavandimwe-' + CACHE_VERSION;
 
 const STATIC_ASSETS = [
@@ -20,7 +20,7 @@ const STATIC_ASSETS = [
 ];
 
 self.addEventListener('install', (event) => {
-    console.log('✅ SW install v9.1');
+    console.log('✅ SW install', CACHE_VERSION);
     event.waitUntil(
         caches.open(CACHE_NAME)
             .then((cache) => cache.addAll(STATIC_ASSETS).catch(() => {}))
@@ -29,16 +29,14 @@ self.addEventListener('install', (event) => {
 });
 
 self.addEventListener('activate', (event) => {
-    console.log('✅ SW activate v9.1');
+    console.log('✅ SW activate', CACHE_VERSION);
     event.waitUntil(
-        caches.keys()
-            .then((names) => Promise.all(
-                names.filter((n) => n !== CACHE_NAME).map((n) => {
-                    console.log('🗑️ Deleting old cache:', n);
-                    return caches.delete(n);
-                })
-            ))
-            .then(() => self.clients.claim())
+        caches.keys().then((names) => Promise.all(
+            names.filter((n) => n !== CACHE_NAME).map((n) => {
+                console.log('🗑️ Deleting old cache:', n);
+                return caches.delete(n);
+            })
+        )).then(() => self.clients.claim())
     );
 });
 
@@ -46,7 +44,6 @@ self.addEventListener('message', (event) => {
     if (event.data && event.data.type === 'SKIP_WAITING') self.skipWaiting();
 });
 
-// ===== PUSH =====
 self.addEventListener('push', (event) => {
     let data = {};
     try { data = event.data.json(); }
@@ -78,15 +75,15 @@ self.addEventListener('notificationclick', (event) => {
     );
 });
 
-// ===== FETCH — Much simpler, no offline.html fallback for HTML =====
+// ===== FETCH — no offline.html fallback for HTML =====
 self.addEventListener('fetch', (event) => {
     const request = event.request;
     const url = new URL(request.url);
 
-    // WebSocket — passthrough
+    // WebSockets — passthrough
     if (url.protocol === 'ws:' || url.protocol === 'wss:') return;
 
-    // API / dynamic — always network, no cache
+    // API — always network, no cache
     if (url.pathname.startsWith('/api/') ||
         url.pathname === '/login' ||
         url.pathname === '/gatekeeper' ||
@@ -94,17 +91,17 @@ self.addEventListener('fetch', (event) => {
         url.pathname === '/save_display_name' ||
         url.pathname === '/logout' ||
         url.pathname === '/health' ||
+        url.pathname === '/api/version' ||
         url.pathname.startsWith('/admin/')) {
-        return; // Let browser handle it naturally — no offline fallback
+        return;
     }
 
-    // HTML navigation — let the browser handle it directly.
-    // NO caching, NO offline.html fallback.
+    // HTML navigation — browser goes straight to network
     if (request.mode === 'navigate' || url.pathname === '/') {
-        return; // Browser goes straight to network
+        return;
     }
 
-    // Static assets — cache first, network fallback
+    // Static assets — cache first
     event.respondWith(
         caches.match(request).then((cached) => {
             if (cached) return cached;
