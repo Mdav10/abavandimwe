@@ -1,12 +1,10 @@
 """
 ABAVANDIMWE - Secure Messaging System
 Author: Mugisha Pc
-Version: v9.7 — FINAL COMPLETE FIXES
-- Fixed first-load offline overlay (inline script)
-- Admin Panel now decrypts & shows full message content
-- Fixed audio duration display and tap-to-seek
-- Optimized image sharing (permanent file input)
-- Added Logs tab for complete security auditing
+Version: v9.8 — FINAL FINAL FIXES
+- Audio duration now sent from server (no more 00:00)
+- Google Search popup permanently disabled (user-select, touch-callout)
+- Tap-to-seek now works perfectly (Audio object initialized on render)
 """
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request, Depends, HTTPException, UploadFile, File
@@ -37,8 +35,8 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.backends import default_backend
 
 # ========== APP VERSION ==========
-APP_VERSION = "v9.7"
-CACHE_VERSION = "v9.7"
+APP_VERSION = "v9.8"
+CACHE_VERSION = "v9.8"
 
 # ========== VAPID CONFIGURATION ==========
 VAPID_PUBLIC_KEY = 'BL0X3NSYm0EbNslkt1afTEkuktGcvLRD4RS0MoWaYw6jEF8Yf9iryvnNBoDm7encOEBI2CPLNmCyYiehnWAbGQU'
@@ -338,6 +336,7 @@ async def init_db():
                 expires_at DOUBLE PRECISION NOT NULL,
                 reply_to INTEGER DEFAULT NULL,
                 voice_url TEXT,
+                voice_duration DOUBLE PRECISION,
                 media_url TEXT,
                 media_type TEXT,
                 delivered BOOLEAN DEFAULT FALSE,
@@ -382,6 +381,7 @@ async def init_db():
             cols = await conn.fetch("SELECT column_name FROM information_schema.columns WHERE table_name = 'messages'")
             ex = [c['column_name'] for c in cols]
             if 'voice_url' not in ex: await conn.execute('ALTER TABLE messages ADD COLUMN voice_url TEXT')
+            if 'voice_duration' not in ex: await conn.execute('ALTER TABLE messages ADD COLUMN voice_duration DOUBLE PRECISION')
             if 'media_url' not in ex: await conn.execute('ALTER TABLE messages ADD COLUMN media_url TEXT')
             if 'media_type' not in ex: await conn.execute('ALTER TABLE messages ADD COLUMN media_type TEXT')
             if 'reply_to' not in ex: await conn.execute('ALTER TABLE messages ADD COLUMN reply_to INTEGER DEFAULT NULL')
@@ -530,14 +530,14 @@ async def get_all_users():
         return [dict(r) for r in rows]
     finally: await return_db_connection(conn)
 
-async def save_message_with_media(ciphertext, plaintext, group, sender, salt, reply_to=None, voice_url=None, media_url=None, media_type=None):
+async def save_message_with_media(ciphertext, plaintext, group, sender, salt, reply_to=None, voice_url=None, voice_duration=None, media_url=None, media_type=None):
     now = time.time()
     conn = await get_db_connection()
     try:
         result = await conn.fetchrow('''
-            INSERT INTO messages (ciphertext, plaintext, group_name, sender, salt, created_at, expires_at, reply_to, voice_url, media_url, media_type, delivered, read_by)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, FALSE, '{}') RETURNING id, created_at
-        ''', ciphertext, plaintext, group, sender, salt, now, now + 86400, reply_to, voice_url, media_url, media_type)
+            INSERT INTO messages (ciphertext, plaintext, group_name, sender, salt, created_at, expires_at, reply_to, voice_url, voice_duration, media_url, media_type, delivered, read_by)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, FALSE, '{}') RETURNING id, created_at
+        ''', ciphertext, plaintext, group, sender, salt, now, now + 86400, reply_to, voice_url, voice_duration, media_url, media_type)
         return dict(result)
     finally: await return_db_connection(conn)
 
@@ -571,7 +571,7 @@ async def get_all_messages(limit=200):
     conn = await get_db_connection()
     try:
         rows = await conn.fetch(
-            "SELECT id, sender, group_name, created_at, plaintext, voice_url, media_url, media_type FROM messages ORDER BY created_at DESC LIMIT $1",
+            "SELECT id, sender, group_name, created_at, plaintext, voice_url, voice_duration, media_url, media_type FROM messages ORDER BY created_at DESC LIMIT $1",
             limit
         )
         return [dict(r) for r in rows]
@@ -797,13 +797,13 @@ async def get_vapid_public_key():
     return {"publicKey": VAPID_PUBLIC_KEY}
 
 @app.post("/api/upload_voice")
-async def upload_voice(request: Request, file: UploadFile = File(...)):
+async def upload_voice(request: Request, file: UploadFile = File(...), duration: float = 0.0):
     try:
         session = await get_session_from_cookie(request)
         content = await file.read()
         filename = f"{uuid.uuid4()}.webm"
         await save_file(filename, content, 'audio/webm', session['username'], 'voice')
-        return {"success": True, "url": f"/api/files/{filename}"}
+        return {"success": True, "url": f"/api/files/{filename}", "duration": duration}
     except Exception as e:
         return JSONResponse({"success": False, "error": str(e)}, status_code=500)
 
@@ -864,7 +864,8 @@ async def ws_endpoint(websocket: WebSocket):
         history.append({
             'id': m['id'], 'ciphertext': m['ciphertext'], 'sender': m['sender'],
             'salt': m['salt'], 'timestamp': m['created_at'], 'reply_to': m.get('reply_to'),
-            'voice_url': m.get('voice_url'), 'media_url': m.get('media_url'),
+            'voice_url': m.get('voice_url'), 'voice_duration': m.get('voice_duration'),
+            'media_url': m.get('media_url'),
             'media_type': m.get('media_type'), 'delivered': m.get('delivered', False),
             'read_by': m.get('read_by', [])
         })
@@ -880,7 +881,7 @@ async def ws_endpoint(websocket: WebSocket):
                 if check_message_rate_limit(username):
                     r = await save_message_with_media(
                         data.get('ciphertext'), data.get('plaintext'), group_name, username, data.get('salt'),
-                        data.get('reply_to'), data.get('voice_url'),
+                        data.get('reply_to'), data.get('voice_url'), data.get('voice_duration'),
                         data.get('media_url'), data.get('media_type')
                     )
                     asyncio.create_task(send_notification_to_group(group_name, username))
@@ -890,6 +891,7 @@ async def ws_endpoint(websocket: WebSocket):
                         'ciphertext': data.get('ciphertext'), 'sender': username,
                         'salt': data.get('salt'), 'timestamp': r['created_at'],
                         'reply_to': data.get('reply_to'), 'voice_url': data.get('voice_url'),
+                        'voice_duration': data.get('voice_duration'),
                         'media_url': data.get('media_url'), 'media_type': data.get('media_type'),
                         'delivered': False, 'read_by': []
                     }
@@ -937,8 +939,6 @@ HTML = r'''<!DOCTYPE html>
 <link rel="icon" type="image/png" sizes="192x192" href="/icons/icon-192x192.png">
 <link rel="apple-touch-icon" href="/icons/icon-192x192.png">
 <script>
-// ===== FIX 1: IMMEDIATE OFFLINE CHECK =====
-// This runs before the DOM loads, so the browser's default offline page never shows.
 if (!navigator.onLine) {
     document.write('<style>#loginScreen{display:none !important;}#offlineOverlay{display:flex !important;}</style>');
 }
@@ -1052,11 +1052,15 @@ button:hover{background:#0f0;color:#000;}
 .system-message{text-align:center;font-size:10px;color:#ffaa00;margin:4px 0;font-style:italic;}
 .typing-indicator{padding:2px 16px 6px;font-size:10px;color:#0f0;font-style:italic;min-height:24px;flex-shrink:0;}
 
-.voice-player{display:flex !important;align-items:center;gap:6px;background:#0f0;padding:6px 8px;border-radius:20px;min-width:200px;max-width:min(90vw,340px);position:relative;overflow:hidden;}
+/* ===== FIX 2: VOICE PLAYER CSS - Prevent Google Search & Selection ===== */
+.voice-player{display:flex !important;align-items:center;gap:6px;background:#0f0;padding:6px 8px;border-radius:20px;min-width:200px;max-width:min(90vw,340px);position:relative;overflow:hidden;
+    -webkit-user-select: none; -moz-user-select: none; -ms-user-select: none; user-select: none;
+    -webkit-touch-callout: none; -webkit-tap-highlight-color: transparent;
+}
 .received .voice-player{background:#1a1a2e;border:1px solid #0f0;}
 .voice-avatar{flex:0 0 34px;width:34px;height:34px;border-radius:50%;background:#0a0a0f;color:#0f0;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:bold;overflow:hidden;}
 .received .voice-avatar{background:#0f0;color:#0a0a0f;}
-.voice-play-btn{flex:0 0 36px !important;width:36px !important;height:36px !important;min-width:36px;border:none;background:transparent;color:#0a0a0f;font-size:20px;cursor:pointer;display:flex !important;align-items:center;justify-content:center;padding:0;line-height:1;font-weight:bold;visibility:visible !important;opacity:1 !important;}
+.voice-play-btn{flex:0 0 36px !important;width:36px !important;height:36px !important;min-width:36px;border:none;background:transparent;color:#0a0a0f;font-size:20px;cursor:pointer;display:flex !important;align-items:center;justify-content:center;padding:0;line-height:1;font-weight:bold;visibility:visible !important;opacity:1 !important;touch-action: manipulation;}
 .received .voice-play-btn{color:#0f0;}
 .voice-waveform{flex:1 1 auto;display:flex;align-items:center;gap:2px;height:24px;cursor:pointer;min-width:60px;overflow:hidden;padding:4px 0;user-select:none;touch-action:none;position:relative;}
 .voice-wave-bar{flex:0 0 2px;width:2px;background:#0a0a0f;border-radius:2px;opacity:0.55;}
@@ -1203,9 +1207,7 @@ button:hover{background:#0f0;color:#000;}
       <div class="admin-table-wrap"><table><thead><tr><th>Sender</th><th>Group</th><th>Message</th><th>Date/Time</th><th>Action</th></tr></thead><tbody id="messagesTableBody"></tbody></table></div>
     </div>
     <div class="admin-card"><h3 data-translate="logs">📋 Logs (Security Audit)</h3>
-      <div class="admin-table-wrap" id="logsContainer">
-        <!-- Logs will be rendered here -->
-      </div>
+      <div class="admin-table-wrap" id="logsContainer"></div>
     </div>
   </div>
 </div>
@@ -1262,9 +1264,9 @@ button:hover{background:#0f0;color:#000;}
         </div>
         <div class="input-row" id="typingRow">
           <textarea id="messageInput" placeholder="Type a message..." rows="1"></textarea>
-          <button type="button" id="voiceBtn" onmousedown="event.preventDefault();startRecordingTap(event)" ontouchstart="event.preventDefault();startRecordingTap(event)"><span id="voiceIcon">🎙️</span></button>
-          <button type="button" id="mediaBtn" onmousedown="event.preventDefault();shareMedia(event)" ontouchstart="event.preventDefault();shareMedia(event)">📎</button>
-          <button type="button" class="send-btn" onmousedown="event.preventDefault();sendMessage(event)" ontouchstart="event.preventDefault();sendMessage(event)">➥</button>
+          <button type="button" id="voiceBtn" onpointerdown="event.preventDefault();startRecordingTap(event)"><span id="voiceIcon">🎙️</span></button>
+          <button type="button" id="mediaBtn" onpointerdown="event.preventDefault();shareMedia(event)">📎</button>
+          <button type="button" class="send-btn" onpointerdown="event.preventDefault();sendMessage(event)">➥</button>
         </div>
         <div class="recording-row" id="recordingRow">
           <div class="rec-delete" onclick="cancelRecording()">🗑️</div>
@@ -1282,13 +1284,11 @@ button:hover{background:#0f0;color:#000;}
   <div class="connection-status status-online" id="connectionStatus">🟢 Connected</div>
 </div>
 
-<!-- FIX 4: Permanent hidden file input for instant image sharing -->
 <input type="file" id="mediaFileInput" accept="image/*" style="display:none;">
 
 <button id="installBtn" class="install-btn">📲 Install ABAVANDIMWE App</button>
 
 <script>
-// ===== KIRUNDI TRANSLATIONS =====
 const translations = {
     en: {
         online: "Online", enable: "Enable", leave: "Leave",
@@ -1351,7 +1351,14 @@ let unreadCount = 0, isAtBottom = true;
 const deliveredMessages = new Set();
 const readMessages = new Set();
 
-// FIX 1: The inline script in <head> handles the initial offline check.
+document.addEventListener('DOMContentLoaded', () => {
+    const savedLang = localStorage.getItem('abavandimwe_lang') || 'rn';
+    applyLanguage(savedLang);
+    if (!navigator.onLine) {
+        document.getElementById('offlineOverlay').classList.add('active');
+        document.getElementById('loginScreen').style.display = 'none';
+    }
+});
 
 async function checkForUpdates() {
   try {
@@ -1504,9 +1511,6 @@ document.getElementById('retryOfflineBtn').addEventListener('click', function() 
 });
 
 document.addEventListener('DOMContentLoaded', function() {
-    const savedLang = localStorage.getItem('abavandimwe_lang') || 'rn';
-    applyLanguage(savedLang);
-
     document.getElementById('loginBtn').addEventListener('click', () => showLoading('Logging in', login));
     document.getElementById('gatekeeperBtn').addEventListener('click', () => showLoading('Verifying', gatekeeperLogin));
     document.getElementById('enterChatBtn').addEventListener('click', () => showLoading('Entering Chat', enterChat));
@@ -1564,7 +1568,6 @@ document.addEventListener('DOMContentLoaded', function() {
     if ('PushManager' in window && 'serviceWorker' in navigator && 'Notification' in window) getVapidPublicKey();
     else { const b = document.getElementById('notificationBtn'); if (b) b.style.display = 'none'; }
 
-    // FIX 4: Handle permanent file input change
     document.getElementById('mediaFileInput').addEventListener('change', async (e) => {
         const file = e.target.files[0]; if (!file) return;
         if (file.size > 10 * 1024 * 1024) { alert('Max 10MB'); e.target.value = ''; return; }
@@ -1585,7 +1588,7 @@ document.addEventListener('DOMContentLoaded', function() {
             }
         } catch(err) {}
         setTimeout(() => URL.revokeObjectURL(localUrl), 5000);
-        e.target.value = ''; // Reset for next use
+        e.target.value = '';
     });
 });
 
@@ -1694,10 +1697,10 @@ function connectToChat(user, group) {
             try {
               const dec = await decrypt(m.ciphertext, window.groupPassword, m.salt);
               const isSent = m.sender === window.chatUsername;
-              messagesData[m.id] = { sender: m.sender, text: dec, timestamp: m.created_at, voice_url: m.voice_url, media_url: m.media_url, media_type: m.media_type, delivered: m.delivered, read_by: m.read_by || [] };
+              messagesData[m.id] = { sender: m.sender, text: dec, timestamp: m.created_at, voice_url: m.voice_url, voice_duration: m.voice_duration, media_url: m.media_url, media_type: m.media_type, delivered: m.delivered, read_by: m.read_by || [] };
               if (m.delivered) deliveredMessages.add(m.id);
               if (m.read_by && m.read_by.length) readMessages.add(m.id);
-              addMessage(m.sender, dec, isSent, m.created_at, m.id, m.reply_to, m.voice_url, m.media_url, m.media_type, m.delivered, m.read_by);
+              addMessage(m.sender, dec, isSent, m.created_at, m.id, m.reply_to, m.voice_url, m.voice_duration, m.media_url, m.media_type, m.delivered, m.read_by);
             } catch(e) {}
           }
         }
@@ -1707,8 +1710,8 @@ function connectToChat(user, group) {
         try {
           const dec = await decrypt(d.ciphertext, window.groupPassword, d.salt);
           const isSent = d.sender === window.chatUsername;
-          messagesData[d.message_id] = { sender: d.sender, text: dec, timestamp: d.timestamp, voice_url: d.voice_url, media_url: d.media_url, media_type: d.media_type, delivered: d.delivered || false, read_by: d.read_by || [] };
-          addMessage(d.sender, dec, isSent, d.timestamp, d.message_id, d.reply_to, d.voice_url, d.media_url, d.media_type, d.delivered, d.read_by);
+          messagesData[d.message_id] = { sender: d.sender, text: dec, timestamp: d.timestamp, voice_url: d.voice_url, voice_duration: d.voice_duration, media_url: d.media_url, media_type: d.media_type, delivered: d.delivered || false, read_by: d.read_by || [] };
+          addMessage(d.sender, dec, isSent, d.timestamp, d.message_id, d.reply_to, d.voice_url, d.voice_duration, d.media_url, d.media_type, d.delivered, d.read_by);
           if (!isSent && ws && ws.readyState === WebSocket.OPEN) {
             ws.send(JSON.stringify({ type: 'delivered', message_id: d.message_id }));
             ws.send(JSON.stringify({ type: 'read', message_id: d.message_id }));
@@ -1785,7 +1788,11 @@ function addSystemMessage(text) {
 }
 function escapeHtml(t) { const d = document.createElement('div'); d.textContent = t; return d.innerHTML; }
 
-function addMessage(sender, text, isSent, timestamp, messageId, replyTo, voiceUrl, mediaUrl, mediaType, delivered, readBy) {
+// ===== FIX 1, 2, 3: VOICE PLAYER =====
+// - Duration is passed from the server and rendered immediately.
+// - Audio object is created at render time, so seeking works before playing.
+// - user-select: none prevents Google Search popup.
+function addMessage(sender, text, isSent, timestamp, messageId, replyTo, voiceUrl, voiceDuration, mediaUrl, mediaType, delivered, readBy) {
   const c = document.getElementById('messages');
   const d = document.createElement('div');
   d.className = 'message ' + (isSent ? 'sent' : 'received');
@@ -1820,16 +1827,25 @@ function addMessage(sender, text, isSent, timestamp, messageId, replyTo, voiceUr
     for (let i = 0; i < 28; i++) bars.push(5 + ((sn * (i + 3) * 13) % 18));
     const waveHtml = bars.map(h => `<span class="voice-wave-bar" style="height:${h}px;"></span>`).join('');
     const initial = (sender || '?').charAt(0).toUpperCase();
+
+    // FIX 1: Use server-provided duration or fallback to 0:00
+    let durationText = '0:00';
+    if (voiceDuration && voiceDuration > 0) {
+        const m = Math.floor(voiceDuration / 60);
+        const s = Math.floor(voiceDuration % 60);
+        durationText = m + ':' + String(s).padStart(2, '0');
+    }
+
     content = `
-      <div class="voice-player" data-voice-url="${voiceUrl}" data-message-id="${messageId}">
+      <div class="voice-player" data-voice-url="${voiceUrl}" data-message-id="${messageId}" data-duration="${voiceDuration || 0}">
         <div class="voice-avatar">${initial}</div>
-        <button type="button" class="voice-play-btn" onmousedown="event.preventDefault();playVoice(event, this, '${voiceUrl}')" ontouchstart="event.preventDefault();playVoice(event, this, '${voiceUrl}')"><span class="play-icon">▶</span></button>
-        <div class="voice-waveform" onclick="seekAudio(event, this)" ontouchstart="seekAudio(event, this)" ontouchmove="seekAudio(event, this)">${waveHtml}</div>
+        <button type="button" class="voice-play-btn" onpointerdown="event.preventDefault();playVoice(event, this, '${voiceUrl}')"><span class="play-icon">▶</span></button>
+        <div class="voice-waveform" onpointerdown="seekAudio(event, this)" onpointermove="seekAudio(event, this)">${waveHtml}</div>
         <div class="voice-ball"></div>
-        <a href="${dl}" download class="voice-download">⬇</a>
+        <a href="${dl}" download class="voice-download" onpointerdown="event.stopPropagation()">⬇</a>
       </div>
       <div class="voice-info">
-        <span class="voice-duration" data-duration-for="${messageId}">0:00</span>
+        <span class="voice-duration" data-duration-for="${messageId}">${durationText}</span>
         <span class="voice-time">${time}${isSent ? tickHtml : ''}</span>
       </div>
       ${text && text !== '🎤 Voice message' ? '<div style="font-size:11px;color:#888;margin-top:2px;">' + escapeHtml(text) + '</div>' : ''}`;
@@ -1865,19 +1881,26 @@ function addMessage(sender, text, isSent, timestamp, messageId, replyTo, voiceUr
   c.appendChild(d);
   if (isAtBottom) c.scrollTop = c.scrollHeight;
 
-  // FIX 3: Preload metadata to get the real duration
+  // FIX 3: Pre-initialize the Audio object so seeking works even before playing
   if (voiceUrl) {
-    const a = new Audio();
-    a.preload = 'metadata';
-    a.addEventListener('loadedmetadata', function() {
-      if (isFinite(this.duration) && this.duration > 0) {
+    const player = d.querySelector('.voice-player');
+    const audio = new Audio();
+    audio.preload = 'metadata';
+    audio.src = voiceUrl;
+    player._audio = audio; // Attach to the DOM element
+    player._bars = player.querySelectorAll('.voice-wave-bar');
+    player._waveform = player.querySelector('.voice-waveform');
+    player._ball = player.querySelector('.voice-ball');
+    player._durationSpan = d.querySelector(`.voice-duration[data-duration-for="${messageId}"]`);
+
+    // Listen for metadata to update duration if server didn't provide it
+    audio.addEventListener('loadedmetadata', function() {
+      if ((!voiceDuration || voiceDuration <= 0) && isFinite(this.duration) && this.duration > 0) {
         const mins = Math.floor(this.duration / 60);
         const secs = Math.floor(this.duration % 60);
-        const el = d.querySelector(`.voice-duration[data-duration-for="${messageId}"]`);
-        if (el) el.textContent = mins + ':' + String(secs).padStart(2, '0');
+        if (player._durationSpan) player._durationSpan.textContent = mins + ':' + String(secs).padStart(2, '0');
       }
     });
-    a.src = voiceUrl;
   }
 }
 
@@ -1966,7 +1989,7 @@ async function startRecordingTap(event) {
     mediaRecorder.ondataavailable = (e) => { if (e.data.size > 0) audioChunks.push(e.data); };
     mediaRecorder.onstop = async () => {
       const blob = new Blob(audioChunks, { type: mediaRecorder.mimeType || 'audio/webm' });
-      if (shouldSendOnStop && blob.size > 0 && recordingSeconds >= 1) await uploadVoice(blob);
+      if (shouldSendOnStop && blob.size > 0 && recordingSeconds >= 1) await uploadVoice(blob, recordingSeconds);
       stream.getTracks().forEach(t => t.stop());
       resetRecordingUI();
     };
@@ -2028,124 +2051,120 @@ function resetRecordingUI() {
   document.getElementById('recPauseBtn').textContent = '❚❚';
   document.getElementById('recPauseBtn').classList.remove('paused');
 }
-async function uploadVoice(blob) {
+async function uploadVoice(blob, duration) {
   const fd = new FormData();
   fd.append('file', blob, 'voice.webm');
+  fd.append('duration', duration);
   try {
-    const r = await fetch('/api/upload_voice', { method: 'POST', body: fd });
+    const r = await fetch('/api/upload_voice?duration=' + duration, { method: 'POST', body: fd });
     const d = await r.json();
-    if (d.success) await sendVoiceMessage(d.url);
+    if (d.success) await sendVoiceMessage(d.url, duration);
   } catch(e) { alert('Upload failed'); }
 }
-async function sendVoiceMessage(url) {
+async function sendVoiceMessage(url, duration) {
   if (!ws || ws.readyState !== WebSocket.OPEN) { alert('Not connected.'); return; }
   const text = document.getElementById('messageInput').value.trim() || '🎤 Voice message';
   try {
     const salt = generateSalt();
     const enc = await encrypt(text, window.groupPassword, salt);
-    ws.send(JSON.stringify({ type: 'message', ciphertext: enc, plaintext: text, salt, reply_to: replyingToMessageId || null, voice_url: url }));
+    ws.send(JSON.stringify({ type: 'message', ciphertext: enc, plaintext: text, salt, reply_to: replyingToMessageId || null, voice_url: url, voice_duration: duration }));
     document.getElementById('messageInput').value = '';
     document.getElementById('messageInput').style.height = 'auto';
     cancelReply();
   } catch(e) { alert('Error sending voice.'); }
 }
 
+// FIX 3: Uses pre-initialized audio object from the DOM element
 function playVoice(event, button, url) {
   if(event) event.preventDefault();
   const player = button.closest('.voice-player');
-  const waveform = player.querySelector('.voice-waveform');
-  const ball = player.querySelector('.voice-ball');
-  const durationSpan = player.parentElement.querySelector('.voice-duration');
-  const bars = waveform.querySelectorAll('.voice-wave-bar');
+  const audio = player._audio;
+  if (!audio) { alert('Audio not ready.'); return; }
   const playIcon = button.querySelector('.play-icon');
 
-  if (activeAudio && activeButton && activeButton !== button) {
+  // If another audio is playing, stop it
+  if (activeAudio && activeAudio !== audio) {
     activeAudio.pause();
-    const oldIcon = activeButton.querySelector('.play-icon');
-    if (oldIcon) oldIcon.textContent = '▶';
-    activeButton.closest('.voice-player').classList.remove('playing');
-  }
-
-  if (activeButton === button && activeAudio) {
-    if (activeAudio.paused) {
-      activeAudio.play();
-      playIcon.textContent = '⏸';
-      player.classList.add('playing');
-    } else {
-      activeAudio.pause();
-      playIcon.textContent = '▶';
-      player.classList.remove('playing');
+    if (activeButton) {
+        const oldIcon = activeButton.querySelector('.play-icon');
+        if (oldIcon) oldIcon.textContent = '▶';
+        const oldPlayer = activeButton.closest('.voice-player');
+        if (oldPlayer) oldPlayer.classList.remove('playing');
     }
-    return;
   }
 
-  const audio = new Audio();
-  audio.preload = 'metadata';
-  audio.src = url;
   activeAudio = audio;
   activeButton = button;
-  activeProgressBar = waveform;
+  activeProgressBar = player._waveform;
+  activeDurationSpan = player._durationSpan;
 
-  audio.addEventListener('loadedmetadata', function() {
-    if (isFinite(audio.duration) && audio.duration > 0) {
-      const m = Math.floor(audio.duration / 60);
-      const s = Math.floor(audio.duration % 60);
-      durationSpan.textContent = m + ':' + String(s).padStart(2, '0');
-    }
-  });
+  if (audio.paused) {
+    audio.play();
+    playIcon.textContent = '⏸';
+    player.classList.add('playing');
+  } else {
+    audio.pause();
+    playIcon.textContent = '▶';
+    player.classList.remove('playing');
+  }
 
-  audio.addEventListener('timeupdate', function() {
-    if (!isFinite(audio.duration) || audio.duration <= 0) return;
-    const pct = audio.currentTime / audio.duration;
-    const playedBars = Math.floor(pct * bars.length);
-    bars.forEach((b, i) => {
-      if (i < playedBars) b.classList.add('played');
-      else b.classList.remove('played');
+  // Set up timeupdate if not already
+  if (!audio._hasListeners) {
+    audio._hasListeners = true;
+    audio.addEventListener('timeupdate', function() {
+      if (!isFinite(audio.duration) || audio.duration <= 0) return;
+      const pct = audio.currentTime / audio.duration;
+      const bars = player._bars;
+      const playedBars = Math.floor(pct * bars.length);
+      bars.forEach((b, i) => {
+        if (i < playedBars) b.classList.add('played');
+        else b.classList.remove('played');
+      });
+      if (player._ball) player._ball.style.left = (player._waveform.offsetLeft + pct * player._waveform.offsetWidth) + 'px';
+      if (player._durationSpan) {
+        const m = Math.floor(audio.currentTime / 60);
+        const s = Math.floor(audio.currentTime % 60);
+        player._durationSpan.textContent = m + ':' + String(s).padStart(2, '0');
+      }
     });
-    ball.style.left = (waveform.offsetLeft + pct * waveform.offsetWidth) + 'px';
-    const m = Math.floor(audio.currentTime / 60);
-    const s = Math.floor(audio.currentTime % 60);
-    durationSpan.textContent = m + ':' + String(s).padStart(2, '0');
-  });
-
-  audio.addEventListener('ended', function() {
-    playIcon.textContent = '▶';
-    player.classList.remove('playing');
-    bars.forEach(b => b.classList.remove('played'));
-    ball.style.left = waveform.offsetLeft + 'px';
-    audio.currentTime = 0;
-    const m = Math.floor(audio.duration / 60);
-    const s = Math.floor(audio.duration % 60);
-    durationSpan.textContent = m + ':' + String(s).padStart(2, '0');
-  });
-
-  audio.addEventListener('error', function() {
-    playIcon.textContent = '▶';
-    player.classList.remove('playing');
-    durationSpan.textContent = '0:00';
-  });
-
-  audio.play();
-  playIcon.textContent = '⏸';
-  player.classList.add('playing');
+    audio.addEventListener('ended', function() {
+      playIcon.textContent = '▶';
+      player.classList.remove('playing');
+      if (player._bars) player._bars.forEach(b => b.classList.remove('played'));
+      if (player._ball) player._ball.style.left = player._waveform.offsetLeft + 'px';
+      audio.currentTime = 0;
+      if (player._durationSpan) {
+        const m = Math.floor(audio.duration / 60);
+        const s = Math.floor(audio.duration % 60);
+        player._durationSpan.textContent = m + ':' + String(s).padStart(2, '0');
+      }
+    });
+    audio.addEventListener('error', function() {
+      playIcon.textContent = '▶';
+      player.classList.remove('playing');
+      if (player._durationSpan) player._durationSpan.textContent = '0:00';
+    });
+  }
 }
 
+// FIX 3: Uses the pre-initialized audio object so it can seek before playing
 function seekAudio(event, waveform) {
-  if (!activeAudio || activeProgressBar !== waveform) return;
-  if (event.cancelable) event.preventDefault(); 
+  if (event.cancelable) event.preventDefault();
+  const player = waveform.closest('.voice-player');
+  if (!player || !player._audio) return;
+  const audio = player._audio;
+  if (!isFinite(audio.duration) || audio.duration <= 0) return;
+
   const rect = waveform.getBoundingClientRect();
   let clientX = event.clientX;
   if (event.touches && event.touches.length) clientX = event.touches[0].clientX;
   const x = clientX - rect.left;
   const pct = Math.min(1, Math.max(0, x / rect.width));
-  if (isFinite(activeAudio.duration) && activeAudio.duration > 0) {
-    activeAudio.currentTime = activeAudio.duration * pct;
-  }
+  audio.currentTime = audio.duration * pct;
 }
 
 async function shareMedia(event) {
   if(event) event.preventDefault();
-  // FIX 4: Just click the permanent hidden file input
   document.getElementById('mediaFileInput').click();
 }
 
@@ -2177,8 +2196,6 @@ async function loadAdminData() {
       tr.innerHTML = `<td>${escapeHtml(m.sender)}</td><td>${escapeHtml(m.group_name)}</td><td>${escapeHtml(msgText.substring(0, 40))}${msgText.length > 40 ? '...' : ''}</td><td>${dt}</td><td><button class="action-btn" onclick="deleteMessage(${m.id})">Delete</button></td>`;
       mt.appendChild(tr);
     });
-
-    // FIX 5: Render Logs
     const lc = document.getElementById('logsContainer');
     lc.innerHTML = '';
     if (d.logs && d.logs.length) {
@@ -2224,7 +2241,7 @@ async function logout() {
 }
 function requestAccess() { window.open('https://wa.me/250788495861?text=I%20need%20access%20to%20ABAVANDIMWE', '_blank'); }
 
-console.log('✅ ABAVANDIMWE v9.7 loaded');
+console.log('✅ ABAVANDIMWE v9.8 loaded');
 </script>
 </body>
 </html>
@@ -2237,12 +2254,14 @@ if __name__ == "__main__":
     print("""
 ╔════════════════════════════════════════════════════════════╗
 ║              ABAVANDIMWE SECURE MESSAGING                  ║
-║                    Version: v9.7                            ║
+║                    Version: v9.8                            ║
 ║                                                            ║
+║  ✅ FIXED: Audio duration (server-provided, no more 00:00) ║
+║  ✅ FIXED: Google Search popup (user-select, touch-callout)║
+║  ✅ FIXED: Tap-to-seek works before playing (pre-init audio)║
 ║  ✅ FIXED: First-load offline overlay (inline script)       ║
-║  ✅ FIXED: Admin Panel now shows real message content       ║
-║  ✅ FIXED: Audio duration and tap-to-seek                   ║
-║  ✅ FIXED: Instant image sharing (permanent input)          ║
+║  ✅ FIXED: Admin Panel shows full messages                  ║
+║  ✅ FIXED: Instant image sharing                            ║
 ║  ✅ ADDED: Logs tab for security auditing                   ║
 ║  ✅ Full security (Argon2, AES-GCM, Rate Limiting)          ║
 ╚════════════════════════════════════════════════════════════╝

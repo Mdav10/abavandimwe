@@ -1,6 +1,6 @@
 // ABAVANDIMWE - Service Worker
-// Version: 9.2
-const CACHE_VERSION = 'v9.2';
+// Version: 9.9 (Updated to support offline overlay)
+const CACHE_VERSION = 'v9.9';
 const CACHE_NAME = 'abavandimwe-' + CACHE_VERSION;
 
 const STATIC_ASSETS = [
@@ -75,7 +75,7 @@ self.addEventListener('notificationclick', (event) => {
     );
 });
 
-// ===== FETCH — no offline.html fallback for HTML =====
+// ===== FETCH =====
 self.addEventListener('fetch', (event) => {
     const request = event.request;
     const url = new URL(request.url);
@@ -96,8 +96,37 @@ self.addEventListener('fetch', (event) => {
         return;
     }
 
-    // HTML navigation — browser goes straight to network
+    // ===== FIX: HTML navigation =====
+    // We now try to fetch from network. If it fails (offline), we return a minimal
+    // HTML page that instantly shows the custom overlay. This replaces the
+    // browser's default "You're offline" page (from your screenshot 1).
     if (request.mode === 'navigate' || url.pathname === '/') {
+        event.respondWith(
+            fetch(request).catch(() => {
+                return new Response(`
+                    <!DOCTYPE html>
+                    <html>
+                    <head>
+                        <meta charset="UTF-8">
+                        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                        <title>ABAVANDIMWE</title>
+                        <style>
+                            body { margin:0; padding:0; background:#0a0a0f; color:#0f0; font-family:monospace; }
+                            .container { display:flex; flex-direction:column; align-items:center; justify-content:center; height:100vh; text-align:center; }
+                            h2 { color:#ff4444; font-size:24px; }
+                            p { color:#888; font-size:14px; }
+                        </style>
+                    </head>
+                    <body>
+                        <div class="container">
+                            <h2>📶 No Internet Connection</h2>
+                            <p>Please check your network settings and try again.</p>
+                        </div>
+                    </body>
+                    </html>
+                `, { headers: { 'Content-Type': 'text/html' } });
+            })
+        );
         return;
     }
 
