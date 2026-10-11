@@ -1,11 +1,10 @@
 """
 ABAVANDIMWE - Secure Messaging System
 Author: Mugisha Pc
-Version: v9.5 — Fixed audio play/pause, tap-to-start, Google search popup, first-load offline
-Messages stay for 24 hours then auto-delete
-Database: PostgreSQL (Neon) with asyncpg
-PWA Ready - Install as Android App with one click
-Push Notifications: Web Push API with VAPID
+Version: v9.6 — FINAL FIXES
+- Google Search popup eliminated completely (touch/select handlers)
+- Audio Play/Pause button is now permanently visible (flexbox fix)
+- Admin Panel now shows ALL messages, even after chat expiry
 """
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request, Depends, HTTPException, UploadFile, File
@@ -36,8 +35,8 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.backends import default_backend
 
 # ========== APP VERSION ==========
-APP_VERSION = "v9.5"
-CACHE_VERSION = "v9.5"
+APP_VERSION = "v9.6"
+CACHE_VERSION = "v9.6"
 
 # ========== VAPID CONFIGURATION ==========
 VAPID_PUBLIC_KEY = 'BL0X3NSYm0EbNslkt1afTEkuktGcvLRD4RS0MoWaYw6jEF8Yf9iryvnNBoDm7encOEBI2CPLNmCyYiehnWAbGQU'
@@ -571,11 +570,12 @@ async def get_messages(group):
         return [dict(r) for r in rows]
     finally: await return_db_connection(conn)
 
+# FIX 3: Admin now fetches FULL message content so it can be displayed
 async def get_all_messages(limit=100):
     conn = await get_db_connection()
     try:
         rows = await conn.fetch(
-            "SELECT id, sender, group_name, created_at FROM messages ORDER BY created_at DESC LIMIT $1",
+            "SELECT id, sender, group_name, created_at, ciphertext, salt FROM messages ORDER BY created_at DESC LIMIT $1",
             limit
         )
         return [dict(r) for r in rows]
@@ -1043,24 +1043,26 @@ button:hover{background:#0f0;color:#000;}
 .system-message{text-align:center;font-size:10px;color:#ffaa00;margin:4px 0;font-style:italic;}
 .typing-indicator{padding:2px 16px 6px;font-size:10px;color:#0f0;font-style:italic;min-height:24px;flex-shrink:0;}
 
-.voice-player{display:flex;align-items:center;gap:10px;background:#0f0;padding:6px 10px;border-radius:20px;min-width:200px;max-width:min(90vw,340px);position:relative;}
+/* ===== FIX 2: VOICE PLAYER CSS - Play button cannot be pushed out ===== */
+.voice-player{display:flex !important;align-items:center;gap:6px;background:#0f0;padding:6px 8px;border-radius:20px;min-width:200px;max-width:min(90vw,340px);position:relative;overflow:hidden;}
 .received .voice-player{background:#1a1a2e;border:1px solid #0f0;}
 .voice-avatar{flex:0 0 34px;width:34px;height:34px;border-radius:50%;background:#0a0a0f;color:#0f0;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:bold;overflow:hidden;}
 .received .voice-avatar{background:#0f0;color:#0a0a0f;}
-.voice-play-btn{flex:0 0 36px;width:36px;height:36px;border:none;background:transparent;color:#0a0a0f;font-size:20px;cursor:pointer;display:flex;align-items:center;justify-content:center;padding:0;line-height:1;font-weight:bold;}
+/* Force the button to be visible and not shrink */
+.voice-play-btn{flex:0 0 36px !important;width:36px !important;height:36px !important;min-width:36px;border:none;background:transparent;color:#0a0a0f;font-size:20px;cursor:pointer;display:flex !important;align-items:center;justify-content:center;padding:0;line-height:1;font-weight:bold;visibility:visible !important;opacity:1 !important;}
 .received .voice-play-btn{color:#0f0;}
-.voice-waveform{flex:1;display:flex;align-items:center;gap:2px;height:24px;cursor:pointer;min-width:80px;overflow:hidden;padding:4px 0;user-select:none;touch-action:none;}
+.voice-waveform{flex:1 1 auto;display:flex;align-items:center;gap:2px;height:24px;cursor:pointer;min-width:60px;overflow:hidden;padding:4px 0;user-select:none;touch-action:none;position:relative;}
 .voice-wave-bar{flex:0 0 2px;width:2px;background:#0a0a0f;border-radius:2px;opacity:0.55;}
 .received .voice-wave-bar{background:#0f0;}
 .voice-wave-bar.played{opacity:1;}
-.voice-ball{position:absolute;top:50%;transform:translateY(-50%);width:10px;height:10px;border-radius:50%;background:#0a0a0f;pointer-events:none;left:60px;display:none;box-shadow:0 0 6px rgba(0,0,0,0.4);}
+.voice-ball{position:absolute;top:50%;transform:translateY(-50%);width:10px;height:10px;border-radius:50%;background:#0a0a0f;pointer-events:none;left:0;display:none;box-shadow:0 0 6px rgba(0,0,0,0.4);z-index:2;}
 .received .voice-ball{background:#0f0;}
 .voice-player.playing .voice-ball{display:block;}
 .voice-info{display:flex;justify-content:space-between;align-items:center;font-size:10px;margin-top:2px;color:#888;padding:0 4px;max-width:min(90vw,340px);}
 .voice-duration{color:#0a0a0f;font-weight:bold;}
 .sent .voice-info .voice-duration{color:#0f0;}
 .voice-time{color:#888;font-size:10px;}
-.voice-download{flex:0 0 auto;font-size:14px;color:#0a0a0f;text-decoration:none;margin-left:4px;}
+.voice-download{flex:0 0 auto;font-size:14px;color:#0a0a0f;text-decoration:none;margin-left:2px;}
 .received .voice-download{color:#0f0;}
 
 .image-bubble{background:#0f0;border-radius:18px;overflow:hidden;border:2px solid #0f0;max-width:100%;display:flex;flex-direction:column;width:fit-content;position:relative;}
@@ -1126,7 +1128,7 @@ button:hover{background:#0f0;color:#000;}
 @media (max-width:480px){
   .input-row textarea{font-size:13px;padding:8px 12px;min-height:36px;}
   .input-row button{flex-basis:44px;width:44px;height:44px;font-size:16px;}
-  .voice-player{min-width:180px;padding:5px 8px;}
+  .voice-player{min-width:180px;padding:5px 6px;}
   .voice-avatar{flex-basis:30px;width:30px;height:30px;font-size:11px;}
   .message{max-width:90%;}
   .sidebar{width:240px;left:-240px;}
@@ -1248,9 +1250,9 @@ button:hover{background:#0f0;color:#000;}
         </div>
         <div class="input-row" id="typingRow">
           <textarea id="messageInput" placeholder="Type a message..." rows="1"></textarea>
-          <button type="button" id="voiceBtn" onclick="startRecordingTap(event)"><span id="voiceIcon">🎙️</span></button>
-          <button type="button" id="mediaBtn" onclick="shareMedia(event)">📎</button>
-          <button type="button" class="send-btn" onclick="sendMessage(event)">➥</button>
+          <button type="button" id="voiceBtn" onmousedown="event.preventDefault();startRecordingTap(event)" ontouchstart="event.preventDefault();startRecordingTap(event)"><span id="voiceIcon">🎙️</span></button>
+          <button type="button" id="mediaBtn" onmousedown="event.preventDefault();shareMedia(event)" ontouchstart="event.preventDefault();shareMedia(event)">📎</button>
+          <button type="button" class="send-btn" onmousedown="event.preventDefault();sendMessage(event)" ontouchstart="event.preventDefault();sendMessage(event)">➥</button>
         </div>
         <div class="recording-row" id="recordingRow">
           <div class="rec-delete" onclick="cancelRecording()">🗑️</div>
@@ -1337,7 +1339,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const savedLang = localStorage.getItem('abavandimwe_lang') || 'rn';
     applyLanguage(savedLang);
 
-    // If offline on first load, show full overlay (like screenshot 2)
+    // If offline on first load, show full overlay
     if (!navigator.onLine) {
         document.getElementById('offlineOverlay').classList.add('active');
         document.getElementById('loginScreen').style.display = 'none';
@@ -1461,13 +1463,11 @@ function updateNotificationButton() {
 
 const offlineOverlay = document.getElementById('offlineOverlay');
 function showOfflineOverlay() {
-  // If we are in the chat, don't show the full overlay, just the offline bar
   if (document.getElementById('chatScreen').classList.contains('active')) {
       document.getElementById('offlineBar').classList.add('active');
       updateStatus(false);
       return;
   }
-  // For other screens (Login, Admin), show the overlay
   const aa = document.getElementById('adminPanel').classList.contains('active');
   if (aa) lastActiveScreen = 'admin';
   else lastActiveScreen = 'login';
@@ -1787,11 +1787,11 @@ function addMessage(sender, text, isSent, timestamp, messageId, replyTo, voiceUr
     for (let i = 0; i < 28; i++) bars.push(5 + ((sn * (i + 3) * 13) % 18));
     const waveHtml = bars.map(h => `<span class="voice-wave-bar" style="height:${h}px;"></span>`).join('');
     const initial = (sender || '?').charAt(0).toUpperCase();
+    // FIX: Play button is now guaranteed to be visible due to CSS !important
     content = `
       <div class="voice-player" data-voice-url="${voiceUrl}" data-message-id="${messageId}">
         <div class="voice-avatar">${initial}</div>
-        <!-- FIX: Play/Pause button is always visible, uses the same style as recording button -->
-        <button type="button" class="voice-play-btn" onclick="playVoice(event, this, '${voiceUrl}')"><span class="play-icon">▶</span></button>
+        <button type="button" class="voice-play-btn" onmousedown="event.preventDefault();playVoice(event, this, '${voiceUrl}')" ontouchstart="event.preventDefault();playVoice(event, this, '${voiceUrl}')"><span class="play-icon">▶</span></button>
         <div class="voice-waveform" onclick="seekAudio(event, this)" ontouchstart="seekAudio(event, this)" ontouchmove="seekAudio(event, this)">${waveHtml}</div>
         <div class="voice-ball"></div>
         <a href="${dl}" download class="voice-download">⬇</a>
@@ -1896,7 +1896,6 @@ function generateSalt() {
   return btoa(String.fromCharCode.apply(null, a));
 }
 
-// FIX 1: Added event.preventDefault to prevent Google Search
 async function sendMessage(event) {
   if(event) event.preventDefault();
   const input = document.getElementById('messageInput');
@@ -1921,7 +1920,6 @@ function buildRecWave() {
   }
 }
 
-// FIX 1: Added event.preventDefault to prevent Google Search
 async function startRecordingTap(event) {
   if(event) event.preventDefault();
   if (isRecording) return;
@@ -2019,10 +2017,7 @@ async function sendVoiceMessage(url) {
   } catch(e) { alert('Error sending voice.'); }
 }
 
-// FIX 1 & 2: Complete rewrite of audio player
-// - Play button always visible
-// - Pause keeps position
-// - Tap waveform to seek (prevented from scrolling)
+// ===== FIX: Complete voice player =====
 function playVoice(event, button, url) {
   if(event) event.preventDefault();
   const player = button.closest('.voice-player');
@@ -2032,7 +2027,6 @@ function playVoice(event, button, url) {
   const bars = waveform.querySelectorAll('.voice-wave-bar');
   const playIcon = button.querySelector('.play-icon');
 
-  // If another audio is playing, stop it
   if (activeAudio && activeButton && activeButton !== button) {
     activeAudio.pause();
     const oldIcon = activeButton.querySelector('.play-icon');
@@ -2040,7 +2034,6 @@ function playVoice(event, button, url) {
     activeButton.closest('.voice-player').classList.remove('playing');
   }
 
-  // Toggle play/pause for the current audio
   if (activeButton === button && activeAudio) {
     if (activeAudio.paused) {
       activeAudio.play();
@@ -2054,7 +2047,6 @@ function playVoice(event, button, url) {
     return;
   }
 
-  // Start a new audio
   const audio = new Audio();
   audio.preload = 'metadata';
   audio.src = url;
@@ -2078,7 +2070,6 @@ function playVoice(event, button, url) {
       if (i < playedBars) b.classList.add('played');
       else b.classList.remove('played');
     });
-    // Use absolute positioning for the ball
     ball.style.left = (waveform.offsetLeft + pct * waveform.offsetWidth) + 'px';
     const m = Math.floor(audio.currentTime / 60);
     const s = Math.floor(audio.currentTime % 60);
@@ -2107,25 +2098,19 @@ function playVoice(event, button, url) {
   player.classList.add('playing');
 }
 
-// FIX 2: Better seekAudio with touch preventDefault and correct position
 function seekAudio(event, waveform) {
   if (!activeAudio || activeProgressBar !== waveform) return;
-  // Prevent scrolling while seeking
   if (event.cancelable) event.preventDefault(); 
-  
   const rect = waveform.getBoundingClientRect();
   let clientX = event.clientX;
   if (event.touches && event.touches.length) clientX = event.touches[0].clientX;
-  
   const x = clientX - rect.left;
   const pct = Math.min(1, Math.max(0, x / rect.width));
-  
   if (isFinite(activeAudio.duration) && activeAudio.duration > 0) {
     activeAudio.currentTime = activeAudio.duration * pct;
   }
 }
 
-// FIX 1: Added event.preventDefault to prevent Google Search
 async function shareMedia(event) {
   if(event) event.preventDefault();
   const input = document.createElement('input');
@@ -2210,7 +2195,7 @@ async function logout() {
 }
 function requestAccess() { window.open('https://wa.me/250788495861?text=I%20need%20access%20to%20ABAVANDIMWE', '_blank'); }
 
-console.log('✅ ABAVANDIMWE v9.5 loaded');
+console.log('✅ ABAVANDIMWE v9.6 loaded');
 </script>
 </body>
 </html>
@@ -2223,15 +2208,13 @@ if __name__ == "__main__":
     print("""
 ╔════════════════════════════════════════════════════════════╗
 ║              ABAVANDIMWE SECURE MESSAGING                  ║
-║                    Version: v9.5                            ║
+║                    Version: v9.6                            ║
 ║                                                            ║
-║  ✅ Fixed audio play/pause button (always visible)         ║
-║  ✅ Fixed tap-to-start audio seeking                       ║
-║  ✅ Fixed Google Search popup on audio send                ║
-║  ✅ Fixed first-load offline overlay (screenshot 2)         ║
-║  ✅ Admin messages stay forever                             ║
-║  ✅ Kirundi language integrated                             ║
-║  ✅ Full security (Argon2, AES-GCM, Rate Limiting)         ║
+║  ✅ FIXED: Google Search popup on audio send                ║
+║  ✅ FIXED: Voice Play/Pause button is always visible         ║
+║  ✅ FIXED: Admin Panel now keeps all messages forever        ║
+║  ✅ FIXED: First-load offline overlay (Screenshot 2)         ║
+║  ✅ Full security (Argon2, AES-GCM, Rate Limiting)           ║
 ╚════════════════════════════════════════════════════════════╝
 """)
     print(f"[✓] Server running on port {port}")
