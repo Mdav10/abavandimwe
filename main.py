@@ -1,10 +1,14 @@
 """
 ABAVANDIMWE - Secure Messaging System
 Author: Mugisha Pc
-Version: v9.8 — FINAL FINAL FIXES
-- Audio duration now sent from server (no more 00:00)
-- Google Search popup permanently disabled (user-select, touch-callout)
-- Tap-to-seek now works perfectly (Audio object initialized on render)
+Version: v9.9 — FINAL
+- Tap-to-seek audio player (jumps to tap position)
+- Play button always visible when paused
+- Auto-reconnect when network returns
+- Offline first-load overlay (custom, not browser default)
+- Admin Panel shows all messages with plaintext
+- Logs tab for security auditing
+- Kirundi language integrated
 """
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request, Depends, HTTPException, UploadFile, File
@@ -35,8 +39,8 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.backends import default_backend
 
 # ========== APP VERSION ==========
-APP_VERSION = "v9.8"
-CACHE_VERSION = "v9.8"
+APP_VERSION = "v9.9"
+CACHE_VERSION = "v9.9"
 
 # ========== VAPID CONFIGURATION ==========
 VAPID_PUBLIC_KEY = 'BL0X3NSYm0EbNslkt1afTEkuktGcvLRD4RS0MoWaYw6jEF8Yf9iryvnNBoDm7encOEBI2CPLNmCyYiehnWAbGQU'
@@ -1052,7 +1056,6 @@ button:hover{background:#0f0;color:#000;}
 .system-message{text-align:center;font-size:10px;color:#ffaa00;margin:4px 0;font-style:italic;}
 .typing-indicator{padding:2px 16px 6px;font-size:10px;color:#0f0;font-style:italic;min-height:24px;flex-shrink:0;}
 
-/* ===== FIX 2: VOICE PLAYER CSS - Prevent Google Search & Selection ===== */
 .voice-player{display:flex !important;align-items:center;gap:6px;background:#0f0;padding:6px 8px;border-radius:20px;min-width:200px;max-width:min(90vw,340px);position:relative;overflow:hidden;
     -webkit-user-select: none; -moz-user-select: none; -ms-user-select: none; user-select: none;
     -webkit-touch-callout: none; -webkit-tap-highlight-color: transparent;
@@ -1415,6 +1418,19 @@ if ('serviceWorker' in navigator) {
   });
 }
 
+// ===== AUTO-RECONNECT ON MESSAGE FROM SW =====
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.addEventListener('message', function(e) {
+    if (e.data && e.data.type === 'RECONNECT') {
+      if (window.chatUsername && window.chatGroup) {
+        if (!ws || ws.readyState !== WebSocket.OPEN) {
+          connectToChat(window.chatUsername, window.chatGroup);
+        }
+      }
+    }
+  });
+}
+
 let deferredPrompt;
 const installBtn = document.getElementById('installBtn');
 window.addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); deferredPrompt = e; installBtn.classList.add('show'); });
@@ -1544,13 +1560,25 @@ document.addEventListener('DOMContentLoaded', function() {
     });
 
     let offlineTimer = null;
+
+    // ===== AUTO-RECONNECT WHEN NETWORK RETURNS =====
     window.addEventListener('online', () => {
         clearTimeout(offlineTimer);
         if (offlineOverlay.classList.contains('active')) hideOfflineOverlay();
         if (document.getElementById('chatScreen').classList.contains('active')) {
-            if (!ws || ws.readyState !== WebSocket.OPEN) { if (window.chatUsername && window.chatGroup) connectToChat(window.chatUsername, window.chatGroup); }
+            document.getElementById('offlineBar').classList.remove('active');
+            if (!ws || ws.readyState !== WebSocket.OPEN) {
+                if (window.chatUsername && window.chatGroup) {
+                    setTimeout(() => {
+                        connectToChat(window.chatUsername, window.chatGroup);
+                    }, 500);
+                }
+            } else {
+                updateStatus(true);
+            }
         }
     });
+
     window.addEventListener('offline', () => {
         clearTimeout(offlineTimer);
         offlineTimer = setTimeout(() => {
@@ -1565,6 +1593,17 @@ document.addEventListener('DOMContentLoaded', function() {
         }, 3000);
     });
 
+    // Periodic reconnect check (every 10s) as fallback
+    setInterval(() => {
+        if (document.getElementById('chatScreen').classList.contains('active')) {
+            if (navigator.onLine && (!ws || ws.readyState !== WebSocket.OPEN)) {
+                if (window.chatUsername && window.chatGroup) {
+                    connectToChat(window.chatUsername, window.chatGroup);
+                }
+            }
+        }
+    }, 10000);
+
     if ('PushManager' in window && 'serviceWorker' in navigator && 'Notification' in window) getVapidPublicKey();
     else { const b = document.getElementById('notificationBtn'); if (b) b.style.display = 'none'; }
 
@@ -1576,7 +1615,7 @@ document.addEventListener('DOMContentLoaded', function() {
         const text = '📎 ' + file.name;
         const ts = Date.now() / 1000;
         messagesData[tempId] = { sender: window.chatUsername, text, timestamp: ts, media_url: localUrl, media_type: file.type };
-        addMessage(window.chatUsername, text, true, ts, tempId, null, null, localUrl, file.type);
+        addMessage(window.chatUsername, text, true, ts, tempId, null, null, null, localUrl, file.type);
         const fd = new FormData(); fd.append('file', file);
         try {
             const r = await fetch('/api/upload_media', { method: 'POST', body: fd });
@@ -1788,10 +1827,6 @@ function addSystemMessage(text) {
 }
 function escapeHtml(t) { const d = document.createElement('div'); d.textContent = t; return d.innerHTML; }
 
-// ===== FIX 1, 2, 3: VOICE PLAYER =====
-// - Duration is passed from the server and rendered immediately.
-// - Audio object is created at render time, so seeking works before playing.
-// - user-select: none prevents Google Search popup.
 function addMessage(sender, text, isSent, timestamp, messageId, replyTo, voiceUrl, voiceDuration, mediaUrl, mediaType, delivered, readBy) {
   const c = document.getElementById('messages');
   const d = document.createElement('div');
@@ -1828,7 +1863,6 @@ function addMessage(sender, text, isSent, timestamp, messageId, replyTo, voiceUr
     const waveHtml = bars.map(h => `<span class="voice-wave-bar" style="height:${h}px;"></span>`).join('');
     const initial = (sender || '?').charAt(0).toUpperCase();
 
-    // FIX 1: Use server-provided duration or fallback to 0:00
     let durationText = '0:00';
     if (voiceDuration && voiceDuration > 0) {
         const m = Math.floor(voiceDuration / 60);
@@ -1839,8 +1873,14 @@ function addMessage(sender, text, isSent, timestamp, messageId, replyTo, voiceUr
     content = `
       <div class="voice-player" data-voice-url="${voiceUrl}" data-message-id="${messageId}" data-duration="${voiceDuration || 0}">
         <div class="voice-avatar">${initial}</div>
-        <button type="button" class="voice-play-btn" onpointerdown="event.preventDefault();playVoice(event, this, '${voiceUrl}')"><span class="play-icon">▶</span></button>
-        <div class="voice-waveform" onpointerdown="seekAudio(event, this)" onpointermove="seekAudio(event, this)">${waveHtml}</div>
+        <button type="button" class="voice-play-btn" onpointerdown="playVoice(event, this, '${voiceUrl}')">
+          <span class="play-icon">▶</span>
+        </button>
+        <div class="voice-waveform"
+             onpointerdown="seekAudio(event, this)"
+             onpointerup="seekAudio(event, this)">
+          ${waveHtml}
+        </div>
         <div class="voice-ball"></div>
         <a href="${dl}" download class="voice-download" onpointerdown="event.stopPropagation()">⬇</a>
       </div>
@@ -1881,19 +1921,17 @@ function addMessage(sender, text, isSent, timestamp, messageId, replyTo, voiceUr
   c.appendChild(d);
   if (isAtBottom) c.scrollTop = c.scrollHeight;
 
-  // FIX 3: Pre-initialize the Audio object so seeking works even before playing
   if (voiceUrl) {
     const player = d.querySelector('.voice-player');
     const audio = new Audio();
     audio.preload = 'metadata';
     audio.src = voiceUrl;
-    player._audio = audio; // Attach to the DOM element
+    player._audio = audio;
     player._bars = player.querySelectorAll('.voice-wave-bar');
     player._waveform = player.querySelector('.voice-waveform');
     player._ball = player.querySelector('.voice-ball');
     player._durationSpan = d.querySelector(`.voice-duration[data-duration-for="${messageId}"]`);
 
-    // Listen for metadata to update duration if server didn't provide it
     audio.addEventListener('loadedmetadata', function() {
       if ((!voiceDuration || voiceDuration <= 0) && isFinite(this.duration) && this.duration > 0) {
         const mins = Math.floor(this.duration / 60);
@@ -2054,7 +2092,6 @@ function resetRecordingUI() {
 async function uploadVoice(blob, duration) {
   const fd = new FormData();
   fd.append('file', blob, 'voice.webm');
-  fd.append('duration', duration);
   try {
     const r = await fetch('/api/upload_voice?duration=' + duration, { method: 'POST', body: fd });
     const d = await r.json();
@@ -2074,22 +2111,23 @@ async function sendVoiceMessage(url, duration) {
   } catch(e) { alert('Error sending voice.'); }
 }
 
-// FIX 3: Uses pre-initialized audio object from the DOM element
+// ===== FIX A: Tap-to-seek, Play button always visible =====
 function playVoice(event, button, url) {
   if(event) event.preventDefault();
+  if(event) event.stopPropagation();
+
   const player = button.closest('.voice-player');
   const audio = player._audio;
-  if (!audio) { alert('Audio not ready.'); return; }
+  if (!audio) { return; }
   const playIcon = button.querySelector('.play-icon');
 
-  // If another audio is playing, stop it
   if (activeAudio && activeAudio !== audio) {
     activeAudio.pause();
     if (activeButton) {
-        const oldIcon = activeButton.querySelector('.play-icon');
-        if (oldIcon) oldIcon.textContent = '▶';
-        const oldPlayer = activeButton.closest('.voice-player');
-        if (oldPlayer) oldPlayer.classList.remove('playing');
+      const oldIcon = activeButton.querySelector('.play-icon');
+      if (oldIcon) oldIcon.textContent = '▶';
+      const oldPlayer = activeButton.closest('.voice-player');
+      if (oldPlayer) oldPlayer.classList.remove('playing');
     }
   }
 
@@ -2099,7 +2137,7 @@ function playVoice(event, button, url) {
   activeDurationSpan = player._durationSpan;
 
   if (audio.paused) {
-    audio.play();
+    audio.play().catch(() => {});
     playIcon.textContent = '⏸';
     player.classList.add('playing');
   } else {
@@ -2108,9 +2146,9 @@ function playVoice(event, button, url) {
     player.classList.remove('playing');
   }
 
-  // Set up timeupdate if not already
   if (!audio._hasListeners) {
     audio._hasListeners = true;
+
     audio.addEventListener('timeupdate', function() {
       if (!isFinite(audio.duration) || audio.duration <= 0) return;
       const pct = audio.currentTime / audio.duration;
@@ -2120,47 +2158,81 @@ function playVoice(event, button, url) {
         if (i < playedBars) b.classList.add('played');
         else b.classList.remove('played');
       });
-      if (player._ball) player._ball.style.left = (player._waveform.offsetLeft + pct * player._waveform.offsetWidth) + 'px';
+      if (player._ball)
+        player._ball.style.left = (player._waveform.offsetLeft + pct * player._waveform.offsetWidth) + 'px';
       if (player._durationSpan) {
         const m = Math.floor(audio.currentTime / 60);
         const s = Math.floor(audio.currentTime % 60);
         player._durationSpan.textContent = m + ':' + String(s).padStart(2, '0');
       }
     });
+
+    audio.addEventListener('pause', function() {
+      if (playIcon) playIcon.textContent = '▶';
+      player.classList.remove('playing');
+    });
+
+    audio.addEventListener('play', function() {
+      if (playIcon) playIcon.textContent = '⏸';
+      player.classList.add('playing');
+    });
+
     audio.addEventListener('ended', function() {
-      playIcon.textContent = '▶';
+      if (playIcon) playIcon.textContent = '▶';
       player.classList.remove('playing');
       if (player._bars) player._bars.forEach(b => b.classList.remove('played'));
       if (player._ball) player._ball.style.left = player._waveform.offsetLeft + 'px';
       audio.currentTime = 0;
       if (player._durationSpan) {
-        const m = Math.floor(audio.duration / 60);
-        const s = Math.floor(audio.duration % 60);
+        const m = Math.floor((audio.duration || 0) / 60);
+        const s = Math.floor((audio.duration || 0) % 60);
         player._durationSpan.textContent = m + ':' + String(s).padStart(2, '0');
       }
     });
+
     audio.addEventListener('error', function() {
-      playIcon.textContent = '▶';
+      if (playIcon) playIcon.textContent = '▶';
       player.classList.remove('playing');
-      if (player._durationSpan) player._durationSpan.textContent = '0:00';
     });
   }
 }
 
-// FIX 3: Uses the pre-initialized audio object so it can seek before playing
 function seekAudio(event, waveform) {
   if (event.cancelable) event.preventDefault();
+  if (event.stopPropagation) event.stopPropagation();
+
   const player = waveform.closest('.voice-player');
   if (!player || !player._audio) return;
   const audio = player._audio;
+
   if (!isFinite(audio.duration) || audio.duration <= 0) return;
 
   const rect = waveform.getBoundingClientRect();
   let clientX = event.clientX;
   if (event.touches && event.touches.length) clientX = event.touches[0].clientX;
+
   const x = clientX - rect.left;
   const pct = Math.min(1, Math.max(0, x / rect.width));
+
   audio.currentTime = audio.duration * pct;
+
+  if (!audio.paused) {
+    audio.play().catch(() => {});
+  }
+
+  const bars = player._bars;
+  const playedBars = Math.floor(pct * bars.length);
+  bars.forEach((b, i) => {
+    if (i < playedBars) b.classList.add('played');
+    else b.classList.remove('played');
+  });
+  if (player._ball)
+    player._ball.style.left = (waveform.offsetLeft + pct * waveform.offsetWidth) + 'px';
+  if (player._durationSpan) {
+    const m = Math.floor(audio.currentTime / 60);
+    const s = Math.floor(audio.currentTime % 60);
+    player._durationSpan.textContent = m + ':' + String(s).padStart(2, '0');
+  }
 }
 
 async function shareMedia(event) {
@@ -2241,7 +2313,7 @@ async function logout() {
 }
 function requestAccess() { window.open('https://wa.me/250788495861?text=I%20need%20access%20to%20ABAVANDIMWE', '_blank'); }
 
-console.log('✅ ABAVANDIMWE v9.8 loaded');
+console.log('✅ ABAVANDIMWE v9.9 loaded');
 </script>
 </body>
 </html>
@@ -2254,15 +2326,15 @@ if __name__ == "__main__":
     print("""
 ╔════════════════════════════════════════════════════════════╗
 ║              ABAVANDIMWE SECURE MESSAGING                  ║
-║                    Version: v9.8                            ║
+║                    Version: v9.9                            ║
 ║                                                            ║
-║  ✅ FIXED: Audio duration (server-provided, no more 00:00) ║
-║  ✅ FIXED: Google Search popup (user-select, touch-callout)║
-║  ✅ FIXED: Tap-to-seek works before playing (pre-init audio)║
-║  ✅ FIXED: First-load offline overlay (inline script)       ║
-║  ✅ FIXED: Admin Panel shows full messages                  ║
-║  ✅ FIXED: Instant image sharing                            ║
-║  ✅ ADDED: Logs tab for security auditing                   ║
+║  ✅ Tap-to-seek audio player (jumps to exact position)      ║
+║  ✅ Play button always visible when paused                   ║
+║  ✅ Auto-reconnect when network returns                     ║
+║  ✅ Offline first-load overlay                              ║
+║  ✅ Admin Panel shows all messages                          ║
+║  ✅ Logs tab for security auditing                          ║
+║  ✅ Kirundi language integrated                             ║
 ║  ✅ Full security (Argon2, AES-GCM, Rate Limiting)          ║
 ╚════════════════════════════════════════════════════════════╝
 """)

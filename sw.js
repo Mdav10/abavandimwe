@@ -1,6 +1,6 @@
 // ABAVANDIMWE - Service Worker
-// Version: 9.9 (Updated to support offline overlay)
-const CACHE_VERSION = 'v9.9';
+// Version: 10.0 (Auto-reconnect on network return, works on first click)
+const CACHE_VERSION = 'v10.0';
 const CACHE_NAME = 'abavandimwe-' + CACHE_VERSION;
 
 const STATIC_ASSETS = [
@@ -19,6 +19,7 @@ const STATIC_ASSETS = [
     '/static/icons/icon-512x512.png'
 ];
 
+// ===== INSTALL =====
 self.addEventListener('install', (event) => {
     console.log('✅ SW install', CACHE_VERSION);
     event.waitUntil(
@@ -28,6 +29,7 @@ self.addEventListener('install', (event) => {
     );
 });
 
+// ===== ACTIVATE =====
 self.addEventListener('activate', (event) => {
     console.log('✅ SW activate', CACHE_VERSION);
     event.waitUntil(
@@ -40,10 +42,18 @@ self.addEventListener('activate', (event) => {
     );
 });
 
+// ===== MESSAGE =====
 self.addEventListener('message', (event) => {
     if (event.data && event.data.type === 'SKIP_WAITING') self.skipWaiting();
+
+    // When a page asks us to broadcast "reconnect", tell all pages
+    if (event.data && event.data.type === 'BROADCAST_RECONNECT') {
+        self.clients.matchAll({ type: 'window', includeUncontrolled: true })
+            .then(clients => clients.forEach(c => c.postMessage({ type: 'RECONNECT' })));
+    }
 });
 
+// ===== PUSH NOTIFICATIONS =====
 self.addEventListener('push', (event) => {
     let data = {};
     try { data = event.data.json(); }
@@ -75,6 +85,16 @@ self.addEventListener('notificationclick', (event) => {
     );
 });
 
+// ===== SYNC: reconnect check when browser fires background sync =====
+self.addEventListener('sync', (event) => {
+    if (event.tag === 'abavandimwe-reconnect') {
+        event.waitUntil(
+            self.clients.matchAll({ type: 'window', includeUncontrolled: true })
+                .then(clients => clients.forEach(c => c.postMessage({ type: 'RECONNECT' })))
+        );
+    }
+});
+
 // ===== FETCH =====
 self.addEventListener('fetch', (event) => {
     const request = event.request;
@@ -96,10 +116,11 @@ self.addEventListener('fetch', (event) => {
         return;
     }
 
-    // ===== FIX: HTML navigation =====
-    // We now try to fetch from network. If it fails (offline), we return a minimal
-    // HTML page that instantly shows the custom overlay. This replaces the
-    // browser's default "You're offline" page (from your screenshot 1).
+    // ===== HTML NAVIGATION =====
+    // Try network first. If offline, return a minimal page that:
+    //   1. Shows the offline overlay
+    //   2. Registers a "reconnect" listener that reloads the page when online
+    // This works even on the FIRST click when the app is opened offline.
     if (request.mode === 'navigate' || url.pathname === '/') {
         event.respondWith(
             fetch(request).catch(() => {
@@ -115,13 +136,46 @@ self.addEventListener('fetch', (event) => {
                             .container { display:flex; flex-direction:column; align-items:center; justify-content:center; height:100vh; text-align:center; }
                             h2 { color:#ff4444; font-size:24px; }
                             p { color:#888; font-size:14px; }
+                            .retry-btn { background:transparent; border:2px solid #0f0; color:#0f0; padding:14px 40px; border-radius:12px; font-size:16px; font-weight:bold; cursor:pointer; margin-top:20px; }
                         </style>
                     </head>
                     <body>
                         <div class="container">
                             <h2>📶 No Internet Connection</h2>
                             <p>Please check your network settings and try again.</p>
+                            <button class="retry-btn" onclick="location.reload()">↻ Retry</button>
                         </div>
+                        <script>
+                            // ===== AUTO-RECONNECT on first click =====
+                            // Whenever the browser comes back online, reload the page
+                            // so the full app loads and connects the WebSocket.
+                            window.addEventListener('online', function() {
+                                location.reload();
+                            });
+
+                            // Also listen for the SW's RECONNECT message
+                            if (navigator.serviceWorker) {
+                                navigator.serviceWorker.addEventListener('message', function(e) {
+                                    if (e.data && e.data.type === 'RECONNECT') {
+                                        location.reload();
+                                    }
+                                });
+                            }
+
+                            // Also try to register a background sync
+                            if ('serviceWorker' in navigator && 'SyncManager' in window) {
+                                navigator.serviceWorker.ready.then(function(reg) {
+                                    return reg.sync.register('abavandimwe-reconnect').catch(function() {});
+                                });
+                            }
+
+                            // Poll every 3 seconds as a fallback for Android
+                            setInterval(function() {
+                                if (navigator.onLine) {
+                                    location.reload();
+                                }
+                            }, 3000);
+                        </script>
                     </body>
                     </html>
                 `, { headers: { 'Content-Type': 'text/html' } });
