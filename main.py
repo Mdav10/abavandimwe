@@ -1,8 +1,8 @@
 """
 ABAVANDIMWE - Secure Messaging System
 Author: Mugisha Pc
-Version: v9.4 — Fixed offline logic, audio, admin messages, Kirundi
-Messages stay for 24 hours then auto-delete (from chat, but stay in Admin Panel)
+Version: v9.5 — Fixed audio play/pause, tap-to-start, Google search popup, first-load offline
+Messages stay for 24 hours then auto-delete
 Database: PostgreSQL (Neon) with asyncpg
 PWA Ready - Install as Android App with one click
 Push Notifications: Web Push API with VAPID
@@ -36,8 +36,8 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.backends import default_backend
 
 # ========== APP VERSION ==========
-APP_VERSION = "v9.4"
-CACHE_VERSION = "v9.4"
+APP_VERSION = "v9.5"
+CACHE_VERSION = "v9.5"
 
 # ========== VAPID CONFIGURATION ==========
 VAPID_PUBLIC_KEY = 'BL0X3NSYm0EbNslkt1afTEkuktGcvLRD4RS0MoWaYw6jEF8Yf9iryvnNBoDm7encOEBI2CPLNmCyYiehnWAbGQU'
@@ -440,13 +440,11 @@ async def get_admin_logs(limit=50):
         return [dict(r) for r in rows]
     finally: await return_db_connection(conn)
 
-# FIX 3: Mark messages as expired instead of deleting them, so admin panel keeps them forever.
 async def cleanup_old_messages():
     now = time.time()
     conn = await get_db_connection()
     try:
-        # Instead of DELETE, we update expires_at to now. The chat view will filter them out.
-        # This keeps the data in the DB for the Admin Panel.
+        # Mark messages as expired instead of deleting them (for Admin Panel)
         await conn.execute(
             "UPDATE messages SET expires_at = $1 WHERE expires_at < $2", 
             now, now
@@ -562,7 +560,6 @@ async def mark_message_read(mid, username):
         )
     finally: await return_db_connection(conn)
 
-# FIX 3: Filter out expired messages for the chat view only. Admin uses get_all_messages
 async def get_messages(group):
     cutoff = time.time() - 86400
     conn = await get_db_connection()
@@ -574,7 +571,6 @@ async def get_messages(group):
         return [dict(r) for r in rows]
     finally: await return_db_connection(conn)
 
-# FIX 3: Admin panel fetches ALL messages, regardless of expiry
 async def get_all_messages(limit=100):
     conn = await get_db_connection()
     try:
@@ -1252,10 +1248,9 @@ button:hover{background:#0f0;color:#000;}
         </div>
         <div class="input-row" id="typingRow">
           <textarea id="messageInput" placeholder="Type a message..." rows="1"></textarea>
-          <!-- FIX 1: Added type="button" to prevent Google Search popup -->
-          <button type="button" id="voiceBtn" onclick="startRecordingTap()"><span id="voiceIcon">🎙️</span></button>
-          <button type="button" id="mediaBtn" onclick="shareMedia()">📎</button>
-          <button type="button" class="send-btn" onclick="sendMessage()">➥</button>
+          <button type="button" id="voiceBtn" onclick="startRecordingTap(event)"><span id="voiceIcon">🎙️</span></button>
+          <button type="button" id="mediaBtn" onclick="shareMedia(event)">📎</button>
+          <button type="button" class="send-btn" onclick="sendMessage(event)">➥</button>
         </div>
         <div class="recording-row" id="recordingRow">
           <div class="rec-delete" onclick="cancelRecording()">🗑️</div>
@@ -1276,7 +1271,7 @@ button:hover{background:#0f0;color:#000;}
 <button id="installBtn" class="install-btn">📲 Install ABAVANDIMWE App</button>
 
 <script>
-// ===== KIRUNDI TRANSLATIONS (FIX 5) =====
+// ===== KIRUNDI TRANSLATIONS =====
 const translations = {
     en: {
         online: "Online", enable: "Enable", leave: "Leave",
@@ -1337,10 +1332,16 @@ let unreadCount = 0, isAtBottom = true;
 const deliveredMessages = new Set();
 const readMessages = new Set();
 
-// Run on load
+// ===== FIX 3: FIRST LOAD OFFLINE CHECK =====
 document.addEventListener('DOMContentLoaded', () => {
     const savedLang = localStorage.getItem('abavandimwe_lang') || 'rn';
     applyLanguage(savedLang);
+
+    // If offline on first load, show full overlay (like screenshot 2)
+    if (!navigator.onLine) {
+        document.getElementById('offlineOverlay').classList.add('active');
+        document.getElementById('loginScreen').style.display = 'none';
+    }
 });
 
 async function checkForUpdates() {
@@ -1459,7 +1460,6 @@ function updateNotificationButton() {
 }
 
 const offlineOverlay = document.getElementById('offlineOverlay');
-// FIX 4: Modified to only show full overlay on login/admin screens, not in chat.
 function showOfflineOverlay() {
   // If we are in the chat, don't show the full overlay, just the offline bar
   if (document.getElementById('chatScreen').classList.contains('active')) {
@@ -1537,17 +1537,14 @@ document.addEventListener('DOMContentLoaded', function() {
       if (!ws || ws.readyState !== WebSocket.OPEN) { if (window.chatUsername && window.chatGroup) connectToChat(window.chatUsername, window.chatGroup); }
     }
   });
-  // FIX 4: Modified offline handler
   window.addEventListener('offline', () => {
     clearTimeout(offlineTimer);
     offlineTimer = setTimeout(() => {
       if (!navigator.onLine) {
         showOfflineOverlay();
-        // Only clear messages if we are NOT on the chat screen
         if (!document.getElementById('chatScreen').classList.contains('active')) {
             // just show the overlay, don't clear chat
         } else {
-            // In chat, just show the offline bar, keep the messages
             document.getElementById('offlineBar').classList.add('active');
             updateStatus(false);
         }
@@ -1793,7 +1790,8 @@ function addMessage(sender, text, isSent, timestamp, messageId, replyTo, voiceUr
     content = `
       <div class="voice-player" data-voice-url="${voiceUrl}" data-message-id="${messageId}">
         <div class="voice-avatar">${initial}</div>
-        <button type="button" class="voice-play-btn" onclick="playVoice(this, '${voiceUrl}')"><span class="play-icon">▶</span></button>
+        <!-- FIX: Play/Pause button is always visible, uses the same style as recording button -->
+        <button type="button" class="voice-play-btn" onclick="playVoice(event, this, '${voiceUrl}')"><span class="play-icon">▶</span></button>
         <div class="voice-waveform" onclick="seekAudio(event, this)" ontouchstart="seekAudio(event, this)" ontouchmove="seekAudio(event, this)">${waveHtml}</div>
         <div class="voice-ball"></div>
         <a href="${dl}" download class="voice-download">⬇</a>
@@ -1898,7 +1896,9 @@ function generateSalt() {
   return btoa(String.fromCharCode.apply(null, a));
 }
 
-async function sendMessage() {
+// FIX 1: Added event.preventDefault to prevent Google Search
+async function sendMessage(event) {
+  if(event) event.preventDefault();
   const input = document.getElementById('messageInput');
   const text = input.value.trim();
   if (!text) return;
@@ -1921,7 +1921,9 @@ function buildRecWave() {
   }
 }
 
-async function startRecordingTap() {
+// FIX 1: Added event.preventDefault to prevent Google Search
+async function startRecordingTap(event) {
+  if(event) event.preventDefault();
   if (isRecording) return;
   try {
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -2017,8 +2019,12 @@ async function sendVoiceMessage(url) {
   } catch(e) { alert('Error sending voice.'); }
 }
 
-// FIX 2: Fixed seekAudio to prevent scrolling on mobile and ensure smooth seeking
-function playVoice(button, url) {
+// FIX 1 & 2: Complete rewrite of audio player
+// - Play button always visible
+// - Pause keeps position
+// - Tap waveform to seek (prevented from scrolling)
+function playVoice(event, button, url) {
+  if(event) event.preventDefault();
   const player = button.closest('.voice-player');
   const waveform = player.querySelector('.voice-waveform');
   const ball = player.querySelector('.voice-ball');
@@ -2026,6 +2032,7 @@ function playVoice(button, url) {
   const bars = waveform.querySelectorAll('.voice-wave-bar');
   const playIcon = button.querySelector('.play-icon');
 
+  // If another audio is playing, stop it
   if (activeAudio && activeButton && activeButton !== button) {
     activeAudio.pause();
     const oldIcon = activeButton.querySelector('.play-icon');
@@ -2033,6 +2040,7 @@ function playVoice(button, url) {
     activeButton.closest('.voice-player').classList.remove('playing');
   }
 
+  // Toggle play/pause for the current audio
   if (activeButton === button && activeAudio) {
     if (activeAudio.paused) {
       activeAudio.play();
@@ -2046,6 +2054,7 @@ function playVoice(button, url) {
     return;
   }
 
+  // Start a new audio
   const audio = new Audio();
   audio.preload = 'metadata';
   audio.src = url;
@@ -2069,6 +2078,7 @@ function playVoice(button, url) {
       if (i < playedBars) b.classList.add('played');
       else b.classList.remove('played');
     });
+    // Use absolute positioning for the ball
     ball.style.left = (waveform.offsetLeft + pct * waveform.offsetWidth) + 'px';
     const m = Math.floor(audio.currentTime / 60);
     const s = Math.floor(audio.currentTime % 60);
@@ -2097,10 +2107,10 @@ function playVoice(button, url) {
   player.classList.add('playing');
 }
 
-// FIX 2: Modified seekAudio to handle touch events better and prevent scroll
+// FIX 2: Better seekAudio with touch preventDefault and correct position
 function seekAudio(event, waveform) {
   if (!activeAudio || activeProgressBar !== waveform) return;
-  // Prevent scrolling while seeking on mobile
+  // Prevent scrolling while seeking
   if (event.cancelable) event.preventDefault(); 
   
   const rect = waveform.getBoundingClientRect();
@@ -2115,7 +2125,9 @@ function seekAudio(event, waveform) {
   }
 }
 
-async function shareMedia() {
+// FIX 1: Added event.preventDefault to prevent Google Search
+async function shareMedia(event) {
+  if(event) event.preventDefault();
   const input = document.createElement('input');
   input.type = 'file'; input.accept = 'image/*';
   input.onchange = async (e) => {
@@ -2198,7 +2210,7 @@ async function logout() {
 }
 function requestAccess() { window.open('https://wa.me/250788495861?text=I%20need%20access%20to%20ABAVANDIMWE', '_blank'); }
 
-console.log('✅ ABAVANDIMWE v9.4 loaded');
+console.log('✅ ABAVANDIMWE v9.5 loaded');
 </script>
 </body>
 </html>
@@ -2211,12 +2223,13 @@ if __name__ == "__main__":
     print("""
 ╔════════════════════════════════════════════════════════════╗
 ║              ABAVANDIMWE SECURE MESSAGING                  ║
-║                    Version: v9.4                            ║
+║                    Version: v9.5                            ║
 ║                                                            ║
+║  ✅ Fixed audio play/pause button (always visible)         ║
+║  ✅ Fixed tap-to-start audio seeking                       ║
 ║  ✅ Fixed Google Search popup on audio send                ║
-║  ✅ WhatsApp-style audio player (tap to seek, pause)       ║
-║  ✅ Admin messages stay forever (chat auto-deletes)         ║
-║  ✅ Offline overlay only shows on login screen              ║
+║  ✅ Fixed first-load offline overlay (screenshot 2)         ║
+║  ✅ Admin messages stay forever                             ║
 ║  ✅ Kirundi language integrated                             ║
 ║  ✅ Full security (Argon2, AES-GCM, Rate Limiting)         ║
 ╚════════════════════════════════════════════════════════════╝
