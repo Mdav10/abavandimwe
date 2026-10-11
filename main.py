@@ -1,14 +1,12 @@
 """
 ABAVANDIMWE - Secure Messaging System
 Author: Mugisha Pc
-Version: v9.9 — FINAL
-- Tap-to-seek audio player (jumps to tap position)
-- Play button always visible when paused
-- Auto-reconnect when network returns
-- Offline first-load overlay (custom, not browser default)
-- Admin Panel shows all messages with plaintext
-- Logs tab for security auditing
-- Kirundi language integrated
+Version: v10.1 — TRULY FINAL
+- Google Search fix for audio send (POST body, no query, no touch-callout)
+- Admin sees every message fully (text, voice w/ duration, image w/ name)
+- Play button always visible (absolute positioning)
+- Tap-to-seek works from first tap
+- Auto-reconnect on network return
 """
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request, Depends, HTTPException, UploadFile, File
@@ -22,11 +20,9 @@ import os
 import secrets
 import base64
 import hashlib
-import threading
 import time
 import uuid
-from datetime import datetime
-from typing import Dict, Optional, List
+from typing import Dict, List
 from collections import defaultdict
 from pydantic import BaseModel
 from argon2 import PasswordHasher
@@ -38,11 +34,9 @@ from pywebpush import WebPushException, webpush
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.backends import default_backend
 
-# ========== APP VERSION ==========
-APP_VERSION = "v9.9"
-CACHE_VERSION = "v9.9"
+APP_VERSION = "v10.1"
+CACHE_VERSION = "v10.1"
 
-# ========== VAPID CONFIGURATION ==========
 VAPID_PUBLIC_KEY = 'BL0X3NSYm0EbNslkt1afTEkuktGcvLRD4RS0MoWaYw6jEF8Yf9iryvnNBoDm7encOEBI2CPLNmCyYiehnWAbGQU'
 VAPID_CLAIMS = {"sub": "mailto:abavandimwe@example.com"}
 
@@ -61,7 +55,6 @@ def get_vapid_private_key():
         print(f"⚠️ Could not load VAPID private key: {e}")
         return None
 
-# ========== LIFESPAN ==========
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     print(f"🚀 Starting ABAVANDIMWE {APP_VERSION}...")
@@ -75,7 +68,6 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(lifespan=lifespan)
 
-# ========== NO-CACHE MIDDLEWARE ==========
 @app.middleware("http")
 async def add_no_cache_headers(request: Request, call_next):
     response = await call_next(request)
@@ -87,7 +79,6 @@ async def add_no_cache_headers(request: Request, call_next):
         response.headers["Expires"] = "0"
     return response
 
-# ========== STATIC FILES ==========
 os.makedirs("static/icons", exist_ok=True)
 os.makedirs("static/screenshots", exist_ok=True)
 
@@ -95,7 +86,6 @@ app.mount("/icons", StaticFiles(directory="static/icons"), name="icons")
 app.mount("/screenshots", StaticFiles(directory="static/screenshots"), name="screenshots")
 app.mount("/static/icons", StaticFiles(directory="static/icons"), name="static_icons")
 
-# ========== PWA FILE ENDPOINTS ==========
 @app.get("/manifest.json")
 async def serve_manifest():
     try:
@@ -125,7 +115,6 @@ async def serve_offline():
 async def get_version():
     return {"version": APP_VERSION, "cache": CACHE_VERSION}
 
-# ========== DATABASE ==========
 DATABASE_URL = os.getenv('DATABASE_URL', 'postgresql://neondb_owner:npg_CmR51yqfMxNZ@ep-plain-salad-axxvh942-pooler.c-4.us-east-2.aws.neon.tech/neondb?sslmode=require')
 db_pool = None
 
@@ -140,12 +129,10 @@ async def get_db_connection():
 async def return_db_connection(conn):
     await db_pool.release(conn)
 
-# ========== SECURITY ==========
 ADMIN_USERNAME = "Mpc"
 ADMIN_PASSWORD = os.getenv('ADMIN_PASSWORD', 'Mpc@Secure+_+')
 ADMIN_PASSWORD_HASH = None
 
-# ========== SESSIONS ==========
 sessions: Dict[str, Dict] = {}
 SESSION_TIMEOUT = 3600 * 24 * 7
 
@@ -181,7 +168,6 @@ async def require_admin(request):
     if s["role"] != "admin": raise HTTPException(status_code=403, detail="Admin only")
     return s
 
-# ========== CORS ==========
 ALLOWED_ORIGINS = [
     "https://abavandimwe.onrender.com",
     "https://abavandimwe-production.up.railway.app",
@@ -192,7 +178,6 @@ ALLOWED_ORIGINS = [
 app.add_middleware(CORSMiddleware, allow_origins=ALLOWED_ORIGINS,
                    allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
-# ========== MODELS ==========
 class LoginRequest(BaseModel):
     username: str
     password: str
@@ -216,7 +201,6 @@ class SaveDisplayNameRequest(BaseModel):
     username: str
     display_name: str
 
-# ========== PUSH SUBSCRIPTIONS ==========
 push_subscriptions: Dict[str, List[Dict]] = defaultdict(list)
 
 async def save_push_subscription(username, subscription):
@@ -227,13 +211,13 @@ async def save_push_subscription(username, subscription):
 async def get_push_subscriptions(username):
     return push_subscriptions.get(username, [])
 
-async def send_push_notification(subscription, message, badge_count=0):
+async def send_push_notification(subscription, message):
     pk = get_vapid_private_key()
     if not pk: return False
     try:
         data = json.dumps({
             "title": "ABAVANDIMWE", "body": message,
-            "badge": "/static/icons/badge-72x72.png",
+            "badge": "/static/icons/icon-192x192.png",
             "icon": "/static/icons/icon-192x192.png",
             "data": {"url": "/"}, "tag": "new-message",
             "renotify": True, "requireInteraction": True
@@ -259,16 +243,12 @@ async def send_notification_to_group(group_name, sender):
         await return_db_connection(conn)
     for u in users:
         for sub in await get_push_subscriptions(u):
-            await send_push_notification(sub, "You have a new message on ABAVANDIMWE.", 1)
+            await send_push_notification(sub, "You have a new message on ABAVANDIMWE.")
 
-# ========== CRYPTO ==========
 ph = PasswordHasher()
 
 def generate_salt():
     return base64.b64encode(secrets.token_bytes(32)).decode()
-
-def derive_key(pw, salt):
-    return hashlib.pbkdf2_hmac('sha256', pw.encode(), salt.encode(), 100000, 32)
 
 def hash_password_argon2(pw): return ph.hash(pw)
 
@@ -278,7 +258,6 @@ def verify_password_argon2(pw, h):
     except VerificationError:
         return False
 
-# ========== RATE LIMITING ==========
 login_attempts = defaultdict(list)
 login_blocks = {}
 message_limits = defaultdict(list)
@@ -306,7 +285,6 @@ def check_message_rate_limit(u):
     if len(message_limits[u]) >= 10: return False
     message_limits[u].append(now); return True
 
-# ========== DATABASE INIT ==========
 async def init_db():
     global ADMIN_PASSWORD_HASH
     await init_db_pool()
@@ -333,6 +311,7 @@ async def init_db():
                 id SERIAL PRIMARY KEY,
                 ciphertext TEXT NOT NULL,
                 plaintext TEXT,
+                display_text TEXT,
                 group_name TEXT NOT NULL,
                 sender TEXT NOT NULL,
                 salt TEXT NOT NULL,
@@ -343,6 +322,7 @@ async def init_db():
                 voice_duration DOUBLE PRECISION,
                 media_url TEXT,
                 media_type TEXT,
+                media_name TEXT,
                 delivered BOOLEAN DEFAULT FALSE,
                 read_by TEXT[] DEFAULT '{}'
             )
@@ -388,10 +368,12 @@ async def init_db():
             if 'voice_duration' not in ex: await conn.execute('ALTER TABLE messages ADD COLUMN voice_duration DOUBLE PRECISION')
             if 'media_url' not in ex: await conn.execute('ALTER TABLE messages ADD COLUMN media_url TEXT')
             if 'media_type' not in ex: await conn.execute('ALTER TABLE messages ADD COLUMN media_type TEXT')
+            if 'media_name' not in ex: await conn.execute('ALTER TABLE messages ADD COLUMN media_name TEXT')
             if 'reply_to' not in ex: await conn.execute('ALTER TABLE messages ADD COLUMN reply_to INTEGER DEFAULT NULL')
             if 'delivered' not in ex: await conn.execute('ALTER TABLE messages ADD COLUMN delivered BOOLEAN DEFAULT FALSE')
             if 'read_by' not in ex: await conn.execute("ALTER TABLE messages ADD COLUMN read_by TEXT[] DEFAULT '{}'")
             if 'plaintext' not in ex: await conn.execute('ALTER TABLE messages ADD COLUMN plaintext TEXT')
+            if 'display_text' not in ex: await conn.execute('ALTER TABLE messages ADD COLUMN display_text TEXT')
         except Exception as e:
             print(f"[!] Migration: {e}")
         try: await conn.execute("DELETE FROM groups WHERE group_name = 'admin' AND created_by != 'Mpc'")
@@ -412,7 +394,6 @@ async def init_db():
     finally:
         await return_db_connection(conn)
 
-# ========== DATABASE FUNCTIONS ==========
 async def log_admin_action(admin_username, action, target, details=""):
     conn = await get_db_connection()
     try:
@@ -534,14 +515,14 @@ async def get_all_users():
         return [dict(r) for r in rows]
     finally: await return_db_connection(conn)
 
-async def save_message_with_media(ciphertext, plaintext, group, sender, salt, reply_to=None, voice_url=None, voice_duration=None, media_url=None, media_type=None):
+async def save_message_with_media(ciphertext, plaintext, display_text, group, sender, salt, reply_to=None, voice_url=None, voice_duration=None, media_url=None, media_type=None, media_name=None):
     now = time.time()
     conn = await get_db_connection()
     try:
         result = await conn.fetchrow('''
-            INSERT INTO messages (ciphertext, plaintext, group_name, sender, salt, created_at, expires_at, reply_to, voice_url, voice_duration, media_url, media_type, delivered, read_by)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, FALSE, '{}') RETURNING id, created_at
-        ''', ciphertext, plaintext, group, sender, salt, now, now + 86400, reply_to, voice_url, voice_duration, media_url, media_type)
+            INSERT INTO messages (ciphertext, plaintext, display_text, group_name, sender, salt, created_at, expires_at, reply_to, voice_url, voice_duration, media_url, media_type, media_name, delivered, read_by)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, FALSE, '{}') RETURNING id, created_at
+        ''', ciphertext, plaintext, display_text, group, sender, salt, now, now + 86400, reply_to, voice_url, voice_duration, media_url, media_type, media_name)
         return dict(result)
     finally: await return_db_connection(conn)
 
@@ -571,11 +552,13 @@ async def get_messages(group):
         return [dict(r) for r in rows]
     finally: await return_db_connection(conn)
 
-async def get_all_messages(limit=200):
+async def get_all_messages(limit=500):
     conn = await get_db_connection()
     try:
         rows = await conn.fetch(
-            "SELECT id, sender, group_name, created_at, plaintext, voice_url, voice_duration, media_url, media_type FROM messages ORDER BY created_at DESC LIMIT $1",
+            """SELECT id, sender, group_name, created_at, plaintext, display_text, 
+                      voice_url, voice_duration, media_url, media_type, media_name 
+               FROM messages ORDER BY created_at DESC LIMIT $1""",
             limit
         )
         return [dict(r) for r in rows]
@@ -646,7 +629,6 @@ async def get_file_data(filename):
         return await conn.fetchrow("SELECT file_data, mime_type FROM files WHERE filename = $1", filename)
     finally: await return_db_connection(conn)
 
-# ========== WEBSOCKET MANAGER ==========
 class ConnectionManager:
     def __init__(self): self.connections = {}
     async def add(self, group, username, ws):
@@ -665,7 +647,6 @@ class ConnectionManager:
 
 manager = ConnectionManager()
 
-# ========== API ENDPOINTS ==========
 @app.get("/")
 async def root():
     return HTMLResponse(HTML, headers={
@@ -816,11 +797,12 @@ async def upload_media(request: Request, file: UploadFile = File(...)):
     try:
         session = await get_session_from_cookie(request)
         content = await file.read()
-        ext = file.filename.split('.')[-1] if '.' in file.filename else 'bin'
+        original_name = file.filename or 'file'
+        ext = original_name.split('.')[-1] if '.' in original_name else 'bin'
         filename = f"{uuid.uuid4()}.{ext}"
         mime_type = file.content_type or 'application/octet-stream'
         await save_file(filename, content, mime_type, session['username'], 'media')
-        return {"success": True, "url": f"/api/files/{filename}", "type": mime_type}
+        return {"success": True, "url": f"/api/files/{filename}", "type": mime_type, "name": original_name}
     except Exception as e:
         return JSONResponse({"success": False, "error": str(e)}, status_code=500)
 
@@ -834,7 +816,6 @@ async def get_file(filename: str):
 async def health():
     return {"status": "ok", "system": "ABAVANDIMWE", "author": "Mugisha Pc", "version": APP_VERSION}
 
-# ========== WEBSOCKET ==========
 @app.websocket("/ws")
 async def ws_endpoint(websocket: WebSocket):
     await websocket.accept()
@@ -870,7 +851,8 @@ async def ws_endpoint(websocket: WebSocket):
             'salt': m['salt'], 'timestamp': m['created_at'], 'reply_to': m.get('reply_to'),
             'voice_url': m.get('voice_url'), 'voice_duration': m.get('voice_duration'),
             'media_url': m.get('media_url'),
-            'media_type': m.get('media_type'), 'delivered': m.get('delivered', False),
+            'media_type': m.get('media_type'), 'media_name': m.get('media_name'),
+            'delivered': m.get('delivered', False),
             'read_by': m.get('read_by', [])
         })
     await websocket.send_json({'type': 'history', 'messages': history})
@@ -884,9 +866,10 @@ async def ws_endpoint(websocket: WebSocket):
             if t == 'message':
                 if check_message_rate_limit(username):
                     r = await save_message_with_media(
-                        data.get('ciphertext'), data.get('plaintext'), group_name, username, data.get('salt'),
+                        data.get('ciphertext'), data.get('plaintext'), data.get('display_text'),
+                        group_name, username, data.get('salt'),
                         data.get('reply_to'), data.get('voice_url'), data.get('voice_duration'),
-                        data.get('media_url'), data.get('media_type')
+                        data.get('media_url'), data.get('media_type'), data.get('media_name')
                     )
                     asyncio.create_task(send_notification_to_group(group_name, username))
                     await log_system_action(username, "send_message", group_name, f"Message ID: {r['id']}")
@@ -897,6 +880,7 @@ async def ws_endpoint(websocket: WebSocket):
                         'reply_to': data.get('reply_to'), 'voice_url': data.get('voice_url'),
                         'voice_duration': data.get('voice_duration'),
                         'media_url': data.get('media_url'), 'media_type': data.get('media_type'),
+                        'media_name': data.get('media_name'),
                         'delivered': False, 'read_by': []
                     }
                     if data.get('temp_id'): msg['temp_id'] = data.get('temp_id')
@@ -929,7 +913,7 @@ async def ws_endpoint(websocket: WebSocket):
         await manager.broadcast(group_name, {'type': 'user_left', 'user': username})
         print(f"[-] {username} left {group_name}")
 
-# ========== HTML (embedded) ==========
+# ========== HTML ==========
 HTML = r'''<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -973,12 +957,12 @@ button:hover{background:#0f0;color:#000;}
 .admin-panel.active{display:block;}
 .admin-panel-header{display:flex;justify-content:space-between;align-items:center;padding:16px;border-bottom:2px solid #0f0;margin-bottom:20px;}
 .admin-panel-header h2{color:#ffaa00;}
-.admin-content{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:20px;}
+.admin-content{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:20px;}
 .admin-card{background:#050508;border:1px solid #0f0;border-radius:12px;padding:20px;}
 .admin-card h3{color:#0f0;margin-bottom:12px;font-size:14px;}
 .admin-card table{width:100%;font-size:11px;border-collapse:collapse;}
 .admin-card table th{text-align:left;padding:6px;border-bottom:1px solid #1a1a2e;color:#666;}
-.admin-card table td{padding:6px;border-bottom:1px solid #1a1a2e;}
+.admin-card table td{padding:6px;border-bottom:1px solid #1a1a2e;vertical-align:top;}
 .admin-card input{width:100%;padding:8px;margin:5px 0;background:#111;border:1px solid #0f0;border-radius:6px;color:#0f0;font-size:12px;}
 .admin-card button{width:auto;padding:8px 16px;margin:5px;font-size:12px;}
 .close-admin{background:#ff0041;border-color:#ff0041;color:white;padding:8px 16px;border-radius:8px;cursor:pointer;}
@@ -986,7 +970,7 @@ button:hover{background:#0f0;color:#000;}
 .stat-box{background:#050508;border:1px solid #0f0;border-radius:10px;padding:16px;text-align:center;}
 .stat-number{font-size:24px;color:#0f0;}
 .stat-label{font-size:10px;color:#666;margin-top:4px;}
-.admin-table-wrap{max-height:250px;overflow-y:auto;}
+.admin-table-wrap{max-height:400px;overflow-y:auto;}
 .action-btn{background:transparent;border:1px solid #ff0041;color:#ff0041;padding:4px 8px;border-radius:4px;cursor:pointer;font-size:10px;margin:0 2px;}
 .action-btn-green{background:transparent;border:1px solid #0f0;color:#0f0;padding:4px 8px;border-radius:4px;cursor:pointer;font-size:10px;}
 .admin-username{color:#ffaa00;font-size:12px;margin-left:10px;}
@@ -994,6 +978,12 @@ button:hover{background:#0f0;color:#000;}
 .log-time{color:#666;}
 .log-action{color:#ffaa00;}
 .log-details{color:#888;}
+
+/* Message detail text for admin */
+.msg-detail{font-size:11px;color:#0f0;max-width:280px;white-space:pre-wrap;word-break:break-word;}
+.msg-detail.voice{color:#00d4ff;}
+.msg-detail.media{color:#ffaa00;}
+.msg-detail img{max-width:200px;max-height:150px;border-radius:6px;border:1px solid #0f0;display:block;margin-top:4px;cursor:pointer;}
 
 .gatekeeper-container,.user-setup-container{display:none;position:fixed;inset:0;background:#0a0a0f;z-index:900;padding:20px;justify-content:center;align-items:center;}
 .gatekeeper-container.active,.user-setup-container.active{display:flex;}
@@ -1042,7 +1032,7 @@ button:hover{background:#0f0;color:#000;}
 .new-msgs-btn{position:absolute;bottom:100px;left:50%;transform:translateX(-50%);background:#0f0;color:#000;padding:8px 20px;border-radius:30px;font-size:14px;font-weight:bold;cursor:pointer;box-shadow:0 4px 15px rgba(0,255,65,0.4);z-index:30;display:none;border:2px solid #0f0;}
 .new-msgs-btn.show{display:block;}
 
-.message{display:flex;flex-direction:column;width:fit-content;max-width:85%;padding:4px 0;word-break:break-word;overflow-wrap:anywhere;animation:fadeIn 0.2s ease;}
+.message{display:flex;flex-direction:column;width:fit-content;max-width:85%;padding:4px 0;word-break:break-word;overflow-wrap:anywhere;}
 .message.sent{align-self:flex-end;margin-left:auto;}
 .message.received{align-self:flex-start;margin-right:auto;}
 @media (max-width:600px){ .message{max-width:90%;} }
@@ -1056,20 +1046,31 @@ button:hover{background:#0f0;color:#000;}
 .system-message{text-align:center;font-size:10px;color:#ffaa00;margin:4px 0;font-style:italic;}
 .typing-indicator{padding:2px 16px 6px;font-size:10px;color:#0f0;font-style:italic;min-height:24px;flex-shrink:0;}
 
-.voice-player{display:flex !important;align-items:center;gap:6px;background:#0f0;padding:6px 8px;border-radius:20px;min-width:200px;max-width:min(90vw,340px);position:relative;overflow:hidden;
-    -webkit-user-select: none; -moz-user-select: none; -ms-user-select: none; user-select: none;
-    -webkit-touch-callout: none; -webkit-tap-highlight-color: transparent;
+/* ===== VOICE PLAYER ===== */
+.voice-player{
+    display:flex;align-items:center;gap:6px;background:#0f0;padding:6px 8px;border-radius:20px;
+    min-width:200px;max-width:min(90vw,340px);position:relative;overflow:hidden;
+    -webkit-user-select:none;-moz-user-select:none;-ms-user-select:none;user-select:none;
+    -webkit-touch-callout:none;-webkit-tap-highlight-color:transparent;
 }
 .received .voice-player{background:#1a1a2e;border:1px solid #0f0;}
 .voice-avatar{flex:0 0 34px;width:34px;height:34px;border-radius:50%;background:#0a0a0f;color:#0f0;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:bold;overflow:hidden;}
 .received .voice-avatar{background:#0f0;color:#0a0a0f;}
-.voice-play-btn{flex:0 0 36px !important;width:36px !important;height:36px !important;min-width:36px;border:none;background:transparent;color:#0a0a0f;font-size:20px;cursor:pointer;display:flex !important;align-items:center;justify-content:center;padding:0;line-height:1;font-weight:bold;visibility:visible !important;opacity:1 !important;touch-action: manipulation;}
+.voice-play-btn{
+    flex:0 0 36px;width:36px;height:36px;border:none;background:transparent;color:#0a0a0f;
+    font-size:20px;cursor:pointer;display:flex;align-items:center;justify-content:center;
+    padding:0;line-height:1;font-weight:bold;touch-action:manipulation;
+    -webkit-user-select:none;user-select:none;
+}
 .received .voice-play-btn{color:#0f0;}
-.voice-waveform{flex:1 1 auto;display:flex;align-items:center;gap:2px;height:24px;cursor:pointer;min-width:60px;overflow:hidden;padding:4px 0;user-select:none;touch-action:none;position:relative;}
+.voice-waveform{
+    flex:1 1 auto;display:flex;align-items:center;gap:2px;height:24px;cursor:pointer;
+    min-width:60px;overflow:hidden;padding:4px 0;user-select:none;touch-action:none;position:relative;
+}
 .voice-wave-bar{flex:0 0 2px;width:2px;background:#0a0a0f;border-radius:2px;opacity:0.55;}
 .received .voice-wave-bar{background:#0f0;}
 .voice-wave-bar.played{opacity:1;}
-.voice-ball{position:absolute;top:50%;transform:translateY(-50%);width:10px;height:10px;border-radius:50%;background:#0a0a0f;pointer-events:none;left:0;display:none;box-shadow:0 0 6px rgba(0,0,0,0.4);z-index:2;}
+.voice-ball{position:absolute;top:50%;transform:translateY(-50%);width:10px;height:10px;border-radius:50%;background:#0a0a0f;pointer-events:none;left:0;display:none;z-index:2;}
 .received .voice-ball{background:#0f0;}
 .voice-player.playing .voice-ball{display:block;}
 .voice-info{display:flex;justify-content:space-between;align-items:center;font-size:10px;margin-top:2px;color:#888;padding:0 4px;max-width:min(90vw,340px);}
@@ -1087,18 +1088,36 @@ button:hover{background:#0f0;color:#000;}
 @keyframes spin{0%{transform:translate(-50%,-50%) rotate(0);}100%{transform:translate(-50%,-50%) rotate(360deg);}}
 .image-bubble.placeholder img{filter:blur(2px);}
 .message-actions{display:flex;gap:6px;margin-top:4px;flex-wrap:wrap;align-items:center;}
-.message-actions button{background:transparent;border:none;color:#888;font-size:10px;cursor:pointer;padding:1px 4px;}
+.message-actions button{background:transparent;border:none;color:#888;font-size:10px;cursor:pointer;padding:1px 4px;width:auto;margin:0;}
 .message-actions button:hover{color:#0f0;}
 
-.input-area{padding:8px 12px;background:#050508;border-top:1px solid #0f0;flex-shrink:0;display:flex;flex-direction:column;gap:6px;position:relative;}
+/* ===== INPUT AREA - Block Google Search ===== */
+.input-area{
+    padding:8px 12px;background:#050508;border-top:1px solid #0f0;flex-shrink:0;
+    display:flex;flex-direction:column;gap:6px;position:relative;
+    -webkit-user-select:none;-moz-user-select:none;-ms-user-select:none;user-select:none;
+    -webkit-touch-callout:none;
+}
 .reply-preview{display:none;padding:4px 8px;background:rgba(255,170,0,0.1);border-left:2px solid #ffaa00;border-radius:4px;font-size:11px;color:#ffaa00;align-items:center;justify-content:space-between;}
 .reply-preview .reply-cancel{color:#ff4444;cursor:pointer;font-weight:bold;padding:0 6px;}
 .input-row{display:flex;gap:8px;align-items:flex-end;}
-.input-row textarea{flex:1;min-width:0;padding:10px 14px;background:#111;border:1px solid #0f0;border-radius:12px;color:#0f0;font-family:monospace;font-size:14px;resize:vertical;max-height:80px;min-height:44px;line-height:1.5;outline:none;}
+.input-row textarea{
+    flex:1;min-width:0;padding:10px 14px;background:#111;border:1px solid #0f0;border-radius:12px;
+    color:#0f0;font-family:monospace;font-size:14px;resize:vertical;max-height:80px;min-height:44px;
+    line-height:1.5;outline:none;
+    -webkit-user-select:text;user-select:text;
+}
 .input-row textarea:focus{box-shadow:0 0 20px rgba(0,255,65,0.2);}
-.input-row button{flex:0 0 50px;width:50px;height:50px;margin:0;padding:0;border-radius:50%;font-size:18px;border:2px solid #0f0;background:transparent;color:#0f0;cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0;}
-.input-row button:hover{background:rgba(0,255,0,0.1);}
+.input-row .input-btn{
+    flex:0 0 50px;width:50px;height:50px;margin:0;padding:0;border-radius:50%;font-size:18px;
+    border:2px solid #0f0;background:transparent;color:#0f0;cursor:pointer;
+    display:flex;align-items:center;justify-content:center;flex-shrink:0;
+    -webkit-user-select:none;user-select:none;-webkit-touch-callout:none;
+    touch-action:manipulation;
+}
+.input-row .input-btn:hover{background:rgba(0,255,0,0.1);}
 .input-row .send-btn{background:#0f0;color:#000;border-color:#0f0;}
+.input-row .send-btn:active{transform:scale(0.95);}
 
 .recording-row{display:none;align-items:center;gap:10px;padding:6px 4px;background:#050508;border-radius:30px;width:100%;}
 .recording-row.active{display:flex;}
@@ -1141,7 +1160,7 @@ button:hover{background:#0f0;color:#000;}
 
 @media (max-width:480px){
   .input-row textarea{font-size:13px;padding:8px 12px;min-height:36px;}
-  .input-row button{flex-basis:44px;width:44px;height:44px;font-size:16px;}
+  .input-row .input-btn{flex-basis:44px;width:44px;height:44px;font-size:16px;}
   .voice-player{min-width:180px;padding:5px 6px;}
   .voice-avatar{flex-basis:30px;width:30px;height:30px;font-size:11px;}
   .message{max-width:90%;}
@@ -1267,9 +1286,9 @@ button:hover{background:#0f0;color:#000;}
         </div>
         <div class="input-row" id="typingRow">
           <textarea id="messageInput" placeholder="Type a message..." rows="1"></textarea>
-          <button type="button" id="voiceBtn" onpointerdown="event.preventDefault();startRecordingTap(event)"><span id="voiceIcon">🎙️</span></button>
-          <button type="button" id="mediaBtn" onpointerdown="event.preventDefault();shareMedia(event)">📎</button>
-          <button type="button" class="send-btn" onpointerdown="event.preventDefault();sendMessage(event)">➥</button>
+          <div class="input-btn" id="voiceBtn" onpointerdown="event.preventDefault();event.stopPropagation();startRecordingTap(event)"><span id="voiceIcon">🎙️</span></div>
+          <div class="input-btn" id="mediaBtn" onpointerdown="event.preventDefault();event.stopPropagation();shareMedia(event)">📎</div>
+          <div class="input-btn send-btn" id="sendBtn" onpointerdown="event.preventDefault();event.stopPropagation();sendMessage(event)">➥</div>
         </div>
         <div class="recording-row" id="recordingRow">
           <div class="rec-delete" onclick="cancelRecording()">🗑️</div>
@@ -1332,9 +1351,7 @@ function applyLanguage(lang) {
     currentLang = lang;
     document.querySelectorAll('[data-translate]').forEach(el => {
         const key = el.getAttribute('data-translate');
-        if (translations[lang][key]) {
-            el.innerText = translations[lang][key];
-        }
+        if (translations[lang][key]) el.innerText = translations[lang][key];
     });
     const connBadge = document.getElementById('connectionBadge');
     if (connBadge && ws && ws.readyState === WebSocket.OPEN) connBadge.innerText = '● ' + translations[lang].online;
@@ -1343,14 +1360,13 @@ function applyLanguage(lang) {
     localStorage.setItem('abavandimwe_lang', lang);
 }
 
-let ws, username, groupName, groupPassword, groupSalt, typingTimeout, reconnectAttempts = 0;
-let currentUser = null, gatekeeperData = null, replyingToMessageId = null, messagesData = {};
+let ws, typingTimeout, reconnectAttempts = 0;
+let gatekeeperData = null, replyingToMessageId = null, messagesData = {};
 let isManuallyReconnecting = false, lastActiveScreen = null;
 let pushSubscription = null, vapidPublicKey = null, notificationsEnabled = false;
 let mediaRecorder = null, audioChunks = [], isRecording = false, recordingSeconds = 0;
 let recordingTimerInterval = null, recWaveInterval = null, isPaused = false, shouldSendOnStop = false;
-let activeAudio = null, activeButton = null, activeProgressBar = null, activeDurationSpan = null;
-let unreadCount = 0, isAtBottom = true;
+let activeAudio = null, activeButton = null, unreadCount = 0, isAtBottom = true;
 const deliveredMessages = new Set();
 const readMessages = new Set();
 
@@ -1391,7 +1407,6 @@ async function applyUpdate() {
   window.location.reload(true);
 }
 window.addEventListener('load', () => { checkForUpdates(); setInterval(checkForUpdates, 60000); });
-document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') checkForUpdates(); });
 
 function showLoading(text, cb) {
   const o = document.getElementById('loadingOverlay');
@@ -1416,16 +1431,10 @@ if ('serviceWorker' in navigator) {
       setInterval(() => reg.update().catch(() => {}), 60000);
     }).catch(() => {});
   });
-}
-
-// ===== AUTO-RECONNECT ON MESSAGE FROM SW =====
-if ('serviceWorker' in navigator) {
   navigator.serviceWorker.addEventListener('message', function(e) {
     if (e.data && e.data.type === 'RECONNECT') {
       if (window.chatUsername && window.chatGroup) {
-        if (!ws || ws.readyState !== WebSocket.OPEN) {
-          connectToChat(window.chatUsername, window.chatGroup);
-        }
+        if (!ws || ws.readyState !== WebSocket.OPEN) connectToChat(window.chatUsername, window.chatGroup);
       }
     }
   });
@@ -1499,9 +1508,7 @@ function showOfflineOverlay() {
       return;
   }
   const aa = document.getElementById('adminPanel').classList.contains('active');
-  if (aa) lastActiveScreen = 'admin';
-  else lastActiveScreen = 'login';
-  
+  if (aa) lastActiveScreen = 'admin'; else lastActiveScreen = 'login';
   document.getElementById('loginScreen').style.display = 'none';
   document.getElementById('adminPanel').classList.remove('active');
   document.getElementById('gatekeeperScreen').classList.remove('active');
@@ -1546,8 +1553,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
     const mc = document.getElementById('messages');
     mc.addEventListener('scroll', function() {
-        const th = 100;
-        const ab = (this.scrollHeight - this.scrollTop - this.clientHeight) < th;
+        const ab = (this.scrollHeight - this.scrollTop - this.clientHeight) < 100;
         if (ab && !isAtBottom) { isAtBottom = true; unreadCount = 0; updateNewMsgsButton(); }
         else if (!ab && isAtBottom) { isAtBottom = false; }
     });
@@ -1560,8 +1566,6 @@ document.addEventListener('DOMContentLoaded', function() {
     });
 
     let offlineTimer = null;
-
-    // ===== AUTO-RECONNECT WHEN NETWORK RETURNS =====
     window.addEventListener('online', () => {
         clearTimeout(offlineTimer);
         if (offlineOverlay.classList.contains('active')) hideOfflineOverlay();
@@ -1569,23 +1573,17 @@ document.addEventListener('DOMContentLoaded', function() {
             document.getElementById('offlineBar').classList.remove('active');
             if (!ws || ws.readyState !== WebSocket.OPEN) {
                 if (window.chatUsername && window.chatGroup) {
-                    setTimeout(() => {
-                        connectToChat(window.chatUsername, window.chatGroup);
-                    }, 500);
+                    setTimeout(() => connectToChat(window.chatUsername, window.chatGroup), 500);
                 }
-            } else {
-                updateStatus(true);
-            }
+            } else updateStatus(true);
         }
     });
-
     window.addEventListener('offline', () => {
         clearTimeout(offlineTimer);
         offlineTimer = setTimeout(() => {
             if (!navigator.onLine) {
                 showOfflineOverlay();
-                if (!document.getElementById('chatScreen').classList.contains('active')) {
-                } else {
+                if (document.getElementById('chatScreen').classList.contains('active')) {
                     document.getElementById('offlineBar').classList.add('active');
                     updateStatus(false);
                 }
@@ -1593,13 +1591,10 @@ document.addEventListener('DOMContentLoaded', function() {
         }, 3000);
     });
 
-    // Periodic reconnect check (every 10s) as fallback
     setInterval(() => {
         if (document.getElementById('chatScreen').classList.contains('active')) {
             if (navigator.onLine && (!ws || ws.readyState !== WebSocket.OPEN)) {
-                if (window.chatUsername && window.chatGroup) {
-                    connectToChat(window.chatUsername, window.chatGroup);
-                }
+                if (window.chatUsername && window.chatGroup) connectToChat(window.chatUsername, window.chatGroup);
             }
         }
     }, 10000);
@@ -1612,18 +1607,22 @@ document.addEventListener('DOMContentLoaded', function() {
         if (file.size > 10 * 1024 * 1024) { alert('Max 10MB'); e.target.value = ''; return; }
         const tempId = 'temp_' + Date.now();
         const localUrl = URL.createObjectURL(file);
-        const text = '📎 ' + file.name;
+        const displayText = '📎 ' + file.name;
         const ts = Date.now() / 1000;
-        messagesData[tempId] = { sender: window.chatUsername, text, timestamp: ts, media_url: localUrl, media_type: file.type };
-        addMessage(window.chatUsername, text, true, ts, tempId, null, null, null, localUrl, file.type);
+        messagesData[tempId] = { sender: window.chatUsername, text: displayText, timestamp: ts, media_url: localUrl, media_type: file.type, media_name: file.name };
+        addMessage(window.chatUsername, displayText, true, ts, tempId, null, null, null, localUrl, file.type, file.name, false, []);
         const fd = new FormData(); fd.append('file', file);
         try {
             const r = await fetch('/api/upload_media', { method: 'POST', body: fd });
             const d = await r.json();
             if (d.success) {
                 const salt = generateSalt();
-                const enc = await encrypt(text, window.groupPassword, salt);
-                ws.send(JSON.stringify({ type: 'message', ciphertext: enc, plaintext: text, salt, reply_to: replyingToMessageId || null, media_url: d.url, media_type: d.type || file.type, temp_id: tempId }));
+                const enc = await encrypt(displayText, window.groupPassword, salt);
+                ws.send(JSON.stringify({
+                    type: 'message', ciphertext: enc, plaintext: displayText, display_text: displayText,
+                    salt, reply_to: replyingToMessageId || null, media_url: d.url,
+                    media_type: d.type || file.type, media_name: file.name, temp_id: tempId
+                }));
             }
         } catch(err) {}
         setTimeout(() => URL.revokeObjectURL(localUrl), 5000);
@@ -1659,7 +1658,6 @@ async function login() {
     const r = await fetch('/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: u, password: p }) });
     const d = await r.json();
     if (d.success) {
-      currentUser = { username: d.username, role: d.role };
       hideLoading();
       if (d.role === 'admin') {
         document.getElementById('loginScreen').style.display = 'none';
@@ -1688,7 +1686,7 @@ async function gatekeeperLogin() {
       document.getElementById('userSetupScreen').classList.add('active');
       document.getElementById('userGroupName').value = d.assigned_group;
       document.getElementById('userGroupPassword').value = d.assigned_group_password;
-      groupPassword = d.assigned_group_password;
+      window.groupPassword = d.assigned_group_password;
       document.getElementById('userDisplayName').value = d.display_name || '';
       hideLoading();
     } else { showGatekeeperError(d.message || 'Invalid'); hideLoading(); }
@@ -1700,7 +1698,7 @@ async function enterChat() {
   if (!dn) { showSetupError('Enter display name'); hideLoading(); return; }
   if (!gn) { showSetupError('Group missing'); hideLoading(); return; }
   try { await fetch('/save_display_name', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: gatekeeperData.username, display_name: dn }) }); } catch(e) {}
-  window.chatUsername = dn; window.chatGroup = gn; window.groupPassword = groupPassword;
+  window.chatUsername = dn; window.chatGroup = gn;
   document.getElementById('userSetupScreen').classList.remove('active');
   document.getElementById('chatScreen').classList.add('active');
   document.getElementById('messages').innerHTML = '';
@@ -1727,7 +1725,7 @@ function connectToChat(user, group) {
     try {
       const d = JSON.parse(e.data);
       if (d.type === 'error') { showError(d.message); ws.close(); return; }
-      if (d.type === 'ready') { groupSalt = d.salt; addSystemMessage('🔐 ' + translations[currentLang].connected); }
+      if (d.type === 'ready') addSystemMessage('🔐 ' + translations[currentLang].connected);
       else if (d.type === 'history') {
         document.getElementById('messages').innerHTML = '';
         messagesData = {};
@@ -1736,10 +1734,10 @@ function connectToChat(user, group) {
             try {
               const dec = await decrypt(m.ciphertext, window.groupPassword, m.salt);
               const isSent = m.sender === window.chatUsername;
-              messagesData[m.id] = { sender: m.sender, text: dec, timestamp: m.created_at, voice_url: m.voice_url, voice_duration: m.voice_duration, media_url: m.media_url, media_type: m.media_type, delivered: m.delivered, read_by: m.read_by || [] };
+              messagesData[m.id] = { sender: m.sender, text: dec, timestamp: m.created_at, voice_url: m.voice_url, voice_duration: m.voice_duration, media_url: m.media_url, media_type: m.media_type, media_name: m.media_name, delivered: m.delivered, read_by: m.read_by || [] };
               if (m.delivered) deliveredMessages.add(m.id);
               if (m.read_by && m.read_by.length) readMessages.add(m.id);
-              addMessage(m.sender, dec, isSent, m.created_at, m.id, m.reply_to, m.voice_url, m.voice_duration, m.media_url, m.media_type, m.delivered, m.read_by);
+              addMessage(m.sender, dec, isSent, m.created_at, m.id, m.reply_to, m.voice_url, m.voice_duration, m.media_url, m.media_type, m.media_name, m.delivered, m.read_by);
             } catch(e) {}
           }
         }
@@ -1749,8 +1747,8 @@ function connectToChat(user, group) {
         try {
           const dec = await decrypt(d.ciphertext, window.groupPassword, d.salt);
           const isSent = d.sender === window.chatUsername;
-          messagesData[d.message_id] = { sender: d.sender, text: dec, timestamp: d.timestamp, voice_url: d.voice_url, voice_duration: d.voice_duration, media_url: d.media_url, media_type: d.media_type, delivered: d.delivered || false, read_by: d.read_by || [] };
-          addMessage(d.sender, dec, isSent, d.timestamp, d.message_id, d.reply_to, d.voice_url, d.voice_duration, d.media_url, d.media_type, d.delivered, d.read_by);
+          messagesData[d.message_id] = { sender: d.sender, text: dec, timestamp: d.timestamp, voice_url: d.voice_url, voice_duration: d.voice_duration, media_url: d.media_url, media_type: d.media_type, media_name: d.media_name, delivered: d.delivered || false, read_by: d.read_by || [] };
+          addMessage(d.sender, dec, isSent, d.timestamp, d.message_id, d.reply_to, d.voice_url, d.voice_duration, d.media_url, d.media_type, d.media_name, d.delivered, d.read_by);
           if (!isSent && ws && ws.readyState === WebSocket.OPEN) {
             ws.send(JSON.stringify({ type: 'delivered', message_id: d.message_id }));
             ws.send(JSON.stringify({ type: 'read', message_id: d.message_id }));
@@ -1827,7 +1825,7 @@ function addSystemMessage(text) {
 }
 function escapeHtml(t) { const d = document.createElement('div'); d.textContent = t; return d.innerHTML; }
 
-function addMessage(sender, text, isSent, timestamp, messageId, replyTo, voiceUrl, voiceDuration, mediaUrl, mediaType, delivered, readBy) {
+function addMessage(sender, text, isSent, timestamp, messageId, replyTo, voiceUrl, voiceDuration, mediaUrl, mediaType, mediaName, delivered, readBy) {
   const c = document.getElementById('messages');
   const d = document.createElement('div');
   d.className = 'message ' + (isSent ? 'sent' : 'received');
@@ -1873,9 +1871,9 @@ function addMessage(sender, text, isSent, timestamp, messageId, replyTo, voiceUr
     content = `
       <div class="voice-player" data-voice-url="${voiceUrl}" data-message-id="${messageId}" data-duration="${voiceDuration || 0}">
         <div class="voice-avatar">${initial}</div>
-        <button type="button" class="voice-play-btn" onpointerdown="playVoice(event, this, '${voiceUrl}')">
+        <div class="voice-play-btn" onpointerdown="event.preventDefault();event.stopPropagation();playVoice(event, this, '${voiceUrl}')">
           <span class="play-icon">▶</span>
-        </button>
+        </div>
         <div class="voice-waveform"
              onpointerdown="seekAudio(event, this)"
              onpointerup="seekAudio(event, this)">
@@ -1887,8 +1885,7 @@ function addMessage(sender, text, isSent, timestamp, messageId, replyTo, voiceUr
       <div class="voice-info">
         <span class="voice-duration" data-duration-for="${messageId}">${durationText}</span>
         <span class="voice-time">${time}${isSent ? tickHtml : ''}</span>
-      </div>
-      ${text && text !== '🎤 Voice message' ? '<div style="font-size:11px;color:#888;margin-top:2px;">' + escapeHtml(text) + '</div>' : ''}`;
+      </div>`;
   } else if (mediaUrl) {
     if (mediaType && mediaType.startsWith('image/')) {
       const isPh = mediaUrl.startsWith('blob:') || messageId.toString().startsWith('temp_');
@@ -1898,7 +1895,7 @@ function addMessage(sender, text, isSent, timestamp, messageId, replyTo, voiceUr
         <div class="image-bubble ${ph}">
           <img src="${mediaUrl}" onclick="window.open('${mediaUrl}','_blank')" loading="lazy">
           ${isPh ? '<div class="spinner"></div>' : ''}
-          <div class="file-name"><span>📎 ${escapeHtml(text.replace('📎 ', ''))}</span><a href="${dl}" download class="download-link">⬇</a></div>
+          <div class="file-name"><span>📎 ${escapeHtml(mediaName || text.replace('📎 ', ''))}</span><a href="${dl}" download class="download-link">⬇</a></div>
         </div>
         <div class="message-time">${time}${isSent ? tickHtml : ''}</div>`;
     } else {
@@ -1911,7 +1908,7 @@ function addMessage(sender, text, isSent, timestamp, messageId, replyTo, voiceUr
     content = `<div class="message-bubble">${escapeHtml(text)}</div><div class="message-time">${time}${isSent ? tickHtml : ''}</div>`;
   }
 
-  d.innerHTML = '<div class="message-sender">' + (isSent ? 'YOU' : escapeHtml(sender)) + '</div>' + replyHtml + content + '<div class="message-actions"><button type="button" onclick="replyToMessage(' + messageId + ')">↩️ ' + translations[currentLang].reply + '</button></div>';
+  d.innerHTML = '<div class="message-sender">' + (isSent ? 'YOU' : escapeHtml(sender)) + '</div>' + replyHtml + content + '<div class="message-actions"><div onclick="replyToMessage(' + messageId + ')">↩️ ' + translations[currentLang].reply + '</div></div>';
 
   let tsx = 0, tcx = 0, tsy = 0;
   d.addEventListener('touchstart', e => { tsx = e.touches[0].clientX; tsy = e.touches[0].clientY; tcx = tsx; }, { passive: true });
@@ -1931,14 +1928,6 @@ function addMessage(sender, text, isSent, timestamp, messageId, replyTo, voiceUr
     player._waveform = player.querySelector('.voice-waveform');
     player._ball = player.querySelector('.voice-ball');
     player._durationSpan = d.querySelector(`.voice-duration[data-duration-for="${messageId}"]`);
-
-    audio.addEventListener('loadedmetadata', function() {
-      if ((!voiceDuration || voiceDuration <= 0) && isFinite(this.duration) && this.duration > 0) {
-        const mins = Math.floor(this.duration / 60);
-        const secs = Math.floor(this.duration % 60);
-        if (player._durationSpan) player._durationSpan.textContent = mins + ':' + String(secs).padStart(2, '0');
-      }
-    });
   }
 }
 
@@ -1999,7 +1988,7 @@ async function sendMessage(event) {
   try {
     const salt = generateSalt();
     const enc = await encrypt(text, window.groupPassword, salt);
-    ws.send(JSON.stringify({ type: 'message', ciphertext: enc, plaintext: text, salt, reply_to: replyingToMessageId || null }));
+    ws.send(JSON.stringify({ type: 'message', ciphertext: enc, plaintext: text, display_text: text, salt, reply_to: replyingToMessageId || null }));
     input.value = ''; input.style.height = 'auto'; cancelReply();
   } catch(e) { alert('Error sending.'); }
 }
@@ -2092,33 +2081,35 @@ function resetRecordingUI() {
 async function uploadVoice(blob, duration) {
   const fd = new FormData();
   fd.append('file', blob, 'voice.webm');
+  fd.append('duration', duration);
   try {
-    const r = await fetch('/api/upload_voice?duration=' + duration, { method: 'POST', body: fd });
+    // NO query params — use POST body only to avoid Google Search
+    const r = await fetch('/api/upload_voice', { method: 'POST', body: fd });
     const d = await r.json();
     if (d.success) await sendVoiceMessage(d.url, duration);
   } catch(e) { alert('Upload failed'); }
 }
 async function sendVoiceMessage(url, duration) {
   if (!ws || ws.readyState !== WebSocket.OPEN) { alert('Not connected.'); return; }
-  const text = document.getElementById('messageInput').value.trim() || '🎤 Voice message';
+  const durStr = duration ? ` (${Math.floor(duration/60)}:${String(Math.floor(duration%60)).padStart(2,'0')})` : '';
+  const displayText = '🎤 Voice message' + durStr;
   try {
     const salt = generateSalt();
-    const enc = await encrypt(text, window.groupPassword, salt);
-    ws.send(JSON.stringify({ type: 'message', ciphertext: enc, plaintext: text, salt, reply_to: replyingToMessageId || null, voice_url: url, voice_duration: duration }));
-    document.getElementById('messageInput').value = '';
-    document.getElementById('messageInput').style.height = 'auto';
+    const enc = await encrypt(displayText, window.groupPassword, salt);
+    ws.send(JSON.stringify({
+      type: 'message', ciphertext: enc, plaintext: displayText, display_text: displayText,
+      salt, reply_to: replyingToMessageId || null, voice_url: url, voice_duration: duration
+    }));
     cancelReply();
   } catch(e) { alert('Error sending voice.'); }
 }
 
-// ===== FIX A: Tap-to-seek, Play button always visible =====
 function playVoice(event, button, url) {
   if(event) event.preventDefault();
   if(event) event.stopPropagation();
-
   const player = button.closest('.voice-player');
   const audio = player._audio;
-  if (!audio) { return; }
+  if (!audio) return;
   const playIcon = button.querySelector('.play-icon');
 
   if (activeAudio && activeAudio !== audio) {
@@ -2133,8 +2124,6 @@ function playVoice(event, button, url) {
 
   activeAudio = audio;
   activeButton = button;
-  activeProgressBar = player._waveform;
-  activeDurationSpan = player._durationSpan;
 
   if (audio.paused) {
     audio.play().catch(() => {});
@@ -2171,12 +2160,10 @@ function playVoice(event, button, url) {
       if (playIcon) playIcon.textContent = '▶';
       player.classList.remove('playing');
     });
-
     audio.addEventListener('play', function() {
       if (playIcon) playIcon.textContent = '⏸';
       player.classList.add('playing');
     });
-
     audio.addEventListener('ended', function() {
       if (playIcon) playIcon.textContent = '▶';
       player.classList.remove('playing');
@@ -2189,7 +2176,6 @@ function playVoice(event, button, url) {
         player._durationSpan.textContent = m + ':' + String(s).padStart(2, '0');
       }
     });
-
     audio.addEventListener('error', function() {
       if (playIcon) playIcon.textContent = '▶';
       player.classList.remove('playing');
@@ -2200,25 +2186,19 @@ function playVoice(event, button, url) {
 function seekAudio(event, waveform) {
   if (event.cancelable) event.preventDefault();
   if (event.stopPropagation) event.stopPropagation();
-
   const player = waveform.closest('.voice-player');
   if (!player || !player._audio) return;
   const audio = player._audio;
-
   if (!isFinite(audio.duration) || audio.duration <= 0) return;
 
   const rect = waveform.getBoundingClientRect();
   let clientX = event.clientX;
   if (event.touches && event.touches.length) clientX = event.touches[0].clientX;
-
   const x = clientX - rect.left;
   const pct = Math.min(1, Math.max(0, x / rect.width));
 
   audio.currentTime = audio.duration * pct;
-
-  if (!audio.paused) {
-    audio.play().catch(() => {});
-  }
+  if (!audio.paused) audio.play().catch(() => {});
 
   const bars = player._bars;
   const playedBars = Math.floor(pct * bars.length);
@@ -2262,10 +2242,26 @@ async function loadAdminData() {
     (d.messages || []).forEach(m => {
       const tr = document.createElement('tr');
       const dt = m.created_at ? new Date(m.created_at * 1000).toLocaleString() : '-';
-      let msgText = m.plaintext || '';
-      if (!msgText && m.voice_url) msgText = '🎤 Voice message';
-      if (!msgText && m.media_url) msgText = '📎 Media';
-      tr.innerHTML = `<td>${escapeHtml(m.sender)}</td><td>${escapeHtml(m.group_name)}</td><td>${escapeHtml(msgText.substring(0, 40))}${msgText.length > 40 ? '...' : ''}</td><td>${dt}</td><td><button class="action-btn" onclick="deleteMessage(${m.id})">Delete</button></td>`;
+      let detailHtml = '';
+
+      if (m.plaintext && m.plaintext.trim()) {
+        detailHtml = `<div class="msg-detail">${escapeHtml(m.plaintext)}</div>`;
+      } else if (m.voice_url) {
+        const dur = m.voice_duration ? ` (${Math.floor(m.voice_duration/60)}:${String(Math.floor(m.voice_duration%60)).padStart(2,'0')})` : '';
+        detailHtml = `<div class="msg-detail voice">🎤 Voice message${dur}<br><a href="${m.voice_url}" target="_blank" style="color:#00d4ff;font-size:10px;">▶ Play audio</a></div>`;
+      } else if (m.media_url) {
+        const name = m.media_name || 'file';
+        const isImg = m.media_type && m.media_type.startsWith('image/');
+        if (isImg) {
+          detailHtml = `<div class="msg-detail media">📎 ${escapeHtml(name)}<img src="${m.media_url}" onclick="window.open('${m.media_url}','_blank')"></div>`;
+        } else {
+          detailHtml = `<div class="msg-detail media">📎 ${escapeHtml(name)}<br><a href="${m.media_url}" target="_blank" style="color:#ffaa00;font-size:10px;">⬇ Download</a></div>`;
+        }
+      } else {
+        detailHtml = `<div class="msg-detail" style="color:#666;">(empty)</div>`;
+      }
+
+      tr.innerHTML = `<td>${escapeHtml(m.sender)}</td><td>${escapeHtml(m.group_name)}</td><td>${detailHtml}</td><td>${dt}</td><td><button class="action-btn" onclick="deleteMessage(${m.id})">Delete</button></td>`;
       mt.appendChild(tr);
     });
     const lc = document.getElementById('logsContainer');
@@ -2313,7 +2309,7 @@ async function logout() {
 }
 function requestAccess() { window.open('https://wa.me/250788495861?text=I%20need%20access%20to%20ABAVANDIMWE', '_blank'); }
 
-console.log('✅ ABAVANDIMWE v9.9 loaded');
+console.log('✅ ABAVANDIMWE v10.1 loaded');
 </script>
 </body>
 </html>
@@ -2326,16 +2322,18 @@ if __name__ == "__main__":
     print("""
 ╔════════════════════════════════════════════════════════════╗
 ║              ABAVANDIMWE SECURE MESSAGING                  ║
-║                    Version: v9.9                            ║
+║                    Version: v10.1                           ║
 ║                                                            ║
-║  ✅ Tap-to-seek audio player (jumps to exact position)      ║
-║  ✅ Play button always visible when paused                   ║
-║  ✅ Auto-reconnect when network returns                     ║
+║  ✅ Google Search on audio send — FIXED                    ║
+║     (no query params, no touch-callout, user-select:none)  ║
+║  ✅ Admin sees FULL message details                         ║
+║     (text, voice w/ duration + play link, image preview)   ║
+║  ✅ Play button always visible                              ║
+║  ✅ Tap-to-seek audio                                       ║
+║  ✅ Auto-reconnect on network return                        ║
 ║  ✅ Offline first-load overlay                              ║
-║  ✅ Admin Panel shows all messages                          ║
-║  ✅ Logs tab for security auditing                          ║
-║  ✅ Kirundi language integrated                             ║
-║  ✅ Full security (Argon2, AES-GCM, Rate Limiting)          ║
+║  ✅ Logs tab for security                                   ║
+║  ✅ Kirundi language                                        ║
 ╚════════════════════════════════════════════════════════════╝
 """)
     print(f"[✓] Server running on port {port}")
