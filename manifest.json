@@ -1,11 +1,10 @@
 {
     "name": "ABAVANDIMWE",
-    "short_name": "MugiChat",
+    "short_name": "ABAVANDIMWE",
     "description": "Secure Messaging System by Mugisha Pc",
-    "start_url": "/?v=8.1",
+    "start_url": "/?v=9.0",
     "scope": "/",
     "display": "standalone",
-    "display_override": ["standalone", "minimal-ui"],
     "background_color": "#0a0a0f",
     "theme_color": "#0a0a0f",
     "orientation": "portrait",
