@@ -32,6 +32,8 @@ from cryptography.hazmat.backends import default_backend
 # ========== APP VERSION ==========
 APP_VERSION = "v8.1"
 
+# Expose cache version to frontend
+CACHE_VERSION = "v8.1"
 # ========== VAPID CONFIGURATION ==========
 VAPID_PUBLIC_KEY = 'BL0X3NSYm0EbNslkt1afTEkuktGcvLRD4RS0MoWaYw6jEF8Yf9iryvnNBoDm7encOEBI2CPLNmCyYiehnWAbGQU'
 VAPID_CLAIMS = {"sub": "mailto:abavandimwe@example.com"}
@@ -60,6 +62,18 @@ async def lifespan(app: FastAPI):
         await db_pool.close()
 
 app = FastAPI(lifespan=lifespan)
+
+# Force browsers to always check for a fresh version
+@app.middleware("http")
+async def add_no_cache_headers(request: Request, call_next):
+    response = await call_next(request)
+    path = request.url.path
+    # Never cache HTML, manifest, or service worker
+    if path == "/" or path.endswith(".html") or path == "/manifest.json" or path == "/sw.js":
+        response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+    return response
 
 # ========== STATIC FILES ==========
 os.makedirs("static/icons", exist_ok=True)
@@ -92,9 +106,11 @@ async def serve_offline():
     except FileNotFoundError:
         return JSONResponse({"error": "offline.html not found"}, status_code=404)
 
+
+
 @app.get("/api/version")
 async def get_version():
-    return {"version": APP_VERSION}
+    return {"version": APP_VERSION, "cache": CACHE_VERSION}
 
 # ========== DATABASE ==========
 DATABASE_URL = os.getenv('DATABASE_URL', 'postgresql://neondb_owner:npg_CmR51yqfMxNZ@ep-plain-salad-axxvh942-pooler.c-4.us-east-2.aws.neon.tech/neondb?sslmode=require')
