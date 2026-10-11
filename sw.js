@@ -1,6 +1,8 @@
 // ABAVANDIMWE - Service Worker
-// Version: 6.0 - With Push Notification Support
-const CACHE_NAME = 'abavandimwe-v6.0.1';
+// Version: 8.1 — Auto-updating
+const CACHE_VERSION = 'v8.1';  // ← CHANGE THIS on every deploy
+const CACHE_NAME = 'abavandimwe-' + CACHE_VERSION;
+
 const STATIC_ASSETS = [
     '/manifest.json',
     '/offline.html',
@@ -18,43 +20,42 @@ const STATIC_ASSETS = [
     '/static/icons/icon-512x512.png'
 ];
 
-// Install - cache static assets
+// ===== INSTALL: cache assets, then activate immediately =====
 self.addEventListener('install', (event) => {
-    console.log('Service Worker installing...');
+    console.log('✅ SW install — version', CACHE_VERSION);
     event.waitUntil(
         caches.open(CACHE_NAME)
-            .then((cache) => {
-                console.log('Caching static assets...');
-                return cache.addAll(STATIC_ASSETS);
-            })
-            .then(() => self.skipWaiting())
+            .then((cache) => cache.addAll(STATIC_ASSETS).catch(() => {}))
+            .then(() => self.skipWaiting())  // ← Activate immediately
     );
 });
 
-// Activate - clean old caches and claim clients
+// ===== ACTIVATE: delete ALL old caches =====
 self.addEventListener('activate', (event) => {
-    console.log('Service Worker activating...');
+    console.log('✅ SW activate — version', CACHE_VERSION);
     event.waitUntil(
-        Promise.all([
-            caches.keys().then((cacheNames) => {
-                return Promise.all(
-                    cacheNames.map((cacheName) => {
-                        if (cacheName !== CACHE_NAME) {
-                            console.log('Deleting old cache:', cacheName);
-                            return caches.delete(cacheName);
-                        }
+        caches.keys()
+            .then((cacheNames) => Promise.all(
+                cacheNames
+                    .filter((name) => name !== CACHE_NAME)
+                    .map((name) => {
+                        console.log('🗑️ Deleting old cache:', name);
+                        return caches.delete(name);
                     })
-                );
-            }),
-            self.clients.claim()
-        ])
+            ))
+            .then(() => self.clients.claim())
     );
 });
 
-// ===== PUSH NOTIFICATION HANDLER =====
+// ===== MESSAGE: allow client to force a skipWaiting =====
+self.addEventListener('message', (event) => {
+    if (event.data && event.data.type === 'SKIP_WAITING') {
+        self.skipWaiting();
+    }
+});
+
+// ===== PUSH NOTIFICATION =====
 self.addEventListener('push', (event) => {
-    console.log('🔔 Push notification received!');
-    
     let data = {};
     try {
         data = event.data.json();
@@ -67,145 +68,78 @@ self.addEventListener('push', (event) => {
             data: { url: '/' }
         };
     }
-
     const options = {
         body: data.body || 'You have a new message on ABAVANDIMWE.',
         icon: data.icon || '/static/icons/icon-192x192.png',
         badge: data.badge || '/static/icons/icon-192x192.png',
         vibrate: [200, 100, 200],
-        data: {
-            url: data.data?.url || '/'
-        },
+        data: { url: (data.data && data.data.url) || '/' },
         tag: 'new-message',
         renotify: true,
         requireInteraction: true,
-        actions: [
-            {
-                action: 'open',
-                title: 'Open App'
-            }
-        ]
+        actions: [{ action: 'open', title: 'Open App' }]
     };
-
-    event.waitUntil(
-        self.registration.showNotification(
-            data.title || 'ABAVANDIMWE',
-            options
-        )
-    );
+    event.waitUntil(self.registration.showNotification(data.title || 'ABAVANDIMWE', options));
 });
 
-// ===== NOTIFICATION CLICK HANDLER =====
+// ===== NOTIFICATION CLICK =====
 self.addEventListener('notificationclick', (event) => {
-    console.log('🔔 Notification clicked!');
     event.notification.close();
-
-    const urlToOpen = event.notification.data?.url || '/';
-
+    const urlToOpen = (event.notification.data && event.notification.data.url) || '/';
     event.waitUntil(
-        clients.matchAll({
-            type: 'window',
-            includeUncontrolled: true
-        }).then((clientList) => {
-            // Check if there's already a window/tab open with the target URL
-            for (const client of clientList) {
-                if (client.url === urlToOpen && 'focus' in client) {
-                    return client.focus();
+        clients.matchAll({ type: 'window', includeUncontrolled: true })
+            .then((clientList) => {
+                for (const client of clientList) {
+                    if (client.url === urlToOpen && 'focus' in client) return client.focus();
                 }
-            }
-            // If not, open a new window
-            return clients.openWindow(urlToOpen);
-        })
+                return clients.openWindow(urlToOpen);
+            })
     );
 });
 
-// ===== MAIN FETCH HANDLER =====
+// ===== FETCH =====
 self.addEventListener('fetch', (event) => {
     const request = event.request;
     const url = new URL(request.url);
 
-    // ==== 1. ALWAYS NETWORK FIRST FOR ALL API REQUESTS ====
-    if (url.pathname === '/login' ||
-        url.pathname === '/gatekeeper' ||
-        url.pathname === '/admin/data' ||
-        url.pathname === '/admin/create_user' ||
-        url.pathname === '/admin/delete_user' ||
-        url.pathname === '/admin/delete_group' ||
-        url.pathname === '/admin/delete_message' ||
-        url.pathname === '/save_display_name' ||
-        url.pathname === '/logout' ||
-        url.pathname === '/health' ||
+    // 1) API endpoints — NETWORK ONLY
+    if (url.pathname === '/login' || url.pathname === '/gatekeeper' ||
+        url.pathname === '/admin/data' || url.pathname === '/save_display_name' ||
+        url.pathname === '/logout' || url.pathname === '/health' ||
         url.pathname.startsWith('/admin/') ||
         url.pathname === '/api/push/subscribe' ||
-        url.pathname === '/api/push/vapid_public_key') {
+        url.pathname === '/api/push/vapid_public_key' ||
+        url.pathname === '/api/version' ||
+        url.pathname.startsWith('/api/upload_') ||
+        url.pathname.startsWith('/api/files/')) {
         event.respondWith(fetch(request).catch(() => new Response('API Error', { status: 503 })));
         return;
     }
 
-    // ==== 2. IGNORE WEBSOCKETS ====
+    // 2) WebSockets — passthrough
     if (url.protocol === 'ws:' || url.protocol === 'wss:') {
         return;
     }
 
-    // ==== 3. FOR HTML PAGES - NEVER CACHE, ALWAYS FETCH ====
-    if (request.mode === 'navigate' ||
-        url.pathname === '/' ||
-        url.pathname === '/chat' ||
-        url.pathname === '/offline.html') {
+    // 3) HTML navigation — NETWORK FIRST, offline fallback
+    if (request.mode === 'navigate' || url.pathname === '/' || url.pathname === '/offline.html') {
         event.respondWith(
             fetch(request)
-                .then((response) => {
-                    return response;
-                })
-                .catch(() => {
-                    return caches.match('/offline.html')
-                        .then((cached) => {
-                            if (cached) {
-                                return cached;
-                            }
-                            // Emergency fallback
-                            return new Response(`
-                                <!DOCTYPE html>
-                                <html>
-                                <head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>Offline</title>
-                                <style>*{margin:0;padding:0;box-sizing:border-box;}body{font-family:monospace;background:#0a0a0f;color:#0f0;height:100vh;display:flex;justify-content:center;align-items:center;text-align:center;padding:20px;}.container{max-width:400px;}h1{color:#ff4444;font-size:24px;margin-bottom:12px;}p{color:#888;font-size:14px;line-height:1.6;margin-bottom:24px;}button{background:transparent;border:2px solid #0f0;color:#0f0;padding:14px 40px;border-radius:12px;font-size:16px;font-weight:bold;cursor:pointer;}button:hover{background:#0f0;color:#000;}</style>
-                                </head>
-                                <body>
-                                <div class="container">
-                                <h1>📶 No Internet Connection</h1>
-                                <p>Please check your network settings and try again.</p>
-                                <button onclick="location.reload()">↻ Retry</button>
-                                </div>
-                                </body>
-                                </html>
-                            `, { headers: { 'Content-Type': 'text/html' } });
-                        });
-                })
+                .then((response) => response)
+                .catch(() => caches.match('/offline.html'))
         );
         return;
     }
 
-    // ==== 4. FOR STATIC ASSETS (icons, manifest) - CACHE FIRST ====
+    // 4) Static assets — CACHE FIRST with network fallback
     event.respondWith(
-        caches.match(request)
-            .then((cached) => {
-                if (cached) {
-                    return cached;
-                }
-                return fetch(request)
-                    .then((response) => {
-                        const clone = response.clone();
-                        caches.open(CACHE_NAME).then((cache) => {
-                            cache.put(request, clone);
-                        });
-                        return response;
-                    })
-                    .catch(() => {
-                        if (request.url.match(/\.(png|jpg|jpeg|svg|gif|ico)$/)) {
-                            return new Response('', { status: 200 });
-                        }
-                        return new Response('Offline', { status: 503 });
-                    });
-            })
+        caches.match(request).then((cached) => {
+            if (cached) return cached;
+            return fetch(request).then((response) => {
+                const clone = response.clone();
+                caches.open(CACHE_NAME).then((cache) => cache.put(request, clone));
+                return response;
+            }).catch(() => new Response('', { status: 503 }));
+        })
     );
 });
