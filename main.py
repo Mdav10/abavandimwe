@@ -1,26 +1,22 @@
 """
 ABAVANDIMWE - Secure Messaging System
 Author: Mugisha Pc
-Messages stay for 24 hours then auto-delete
-Database: PostgreSQL (Neon) with asyncpg
-PWA Ready - Install as Android App with one click
-Push Notifications: Web Push API with VAPID
+Version: v8.1 - Lifespan fix + WhatsApp-style tap-to-record audio
 """
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request, Depends, HTTPException, UploadFile, File
 from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from contextlib import asynccontextmanager
 import asyncio
 import json
 import os
 import secrets
 import base64
 import hashlib
-import threading
 import time
 import uuid
-from datetime import datetime
 from typing import Dict, Optional, List
 from collections import defaultdict
 from pydantic import BaseModel
@@ -29,50 +25,49 @@ from argon2.exceptions import VerificationError
 import asyncpg
 from asyncpg import create_pool
 
-# ========== PUSH NOTIFICATION IMPORTS ==========
 from pywebpush import WebPushException, webpush
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.backends import default_backend
 
-app = FastAPI()
-
-# ========== APP VERSION (bump this to force update prompt) ==========
-APP_VERSION = "v8.0"
+# ========== APP VERSION ==========
+APP_VERSION = "v8.1"
 
 # ========== VAPID CONFIGURATION ==========
 VAPID_PUBLIC_KEY = 'BL0X3NSYm0EbNslkt1afTEkuktGcvLRD4RS0MoWaYw6jEF8Yf9iryvnNBoDm7encOEBI2CPLNmCyYiehnWAbGQU'
-VAPID_CLAIMS = {
-    "sub": "mailto:abavandimwe@example.com"
-}
+VAPID_CLAIMS = {"sub": "mailto:abavandimwe@example.com"}
 
 def get_vapid_private_key():
     try:
         private_key_pem = os.getenv('VAPID_PRIVATE_KEY')
         if private_key_pem:
-            return serialization.load_pem_private_key(
-                private_key_pem.encode(),
-                password=None,
-                backend=default_backend()
-            )
+            return serialization.load_pem_private_key(private_key_pem.encode(), password=None, backend=default_backend())
         with open("vapid_private_key.pem", "rb") as f:
-            return serialization.load_pem_private_key(
-                f.read(),
-                password=None,
-                backend=default_backend()
-            )
+            return serialization.load_pem_private_key(f.read(), password=None, backend=default_backend())
     except Exception as e:
         print(f"⚠️ Could not load VAPID private key: {e}")
         return None
 
-# ========== SERVE STATIC FILES FOR PWA ==========
+# ========== LIFESPAN (replaces deprecated on_event) ==========
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    print("🚀 Starting ABAVANDIMWE...")
+    await init_db()
+    start_cleanup()
+    print("✅ Server ready")
+    yield
+    print("🛑 Shutting down...")
+    if db_pool:
+        await db_pool.close()
+
+app = FastAPI(lifespan=lifespan)
+
+# ========== STATIC FILES ==========
 os.makedirs("static/icons", exist_ok=True)
 os.makedirs("static/screenshots", exist_ok=True)
-
 app.mount("/icons", StaticFiles(directory="static/icons"), name="icons")
 app.mount("/screenshots", StaticFiles(directory="static/screenshots"), name="screenshots")
 app.mount("/static/icons", StaticFiles(directory="static/icons"), name="static_icons")
 
-# ========== SERVE PWA FILES ==========
 @app.get("/manifest.json")
 async def serve_manifest():
     try:
@@ -101,19 +96,13 @@ async def serve_offline():
 async def get_version():
     return {"version": APP_VERSION}
 
-# ========== DATABASE CONFIG ==========
+# ========== DATABASE ==========
 DATABASE_URL = os.getenv('DATABASE_URL', 'postgresql://neondb_owner:npg_CmR51yqfMxNZ@ep-plain-salad-axxvh942-pooler.c-4.us-east-2.aws.neon.tech/neondb?sslmode=require')
-
 db_pool = None
 
 async def init_db_pool():
     global db_pool
-    db_pool = await create_pool(
-        DATABASE_URL,
-        min_size=1,
-        max_size=10,
-        ssl='require'
-    )
+    db_pool = await create_pool(DATABASE_URL, min_size=1, max_size=10, ssl='require')
     return db_pool
 
 async def get_db_connection():
@@ -122,76 +111,55 @@ async def get_db_connection():
 async def return_db_connection(conn):
     await db_pool.release(conn)
 
-# ========== SECURITY CONFIG ==========
+# ========== SECURITY ==========
 ADMIN_USERNAME = "Mpc"
 ADMIN_PASSWORD = os.getenv('ADMIN_PASSWORD', 'Mpc@Secure+_+')
 ADMIN_PASSWORD_HASH = None
 
-# ========== SESSION MANAGEMENT ==========
+# ========== SESSIONS ==========
 sessions: Dict[str, Dict] = {}
 SESSION_TIMEOUT = 3600 * 24 * 7
 
-def create_session(username: str, role: str, assigned_group: str = None, group_password: str = None) -> str:
+def create_session(username, role, assigned_group=None, group_password=None):
     session_id = secrets.token_urlsafe(32)
     sessions[session_id] = {
-        "username": username,
-        "role": role,
-        "assigned_group": assigned_group,
-        "group_password": group_password,
-        "created_at": time.time(),
+        "username": username, "role": role, "assigned_group": assigned_group,
+        "group_password": group_password, "created_at": time.time(),
         "expires_at": time.time() + SESSION_TIMEOUT
     }
     return session_id
 
-def get_session(session_id: str) -> Optional[Dict]:
-    if session_id not in sessions:
-        return None
-    session = sessions[session_id]
-    if session["expires_at"] < time.time():
-        del sessions[session_id]
-        return None
-    return session
+def get_session(session_id):
+    if session_id not in sessions: return None
+    s = sessions[session_id]
+    if s["expires_at"] < time.time():
+        del sessions[session_id]; return None
+    return s
 
-def delete_session(session_id: str):
-    if session_id in sessions:
-        del sessions[session_id]
+def delete_session(session_id):
+    if session_id in sessions: del sessions[session_id]
 
-async def get_session_from_cookie(request: Request) -> Dict:
-    session_id = request.cookies.get("abavandimwe_session")
-    if not session_id:
-        raise HTTPException(status_code=401, detail="No session found")
-    session = get_session(session_id)
-    if not session:
-        raise HTTPException(status_code=401, detail="Invalid or expired session")
-    return session
+async def get_session_from_cookie(request):
+    sid = request.cookies.get("abavandimwe_session")
+    if not sid: raise HTTPException(status_code=401, detail="No session")
+    s = get_session(sid)
+    if not s: raise HTTPException(status_code=401, detail="Invalid session")
+    return s
 
-async def require_admin(request: Request) -> Dict:
-    session = await get_session_from_cookie(request)
-    if session["role"] != "admin":
-        raise HTTPException(status_code=403, detail="Admin access required")
-    return session
+async def require_admin(request):
+    s = await get_session_from_cookie(request)
+    if s["role"] != "admin": raise HTTPException(status_code=403, detail="Admin only")
+    return s
 
-async def require_auth(request: Request) -> Dict:
-    return await get_session_from_cookie(request)
-
-# ========== CORS CONFIG ==========
+# ========== CORS ==========
 ALLOWED_ORIGINS = [
     "https://abavandimwe.onrender.com",
     "https://abavandimwe-production.up.railway.app",
-    "http://localhost:8080",
-    "http://localhost:8000",
-    "http://localhost:3000",
+    "http://localhost:8080", "http://localhost:8000", "http://localhost:3000",
 ]
+app.add_middleware(CORSMiddleware, allow_origins=ALLOWED_ORIGINS, allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=ALLOWED_ORIGINS,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-# ========== PYDANTIC MODELS ==========
+# ========== MODELS ==========
 class LoginRequest(BaseModel):
     username: str
     password: str
@@ -215,97 +183,68 @@ class SaveDisplayNameRequest(BaseModel):
     username: str
     display_name: str
 
-# ========== PUSH SUBSCRIPTIONS STORAGE ==========
+# ========== PUSH SUBSCRIPTIONS ==========
 push_subscriptions: Dict[str, List[Dict]] = defaultdict(list)
 
-async def save_push_subscription(username: str, subscription: Dict):
+async def save_push_subscription(username, subscription):
     for sub in push_subscriptions[username]:
-        if sub.get('endpoint') == subscription.get('endpoint'):
-            return
+        if sub.get('endpoint') == subscription.get('endpoint'): return
     push_subscriptions[username].append(subscription)
-    print(f"[🔔] Push subscription saved for {username}")
 
-async def get_push_subscriptions(username: str) -> List[Dict]:
+async def get_push_subscriptions(username):
     return push_subscriptions.get(username, [])
 
-async def send_push_notification(subscription: Dict, message: str, badge_count: int = 0):
-    private_key = get_vapid_private_key()
-    if not private_key:
-        return False
+async def send_push_notification(subscription, message, badge_count=0):
+    pk = get_vapid_private_key()
+    if not pk: return False
     try:
-        data = json.dumps({
-            "title": "ABAVANDIMWE",
-            "body": message,
-            "badge": "/static/icons/badge-72x72.png",
-            "icon": "/static/icons/icon-192x192.png",
-            "data": {"url": "/"},
-            "tag": "new-message",
-            "renotify": True,
-            "requireInteraction": True
-        })
-        webpush(
-            subscription_info={"endpoint": subscription['endpoint'], "keys": subscription['keys']},
-            data=data, vapid_private_key=private_key, vapid_claims=VAPID_CLAIMS
-        )
+        data = json.dumps({"title": "ABAVANDIMWE", "body": message,
+                          "badge": "/static/icons/badge-72x72.png", "icon": "/static/icons/icon-192x192.png",
+                          "data": {"url": "/"}, "tag": "new-message", "renotify": True, "requireInteraction": True})
+        webpush(subscription_info={"endpoint": subscription['endpoint'], "keys": subscription['keys']},
+                data=data, vapid_private_key=pk, vapid_claims=VAPID_CLAIMS)
         return True
     except WebPushException as e:
         if "expired" in str(e).lower() or "410" in str(e):
-            for user, subs in push_subscriptions.items():
-                push_subscriptions[user] = [s for s in subs if s.get('endpoint') != subscription.get('endpoint')]
+            for u, subs in push_subscriptions.items():
+                push_subscriptions[u] = [s for s in subs if s.get('endpoint') != subscription.get('endpoint')]
         return False
 
-async def send_notification_to_group(group_name: str, sender: str):
+async def send_notification_to_group(group_name, sender):
     conn = await get_db_connection()
     try:
-        rows = await conn.fetch(
-            "SELECT username FROM users WHERE assigned_group = $1 AND username != $2",
-            group_name, sender
-        )
-        users = [row['username'] for row in rows]
+        rows = await conn.fetch("SELECT username FROM users WHERE assigned_group = $1 AND username != $2", group_name, sender)
+        users = [r['username'] for r in rows]
     finally:
         await return_db_connection(conn)
-    for username in users:
-        subs = await get_push_subscriptions(username)
-        for sub in subs:
+    for u in users:
+        for sub in await get_push_subscriptions(u):
             await send_push_notification(sub, "You have a new message on ABAVANDIMWE.", 1)
 
-# ========== CRYPTO FUNCTIONS ==========
+# ========== CRYPTO ==========
 ph = PasswordHasher()
 
-def generate_salt():
-    return base64.b64encode(secrets.token_bytes(32)).decode()
-
-def derive_key(password, salt):
-    return hashlib.pbkdf2_hmac('sha256', password.encode(), salt.encode(), 100000, 32)
-
-def hash_password_argon2(password):
-    return ph.hash(password)
-
-def verify_password_argon2(password, hashed):
-    try:
-        ph.verify(hashed, password)
-        return True
-    except VerificationError:
-        return False
+def generate_salt(): return base64.b64encode(secrets.token_bytes(32)).decode()
+def derive_key(pw, salt): return hashlib.pbkdf2_hmac('sha256', pw.encode(), salt.encode(), 100000, 32)
+def hash_password_argon2(pw): return ph.hash(pw)
+def verify_password_argon2(pw, h):
+    try: ph.verify(h, pw); return True
+    except VerificationError: return False
 
 def encrypt(text, password, salt):
     key = derive_key(password, salt)
-    text_bytes = text.encode()
-    encrypted = bytearray()
-    for i in range(len(text_bytes)):
-        encrypted.append(text_bytes[i] ^ key[i % len(key)])
-    nonce = secrets.token_bytes(8)
-    result = nonce + encrypted
-    return base64.b64encode(result).decode()
+    enc = bytearray()
+    for i, c in enumerate(text.encode()):
+        enc.append(c ^ key[i % len(key)])
+    return base64.b64encode(secrets.token_bytes(8) + enc).decode()
 
 def decrypt(encrypted, password, salt):
-    key = derive_key(password, salt)
     data = base64.b64decode(encrypted)
-    ciphertext = data[8:]
-    decrypted = bytearray()
-    for i in range(len(ciphertext)):
-        decrypted.append(ciphertext[i] ^ key[i % len(key)])
-    return decrypted.decode()
+    key = derive_key(password, salt)
+    dec = bytearray()
+    for i, c in enumerate(data[8:]):
+        dec.append(c ^ key[i % len(key)])
+    return dec.decode()
 
 # ========== RATE LIMITING ==========
 login_attempts = defaultdict(list)
@@ -323,22 +262,16 @@ def check_login_rate_limit(username):
         return False, "Too many failed attempts. Account blocked for 15 minutes."
     return True, None
 
-def record_failed_login(username):
-    login_attempts[username].append(time.time())
+def record_failed_login(u): login_attempts[u].append(time.time())
+def reset_login_attempts(u):
+    if u in login_attempts: login_attempts[u] = []
+    if u in login_blocks: del login_blocks[u]
 
-def reset_login_attempts(username):
-    if username in login_attempts:
-        login_attempts[username] = []
-    if username in login_blocks:
-        del login_blocks[username]
-
-def check_message_rate_limit(username):
+def check_message_rate_limit(u):
     now = time.time()
-    message_limits[username] = [t for t in message_limits[username] if t > now - 5]
-    if len(message_limits[username]) >= 10:
-        return False
-    message_limits[username].append(now)
-    return True
+    message_limits[u] = [t for t in message_limits[u] if t > now - 5]
+    if len(message_limits[u]) >= 10: return False
+    message_limits[u].append(now); return True
 
 # ========== DATABASE INIT ==========
 async def init_db():
@@ -346,116 +279,60 @@ async def init_db():
     await init_db_pool()
     conn = await get_db_connection()
     try:
-        await conn.execute('''
-            CREATE TABLE IF NOT EXISTS users (
-                username TEXT PRIMARY KEY,
-                password_hash TEXT NOT NULL,
-                salt TEXT,
-                role TEXT DEFAULT 'user',
-                assigned_group TEXT,
-                display_name TEXT,
-                status TEXT,
-                current_group TEXT,
-                last_seen DOUBLE PRECISION,
-                created_at DOUBLE PRECISION,
-                login_attempts INTEGER DEFAULT 0,
-                locked_until DOUBLE PRECISION
-            )
-        ''')
-        await conn.execute('''
-            CREATE TABLE IF NOT EXISTS messages (
-                id SERIAL PRIMARY KEY,
-                ciphertext TEXT NOT NULL,
-                group_name TEXT NOT NULL,
-                sender TEXT NOT NULL,
-                salt TEXT NOT NULL,
-                created_at DOUBLE PRECISION NOT NULL,
-                expires_at DOUBLE PRECISION NOT NULL,
-                reply_to INTEGER DEFAULT NULL,
-                voice_url TEXT,
-                media_url TEXT,
-                media_type TEXT,
-                delivered BOOLEAN DEFAULT FALSE,
-                read_by TEXT[] DEFAULT '{}'
-            )
-        ''')
-        await conn.execute('''
-            CREATE TABLE IF NOT EXISTS groups (
-                group_name TEXT PRIMARY KEY,
-                salt TEXT NOT NULL,
-                password_hash TEXT NOT NULL,
-                group_password TEXT NOT NULL,
-                created_by TEXT NOT NULL,
-                created_at DOUBLE PRECISION NOT NULL
-            )
-        ''')
-        await conn.execute('''
-            CREATE TABLE IF NOT EXISTS admin_logs (
-                id SERIAL PRIMARY KEY,
-                admin_username TEXT NOT NULL,
-                action TEXT NOT NULL,
-                target TEXT,
-                details TEXT,
-                created_at DOUBLE PRECISION NOT NULL
-            )
-        ''')
-        await conn.execute('''
-            CREATE TABLE IF NOT EXISTS files (
-                id SERIAL PRIMARY KEY,
-                filename TEXT NOT NULL UNIQUE,
-                file_data BYTEA NOT NULL,
-                mime_type TEXT NOT NULL,
-                file_size INTEGER,
-                created_at DOUBLE PRECISION,
-                expires_at DOUBLE PRECISION,
-                username TEXT,
-                file_type TEXT
-            )
-        ''')
-        print("[✓] PostgreSQL database ready")
-
+        await conn.execute('''CREATE TABLE IF NOT EXISTS users (
+            username TEXT PRIMARY KEY, password_hash TEXT NOT NULL, salt TEXT,
+            role TEXT DEFAULT 'user', assigned_group TEXT, display_name TEXT,
+            status TEXT, current_group TEXT, last_seen DOUBLE PRECISION,
+            created_at DOUBLE PRECISION, login_attempts INTEGER DEFAULT 0,
+            locked_until DOUBLE PRECISION)''')
+        await conn.execute('''CREATE TABLE IF NOT EXISTS messages (
+            id SERIAL PRIMARY KEY, ciphertext TEXT NOT NULL, group_name TEXT NOT NULL,
+            sender TEXT NOT NULL, salt TEXT NOT NULL, created_at DOUBLE PRECISION NOT NULL,
+            expires_at DOUBLE PRECISION NOT NULL, reply_to INTEGER DEFAULT NULL,
+            voice_url TEXT, media_url TEXT, media_type TEXT,
+            delivered BOOLEAN DEFAULT FALSE, read_by TEXT[] DEFAULT '{}')''')
+        await conn.execute('''CREATE TABLE IF NOT EXISTS groups (
+            group_name TEXT PRIMARY KEY, salt TEXT NOT NULL, password_hash TEXT NOT NULL,
+            group_password TEXT NOT NULL, created_by TEXT NOT NULL, created_at DOUBLE PRECISION NOT NULL)''')
+        await conn.execute('''CREATE TABLE IF NOT EXISTS admin_logs (
+            id SERIAL PRIMARY KEY, admin_username TEXT NOT NULL, action TEXT NOT NULL,
+            target TEXT, details TEXT, created_at DOUBLE PRECISION NOT NULL)''')
+        await conn.execute('''CREATE TABLE IF NOT EXISTS files (
+            id SERIAL PRIMARY KEY, filename TEXT NOT NULL UNIQUE, file_data BYTEA NOT NULL,
+            mime_type TEXT NOT NULL, file_size INTEGER, created_at DOUBLE PRECISION,
+            expires_at DOUBLE PRECISION, username TEXT, file_type TEXT)''')
+        print("[✓] Database ready")
         try:
-            columns = await conn.fetch("""
-                SELECT column_name FROM information_schema.columns WHERE table_name = 'messages'
-            """)
-            existing = [col['column_name'] for col in columns]
-            if 'voice_url' not in existing:
-                await conn.execute('ALTER TABLE messages ADD COLUMN voice_url TEXT')
-            if 'media_url' not in existing:
-                await conn.execute('ALTER TABLE messages ADD COLUMN media_url TEXT')
-            if 'media_type' not in existing:
-                await conn.execute('ALTER TABLE messages ADD COLUMN media_type TEXT')
-            if 'reply_to' not in existing:
-                await conn.execute('ALTER TABLE messages ADD COLUMN reply_to INTEGER DEFAULT NULL')
-            if 'delivered' not in existing:
-                await conn.execute('ALTER TABLE messages ADD COLUMN delivered BOOLEAN DEFAULT FALSE')
-            if 'read_by' not in existing:
-                await conn.execute("ALTER TABLE messages ADD COLUMN read_by TEXT[] DEFAULT '{}'")
-        except Exception as e:
-            print(f"[!] Column migration: {e}")
 
-        try:
-            await conn.execute("DELETE FROM groups WHERE group_name = 'admin' AND created_by != 'Mpc'")
+            cols = await conn.fetch("SELECT column_name FROM information_schema.columns WHERE table_name = 'messages'")
+            ex = [c['column_name'] for c in cols]
+            if 'voice_url' not in ex: await conn.execute('ALTER TABLE messages ADD COLUMN voice_url TEXT')
+            if 'media_url' not in ex: await conn.execute('ALTER TABLE messages ADD COLUMN media_url TEXT')
+            if 'media_type' not in ex: await conn.execute('ALTER TABLE messages ADD COLUMN media_type TEXT')
+            if 'reply_to' not in ex: await conn.execute('ALTER TABLE messages ADD COLUMN reply_to INTEGER DEFAULT NULL')
+            if 'delivered' not in ex: await conn.execute('ALTER TABLE messages ADD COLUMN delivered BOOLEAN DEFAULT FALSE')
+            if 'read_by' not in ex: await conn.execute("ALTER TABLE messages ADD COLUMN read_by TEXT[] DEFAULT '{}'")
+        except Exception as e: print(f"[!] Migration: {e}")
+        try: await conn.execute("DELETE FROM groups WHERE group_name = 'admin' AND created_by != 'Mpc'")
         except: pass
-        try:
-            await conn.execute("DELETE FROM messages WHERE group_name = 'admin'")
+        try: await conn.execute("DELETE FROM messages WHERE group_name = 'admin'")
         except: pass
-
         row = await conn.fetchrow("SELECT username FROM users WHERE username = $1", ADMIN_USERNAME)
         if not row:
             ADMIN_PASSWORD_HASH = hash_password_argon2(ADMIN_PASSWORD)
-            await conn.execute(
-                "INSERT INTO users (username, password_hash, salt, role, created_at) VALUES ($1, $2, $3, $4, $5)",
-                ADMIN_USERNAME, ADMIN_PASSWORD_HASH, "admin_salt", "admin", time.time()
-            )
+            await conn.execute("INSERT INTO users (username, password_hash, salt, role, created_at) VALUES ($1, $2, $3, $4, $5)",
+                              ADMIN_USERNAME, ADMIN_PASSWORD_HASH, "admin_salt", "admin", time.time())
             print(f"[✓] Admin created: {ADMIN_USERNAME}")
-            print(f"[✓] Admin Password: {ADMIN_PASSWORD}")
         else:
             row = await conn.fetchrow("SELECT password_hash FROM users WHERE username = $1", ADMIN_USERNAME)
             ADMIN_PASSWORD_HASH = row[0]
     finally:
         await return_db_connection(conn)
-    print("[✓] Admin account ready")
+
+
+
+
+
 
 # ========== DATABASE FUNCTIONS ==========
 async def log_admin_action(admin_username, action, target, details=""):
@@ -809,7 +686,7 @@ async def upload_media(request: Request, file: UploadFile = File(...)):
 async def get_file(filename: str):
     row = await get_file_data(filename)
     if not row:
-        raise HTTPException(status_code=404)
+	        raise HTTPException(status_code=404)
     return Response(content=row['file_data'], media_type=row['mime_type'])
 
 # ========== API ENDPOINTS ==========
